@@ -10,7 +10,7 @@ This is just a code-storage repository for small functions I use normally.
     DMU
 
     DESCRIPTION
-    Lumerical Data Handling
+    Dunno Why I named it DMU, but it's catchy
     Created on Thurs Aug 04 17:00:00 2022
     @author: Vidar Flodgren
     Github: https://github.com/DeltaMod
