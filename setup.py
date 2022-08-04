@@ -21,7 +21,7 @@ cmd_classes = {}
 if CleanCommand is not None:
    cmd_classes['clean'] = CleanCommand
 
-TrgtScr = "LDI//LDI.py"
+TrgtScr = "DMU//utils.py"
 
 
 class CleanCommand(distutils.cmd.Command):
