@@ -1698,7 +1698,55 @@ def txt_dict_loader(txtfile,**kwargs):
             d_dict[ent[FieldI]] =  ent[VarI]
     return(d_dict)
 
+#%%
+
+def Nanonis_dat_read(file):
+    """
+    Reads the data structure in nanonis data files, and outputs a dictionary containing the data. 
+    """
+    Raw   = {}
+    #First we find the first level dict we need to save. There are two options, predata or [Data]
+    with open(file,'r') as f:
+        line1 = f.readline()
+        if line1.startswith('[') == True and line1.endswith == ']\n':
+            topdict = line1
+        else:
+            topdict = '[Pre-Data]'
+        Raw[topdict] = {}
+        
+        f.close()
  
+    
+    with open(file,'r') as f:        
+        for line in f:
+            line = line.strip()
+            if line.startswith('[') == True and line.endswith(']'):
+                topdict = line 
+                Raw[topdict] = {}
+                l2 = f.readline()
+                items = l2.split('\t')
+                for item in items:
+                    Raw[topdict][item] = []
+            else:
+                ld = line.split('\t')
+                
+                if topdict == '[Pre-Data]':
+
+                    try:
+                        Raw[topdict][ld[0]] = ld[1]
+                    except:
+                        if ld[0] != '\n':
+                            Raw[topdict][ld[0]] = None
+                else:
+                    for num,item in enumerate(ld):
+                        try:
+                            Raw[topdict][items[num]].append(float(ld[num]))
+                        except:
+                            Raw[topdict][items[num]].append(ld[num])
+        return(Raw)
+                
+   
+   
 #%%
 def txtparse(**kwargs):
     kwargdict = {'file':'file','fn':'file','f':'file'}
