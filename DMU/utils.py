@@ -1700,11 +1700,18 @@ def txt_dict_loader(txtfile,**kwargs):
 
 #%%
 
-def Nanonis_dat_read(file):
+def Nanonis_dat_read(file,**kwargs):
     """
     Reads the data structure in nanonis data files, and outputs a dictionary containing the data. 
     """
     Raw   = {}
+    if 'portformat' not in list(kwargs.keys()):
+        portF = False
+
+    elif 'portformat' in  list(kwargs.keys()):
+        portF = kwargs['portformat']
+        
+    
     #First we find the first level dict we need to save. There are two options, predata or [Data]
     with open(file,'r') as f:
         line1 = f.readline()
@@ -1743,6 +1750,46 @@ def Nanonis_dat_read(file):
                             Raw[topdict][items[num]].append(float(ld[num]))
                         except:
                             Raw[topdict][items[num]].append(ld[num])
+        
+        if portF == True:
+            keylist = []
+            
+            for key in Raw['[Pre-Data]'].keys():
+                if 'Comment' in key:
+                    keylist.append(key)
+            for key in keylist:
+                
+                cdata = Raw['[Pre-Data]'][key].split(' : ')
+                
+                cdstr = "".join(cdata).lower()
+                if "device" in cdstr:
+                    itlist = cdstr.split(' ; ')
+                    Raw['[Pre-Data]'][itlist[0]] = itlist[1]
+                else:
+                    Raw['[Pre-Data]'][cdata[0]] = {'NW':None,'bias':False,'sweep':False,'current':False,'ground':False}
+                
+                for item in cdata:
+                    try:
+                        itlist = item.split(' ; ')
+                    except:
+                        itlist = item
+                        
+                    if "NW" in item:   
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = itlist[1]
+                    
+                    if 'bias' in item:
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = itlist[1]
+                        
+                    if 'sweep' in item:
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = json.loads(itlist[1])
+                        
+                    if 'current' in item:
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = True
+                        
+                    if  'ground' in item:
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = True
+            
+                
         return(Raw)
                 
    
