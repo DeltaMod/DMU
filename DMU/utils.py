@@ -51,6 +51,185 @@ def AbsPowIntegrator(Data,x,y,z,WL):
     return(P_tot)
 
 #%%
+
+def bias_plotter(data,ax,**kwargs): 
+    keys = list(data.keys())
+    kwargdict = {'fwd':'fwd','f':'fwd','forward':'fwd',
+                 'bwd':'rev','rev':'rev','reverse':'rev',
+                 'title':'title','tit':'title'}
+    
+    kuniq = np.unique(list(kwargdict.keys()))
+    Pkwargs = {}
+    #Filtering out the function kwargs from the plot kwargs
+    for key in kwargs.keys():
+        if key not in kuniq:
+            kwargdict[key] = key
+    #Collecting kwargs
+    kw = dm.KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None)
+    xkey = []; ykey = []; fwdbwd = []
+    
+    for k in keys:
+        if "bias" in k.lower():
+            xkey.append(k)
+            
+        if "bwd" not in k.lower() and "bias" not in k.lower():
+            ykey.append(k)
+            fwdbwd.append(0) #Note: 0  is forward, 1 is backwards
+        
+        if "bwd" in k.lower() and "bias" not in k.lower():
+            ykey.append(k)
+            fwdbwd.append(1) #Note: 0  is forward, 1 is backwards
+    
+    for key,val in kwargs.items():
+        if key not in kuniq:
+            Pkwargs[key] = val
+    for n,i in enumerate(fwdbwd):    
+        plotkwargs = {}
+        for k,v in Pkwargs.items():
+            try: 
+                plotkwargs[k] = v[i]
+            except:
+                plotkwargs[k] = v
+    
+        if kw.fwd == True and i == 0:
+
+            ax.plot(data[xkey[0]],data[ykey[i]],label='Forward',**plotkwargs)
+            
+        
+        if kw.rev == True and i == 1:
+            ax.plot(data[xkey[0]],data[ykey[i]],label='Backward',**plotkwargs)        
+    ax.set_xlabel(xkey[0])
+    ax.set_ylabel(ykey[fwdbwd[0]])
+    
+    ax.legend()
+    ax.set_title(kw.title)
+
+#%%
+
+def Nanowire_Diagram_Plotter(fig,ax,NanonisDat):
+    """
+    Parameters
+    ----------
+    ax : TYPE
+        DESCRIPTION.
+    labels : list: [port 1, port 2, port 3, port 4]
+    types : list: [bias, sweep, ground, ground]
+    plots a nanowire diagram
+    """ 
+    arrow_style = {
+    "head_width": 0.1,
+    "head_length": 0.2,
+    "color":"k"}
+    axobjs = []
+    Device = NanonisDat['device']
+    Portd =  [NanonisDat['Port'+n] for n in ['1','2','3','4']]
+    if "Comment06" in list(NanonisDat.keys()):
+        comment = NanonisDat["Comment06"]
+    
+    dxW = 0.05
+    dyH = 0.05
+    
+    nwl = 0.035
+    nwh = 0.009
+    nwp = 0.003
+    c   = [0.75,0.25]
+    gctf = 2
+    
+    gcbl = gctf*nwl/3
+    gcbh = gctf*nwl/2
+    gcsl = nwh*gctf/3
+    gcsh = gctf*nwl
+    
+    ##Nanowire Creation
+    nw1 = ax.add_patch(ptc.Rectangle(
+    (c[0]-nwp-nwl, c[1]-nwh/2), # lower left point of rectangle
+    nwl, nwh,   # width/height of rectangle
+    facecolor="purple", edgecolor="darkorchid",alpha=1,zorder=2,transform=fig.transFigure
+    ))
+    labels = np.empty(4,dtype=object)
+    types  = np.empty(4,dtype=object)
+    
+    for i,port in enumerate(Portd):
+        
+        labels[port['pos']-1] = 'Port'+str(i+1)
+        if port['current'] == True:
+            types[port['pos']-1] = 'current'
+        
+        elif port['bias'] != False: 
+            types[port['pos']-1] = 'bias'
+        
+        elif port['sweep'] != False:
+            types[port['pos']-1] = 'sweep'
+        
+        elif port['ground'] == True:
+            types[port['pos']-1] = 'ground'
+        
+        if "tip" in port['NW'] and port['pos'] == 2:
+            gp1_pos = (c[0]-nwp, c[1])
+        elif "end" in port['NW'] and port['pos'] == 2:
+            gp1_pos = (c[0]-nwp-nwl, c[1])
+            
+        if "tip" in port['NW'] and port['pos'] == 3:
+            gp2_pos = (c[0]+nwp+nwl, c[1])
+        elif "end" in port['NW'] and port['pos'] == 3:
+            gp2_pos = (c[0]+nwp, c[1])
+        
+    gp1 = ax.add_patch(plt.Circle(gp1_pos, radius=nwh/2, facecolor="gold",edgecolor='orange',transform=fig.transFigure))
+    
+    nw2 = ax.add_patch(ptc.Rectangle(
+    (c[0]+nwp, c[1]-nwh/2), # lower left point of rectangle
+    nwl, nwh,   # width/height of rectangle
+    facecolor="purple", edgecolor='darkorchid',alpha=1, zorder=2,transform=fig.transFigure
+    ))
+    
+    gp2 = ax.add_patch(plt.Circle(gp2_pos, radius=nwh/2,facecolor="gold",edgecolor='orange',transform=fig.transFigure))
+    
+    gc1 = ax.add_patch(ptc.Rectangle(
+    (c[0]-nwp-nwl-gcbl+1/8*nwl, c[1]-gcbh/2), # lower left point of rectangle
+    gcbl, gcbh,   # width/height of rectangle
+    facecolor="gold", edgecolor='orange',alpha=1, zorder=2,transform=fig.transFigure
+    ))
+    
+    gc2 = ax.add_patch(ptc.Rectangle(
+    (c[0]-nwp-nwh*gctf, c[1]-gctf*nwl/2), # lower left point of rectangle
+    gcsl,gcsh-1/3*gcsh,   # width/height of rectangle
+    facecolor="gold", edgecolor='orange',alpha=1, zorder=2,transform=fig.transFigure
+    ))
+    
+    gc3 = ax.add_patch(ptc.Rectangle(
+    (c[0]+nwp+nwh*gctf-gcsl, c[1]-gctf*nwl/2+1/3*gcsh), # lower left point of rectangle
+    gcsl,gcsh-1/3*gcsh,   # width/height of rectangle
+    facecolor="gold", edgecolor='orange',alpha=1, zorder=2,transform=fig.transFigure
+    ))
+    
+    gc4 = ax.add_patch(ptc.Rectangle(
+    (c[0]+nwp+nwl-1/8*nwl, c[1]-gcbh/2), # lower left point of rectangle
+    gcbl, gcbh,   # width/height of rectangle
+    facecolor="gold", edgecolor='orange',alpha=1, zorder=2,transform=fig.transFigure
+    ))
+    
+    axobjs = [nw1,gp1,nw2,gp2,gc1,gc2,gc3,gc4]
+    
+    portlocs      = [(c[0]-nwp-nwl-gcbl, c[1]),(c[0]-nwp-nwh*gctf+1/2*gcsl, c[1]+1/3*gcsh),(c[0]+nwp+nwh*gctf-1/2*gcsl, c[1]-1/3*gcsh),(c[0]+nwp+nwl+gcbl, c[1])]
+    porttextloc   = [(c[0]-nwp-nwl-4*gcbl, c[1]),(c[0]-nwp-nwh*gctf, c[1]-0.75*gcsh),(c[0]+nwp+nwh*gctf-gcsl, c[1]+0.85*gcsh),(c[0]+nwp+nwl+2*gcbl, c[1])]
+    typetextloc   = [(c[0]-nwp-nwl-4*gcbl, c[1]-1.3*gcbl),(c[0]-nwp-nwh*gctf, c[1]-0.75*gcsh-1.3*gcbl),(c[0]+nwp+nwh*gctf-gcsl, c[1]+0.85*gcsh+1.3*gcbl),(c[0]+nwp+nwl+2*gcbl, c[1]+1.3*gcbl)]
+    # porttextloc   = [(c[0]-nwp-nwl-4.8*gcbl, c[1]),(c[0]-nwp-nwh*gctf+1/2*gcsl, c+gcsh),(c[0]+nwp+nwh*gctf-1/2*gcsl, c[1]5-gcsh),(c[0]+nwp+nwl+2*gcbl, c[1])]
+    for i,lab in enumerate(labels):
+        axobjs.append(ax.annotate(labels[i],
+                  xy=portlocs[i],
+                  xytext=porttextloc[i], verticalalignment='center',
+                  xycoords = fig.transFigure, textcoords=fig.transFigure))
+        
+        typecolour = {'ground':"brown",'current':"blue",'bias':"green",'sweep':'red'}
+    
+        axobjs.append(ax.annotate(types[i],
+                  xy=portlocs[i],
+                  xytext=typetextloc[i], verticalalignment='center', color=typecolour[types[i].strip()],
+                  xycoords = fig.transFigure, textcoords=fig.transFigure))
+        #,arrowprops=dict(facecolor='black', shrink=0.05,width=1,headwidth=5,headlength=5)
+
+
+#%%
 def Bulk_CSV_Load(filename):
     if ".csv" not in filename:
         filename = filename+'.csv'
