@@ -15,7 +15,8 @@ import hdf5storage
 import matplotlib
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askdirectory
-
+from matplotlib import patches as ptc
+from matplotlib.transforms import Affine2D
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import axes3d #If you want to be able to use projection="3D", then you need this:
 import scipy
@@ -65,7 +66,7 @@ def bias_plotter(data,ax,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = dm.KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None)
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None)
     xkey = []; ykey = []; fwdbwd = []
     
     for k in keys:
@@ -1945,8 +1946,9 @@ def Nanonis_dat_read(file,**kwargs):
                     itlist = cdstr.split(' ; ')
                     Raw['[Pre-Data]'][itlist[0]] = itlist[1]
                 else:
-                    Raw['[Pre-Data]'][cdata[0]] = {'NW':None,'bias':False,'sweep':False,'current':False,'ground':False}
+                    Raw['[Pre-Data]'][cdata[0]] = {'NW':None,'bias':False,'sweep':False,'current':False,'ground':False,'pos':None}
                 
+                print(cdata)
                 for item in cdata:
                     try:
                         itlist = item.split(' ; ')
@@ -1967,6 +1969,9 @@ def Nanonis_dat_read(file,**kwargs):
                         
                     if  'ground' in item:
                         Raw['[Pre-Data]'][cdata[0]][itlist[0]] = True
+                        
+                    if 'pos' in item:
+                        Raw['[Pre-Data]'][cdata[0]][itlist[0]] = int(itlist[1])
             
                 
         return(Raw)
