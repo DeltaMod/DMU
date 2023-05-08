@@ -27,6 +27,7 @@ import json
 from collections import Counter
 import natsort
 import csv
+import xlrd
 
 #%%        
 def AbsPowIntegrator(Data,x,y,z,WL):
@@ -1098,10 +1099,10 @@ class cmap_seq(object):
         - Invoking the class allows the next value to be given (as to not rely on the for loop i)
         - Allowing for the class to be reset
     """
-    def __init__(self,**kwargs):
+    def __init__(self):
         self.cmap = None
         self.i    = 0
-
+        
         """
         kwargs:
             ==============
@@ -1114,6 +1115,7 @@ class cmap_seq(object):
         """
         
     def set_cmap(self,**kwargs):
+        
         import matplotlib.cm as mcm
         kwargdict = {'cmap':'cmap','colormap':'cmap','colourmap':'cmap',
                      'steps':'steps','step':'steps','N':'steps',
@@ -1126,6 +1128,7 @@ class cmap_seq(object):
 
         self.cmap = mcm.get_cmap(kw.cmap,kw.steps)
         self.col  = self.cmap(self.i)
+
         
     def iter_cmap(self):
         self.i += 1
@@ -1133,6 +1136,7 @@ class cmap_seq(object):
         
     def reset(self):
         self.i = 0
+        
         
 #%%
 class ezplot(object):
@@ -2017,6 +2021,121 @@ def txt_dict_loader(txtfile,**kwargs):
     return(d_dict)
 
 #%%
+def Keithley_xls_read(directory,**kwargs):
+    # Get a list of all the Excel files in the current directory
+    files = [f for f in os.listdir(directory) if f.endswith('.xls')]
+
+    # Create an empty dictionary to store the data
+    data = {}
+
+    # Loop over each file and each sheet within the file
+    for file in files:
+        filename = os.path.splitext(file)[0]
+        xls = xlrd.open_workbook(file)
+        file_data = {}
+        if 'LOG' in filename.upper():
+            # If filename contains LOG, read data as a flat dictionary
+            sheet = xls.sheet_by_index(0)
+            rows = []
+            for row_index in range(1, sheet.nrows):  # Exclude the first row
+                row_data = sheet.row_values(row_index)
+                rows.append(row_data)
+            # Extract the keys from the first row
+            keys = [cell_value for cell_value in sheet.row_values(0) if cell_value != ""]
+                
+            # Convert data to a dictionary with the values in the first row as the keys
+            flat_data = {}
+            #Determine the SMU position data and create a key for this in flat_data
+            smu_ind = [i for i, item in enumerate(keys) if "SMU" in item]
+            flat_data['positions'] = {}
+            for ind in smu_ind:
+                flat_data['positions']["pos"+str(1+ind - min(smu_ind))] = {}
+                flat_data['positions']["pos"+str(1+ind - min(smu_ind))]['SMU'] = keys[ind]
+            position_indices = [i for i, header in enumerate(keys) if 'POSITION' in header]
+            for row in rows:
+                if all(x == '' for x in row) != True:
+                    if row[0] == "":
+                        for i,var in enumerate(smu_ind):
+                            if row[var] == "":
+                                flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
+                            else:
+                                flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
+                        
+                       
+                    elif row[0] !="": 
+                        run_key = int(row[0])
+                        row_dict = {}
+                        for i, header in enumerate(keys):
+                            if i in position_indices:
+                                for j, nw_value in enumerate(row[i:i+2]):
+                                    nw_key = 'position ' + str(j+1)
+                                    row_dict[nw_key] = {'SMU': header, 'NW': nw_value}
+                            elif i > 0:
+                                row_dict[header] = row[i]
+                        flat_data[run_key] = row_dict
+            file_data = flat_data
+            
+        else:
+            # Otherwise, read data as nested sheets
+            for sheet_name in xls.sheet_names():
+                sheet = xls.sheet_by_name(sheet_name)
+                
+                if sheet_name == "Settings":
+                    # Read data row by row into a list
+                    rows = []
+                    for row_index in range(sheet.nrows):  # Exclude header row
+                        row_data = sheet.row_values(row_index)
+                        rows.append(row_data)
+                    
+                    settings_data = {}
+                    for row in rows:
+                        if any("===" in s for s in row) or (all(not s.strip() for s in row)): 
+                            
+                            continue
+                
+                        if any("Run" in s for s in row):
+                            key = row[0]
+                            settings_data[key] = {}
+                            continue
+                        
+                        header = row[0]
+                        
+                        if len(row) > 1:
+                            values = row[1:]
+                            values = [x for x in values if x != '']
+                            if len(values) == 1:
+                                settings_data[key][header] = values[0]
+                            else:
+                                settings_data[key][header] = values
+                                
+                    file_data[sheet_name] = settings_data            
+                else:
+                    # Read data column by column into a dictionary with the first item in each column as the key
+                    cols = {}
+                    for col_index in range(sheet.ncols):
+                        col_data = [x for x in sheet.col_values(col_index) if x != '']
+                        key = col_data.pop(0)
+                        if len(col_data) == 1:
+                            col_data = col_data[0]
+                        cols[key] = col_data 
+                    # Store the data in the dictionary
+                    file_data[sheet_name] = cols
+        # Store the data for the file in the top-level dictionary
+        data[filename] = file_data
+        
+    #Now we need to check the logbook run info against all included excel sheets so that we can import the correct logbook data.
+    log_key = [x for x in data.keys() if "LOG" in x.upper()][0]
+    for lkey in data[log_key].keys():
+        for key in data.keys():
+            if key == log_key:
+                continue
+            
+            if any(str(lkey) in s for s in data[key]):
+                for runID in data[key].keys():
+                    if str(lkey) in runID:
+                        data[key][runID]['LOG'] = data[log_key][lkey]
+                        continue
+    return(data)
 
 def Nanonis_dat_read(file,**kwargs):
     """
@@ -2089,14 +2208,17 @@ def Nanonis_dat_read(file,**kwargs):
                     Raw['[Pre-Data]'][itlist[0]] = itlist[1]
                 
                 if "light" in cdstr:
-                    itlist = cdstr.split(' ; ')
-                    if itlist[1].lower() in ['false','fal','off','none',None,'no']:
-                        itlist[1] = False
-                    
-                    elif itlist[1].lower() in ['true','tru','on','light','yes']:
-                        itlist[1] = True
+                    try:
+                        itlist = cdstr.split(' ; ')
+                        if itlist[1].lower() in ['false','fal','off','none',None,'no']:
+                            itlist[1] = False
                         
-                    Raw['[Pre-Data]'][itlist[0]] = itlist[1]
+                        elif itlist[1].lower() in ['true','tru','on','light','yes']:
+                            itlist[1] = True
+                            
+                        Raw['[Pre-Data]'][itlist[0]] = itlist[1]
+                    except:
+                        None
                     
                 else:
                     Raw['[Pre-Data]'][cdata[0]] = {'NW':None,'bias':False,'sweep':False,'current':False,'ground':False,'pos':None}
