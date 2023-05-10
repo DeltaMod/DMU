@@ -28,6 +28,7 @@ from collections import Counter
 import natsort
 import csv
 import xlrd
+import matplotlib.cm as mcm
 
 #%%        
 def AbsPowIntegrator(Data,x,y,z,WL):
@@ -54,12 +55,13 @@ def AbsPowIntegrator(Data,x,y,z,WL):
 
 #%%
 
-def bias_plotter(data,ax,**kwargs): 
+def bias_plotter(data,FIG,**kwargs): 
+    ax = FIG.ax[0]
     keys = list(data.keys())
     kwargdict = {'fwd':'fwd','f':'fwd','forward':'fwd',
                  'bwd':'rev','rev':'rev','reverse':'rev',
                  'title':'title','tit':'title',
-                 'labels':'labels','lbl':'labels'}
+                 'tool':'tool','experiment':'exp','exp':'exp'}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -68,49 +70,128 @@ def bias_plotter(data,ax,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None, labels=[None,None])
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV')
     xkey = []; ykey = []; fwdbwd = []
     
-    for k in keys:
-        if "bias" in k.lower():
-            xkey.append(k)
-            
-        if "bwd" not in k.lower() and "bias" not in k.lower():
-            ykey.append(k)
-            fwdbwd.append(0) #Note: 0  is forward, 1 is backwards
-        
-        if "bwd" in k.lower() and "bias" not in k.lower():
-            ykey.append(k)
-            fwdbwd.append(1) #Note: 0  is forward, 1 is backwards
-    
+    #Separating plot kwargs into a different dict
     for key,val in kwargs.items():
         if key not in kuniq:
             Pkwargs[key] = val
-
-    for n,i in enumerate(fwdbwd):    
-        plotkwargs = {}
-        for k,v in Pkwargs.items():
-            try: 
-                plotkwargs[k] = v[i]
-            except:
-                plotkwargs[k] = v
-    
-        if kw.fwd == True and i == 0:
-            if kw.labels[0] is None:
-                kw.labels[0] = "Forward"
-                
-            ax.plot(data[xkey[0]],data[ykey[i]],label=kw.labels[0],**plotkwargs)
             
-        
-        if kw.rev == True and i == 1:
-            if kw.labels[1] is None:
-                kw.labels[1] = "Backward"
-            ax.plot(data[xkey[0]],data[ykey[i]],label=kw.labels[1],**plotkwargs)        
-    ax.set_xlabel(xkey[0])
-    ax.set_ylabel(ykey[fwdbwd[0]])
     
-    ax.legend()
-    ax.set_title(kw.title)
+    if kw.tool == "Nanonis":
+        for k in keys:
+            if "bias" in k.lower():
+                xkey.append(k)
+                
+            if "bwd" not in k.lower() and "bias" not in k.lower():
+                ykey.append(k)
+                fwdbwd.append(0) #Note: 0  is forward, 1 is backwards
+            
+            if "bwd" in k.lower() and "bias" not in k.lower():
+                ykey.append(k)
+                fwdbwd.append(1) #Note: 0  is forward, 1 is backwards
+        
+        for n,i in enumerate(fwdbwd):    
+            plotkwargs = {}
+            for k,v in Pkwargs.items():
+                try: 
+                    plotkwargs[k] = v[i]
+                except:
+                    plotkwargs[k] = v
+        
+            if kw.fwd == True and i == 0:
+                ax.plot(data[xkey[0]],data[ykey[i]],label='Forward',**plotkwargs)
+                
+            if kw.rev == True and i == 1:
+                ax.plot(data[xkey[0]],data[ykey[i]],label='Backward',**plotkwargs)
+        ax.set_xlabel(xkey[0])
+        ax.set_ylabel(ykey[fwdbwd[0]])
+        ax.legend()
+        ax.set_title(kw.title)
+        
+    elif kw.tool == "Keithley":
+        keys = data['col headers']
+        plotkwargs = {}
+        
+        for i,ll in enumerate(xkey):
+            for k,v in Pkwargs.items():
+                try: 
+                    plotkwargs[k] = v[i]
+                except:
+                    plotkwargs[k] = v
+                    
+        for k in keys:
+            if "voltage" in k.lower() or (k.endswith("V") == True and any(s.lower() in k.lower() for s in ["START","STOP"])==False):
+                xkey.append(k)
+            elif "current" in k.lower() or (k.endswith("I") == True and any(s.lower() in k.lower() for s in ["START","STOP"])==False):
+                ykey.append(k)
+        
+        xkey.sort(); ykey.sort()
+        
+        if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"]:
+            if len(xkey) == 1 and len(ykey) == 1:
+                ax.plot(data[xkey[0]],data[ykey[0]],label=ykey[0],**plotkwargs)
+            
+            elif len(xkey) > 1 and len(ykey)>1:
+                for n,key in enumerate(xkey):
+                    ax.plot(data[xkey[n]],data[ykey[n]],label=ykey[n],**plotkwargs)
+                    
+            elif len(xkey) == 1 and len(ykey)>1:
+                for n,key in enumerate(ykey):
+                    ax.plot(data[xkey[0]],data[ykey[n]],label=ykey[n],**plotkwargs)
+                    
+            elif len(xkey) > 1 and len(ykey)==1:
+                for n,key in enumerate(xkey):
+                    ax.plot(data[xkey[n]],data[ykey[0]],label=ykey[0],**plotkwargs) 
+            ax.set_xlabel(xkey[0])
+            ax.set_ylabel(ykey[0])
+            ax.legend()
+            ax.set_title(kw.title)
+             
+        elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
+            FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
+            fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
+            ax_top.spines["bottom"].set_visible(False)
+            ax_bottom.spines["top"].set_visible(False)
+            ax_top.tick_params(bottom=False)
+            ax_bottom.tick_params(top=False)
+            plt.subplots_adjust(hspace=0.1)
+    
+            ax_top_r = ax_top.twinx()
+            ax_bottom_r = ax_bottom.twinx()
+            
+            axyy  = [ax_top,ax_bottom]
+            axxy  = [ax_top_r,ax_bottom_r]
+            if len(xkey) == 1 and len(ykey)>1:
+                for n,key in enumerate(ykey):
+                    axyy[n].plot(data[ykey[n]],label=ykey[n],**plotkwargs)
+                    axxy[n].plot(data[xkey[0]],label=xkey[0],**plotkwargs)
+                    axyy[n].set_ylabel(ykey[n])
+                    axxy[n].set_ylabel(xkey[0])
+                    
+            if len(xkey) > 1 and len(ykey)>1:
+                for n,key in enumerate(ykey):
+                    axyy[n].plot(data[ykey[n]],label=ykey[n],**plotkwargs)
+                    axxy[n].plot(data[xkey[n]],label=xkey[n],**plotkwargs)
+                    axyy[n].set_ylabel(ykey[n])
+                    axxy[n].set_ylabel(xkey[n])
+                #Fix colours
+            if len(Pkwargs['c'])<4:
+                Pkwargs['c'] = mcm.get_cmap("tab20",20)
+            for axis in axyy:
+                for i,line in enumerate(axis.get_lines()):
+                    line.set_color(Pkwargs['c'](i))
+            for axis in axxy:
+                for i,line in enumerate(axis.get_lines()):
+                    line.set_color(Pkwargs['c'](i+3))
+            ax_bottom.set_xlabel("index")
+            ax_top.set_xlabel("index")
+            handles1,labels = ax_top.get_legend_handles_labels()
+            handles2,labels = ax_top_r.get_legend_handles_labels()
+            fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
+ 
+            FIG.ax[0].set_title(kw.title)
 
 #%%
 def Single_NW_Diagram_Plotter(fig,ax,NanonisDat):
@@ -858,7 +939,7 @@ def DataDir(**kwargs):
     if os.path.isfile(kw.ddir) == False:
             jsonhandler(f = kw.ddir,d={},pt='abs',a='w')    
     DirDict = jsonhandler(f = kw.ddir,pt='abs', a='r')
-    
+    print(DirDict)
     if kw.act == 'add':
         DirDict = NewDict(DirDict) #Make sure that the add command adds in the correct format
         print(DirDict)
@@ -1115,8 +1196,6 @@ class cmap_seq(object):
         """
         
     def set_cmap(self,**kwargs):
-        
-        import matplotlib.cm as mcm
         kwargdict = {'cmap':'cmap','colormap':'cmap','colourmap':'cmap',
                      'steps':'steps','step':'steps','N':'steps',
                      'custom':'custom','cust':'custom',
@@ -1372,6 +1451,7 @@ def Get_FileList(path,**kwargs):
     
     cprint('=-=-=-=-=-=-=-=-=-=-=- Running: Get_FileList -=-=-=-=-=-=-=-=-=-=-=',mt = 'funct')
     Dpath = PathSet(path,pt=kw.pt)
+    
     #Checking that kw.sort has been selected correctly
     if kw.sort not in [None,'alphabetical','numeric']:
         cprint('sorting was not set correctly, reverting to using alphabetical sorting (no extra sorting)',mt='note')
@@ -1409,7 +1489,7 @@ def Get_FileList(path,**kwargs):
             if kw.sort == 'numeric':
                 NList[ex] = natsort.natsorted(NList[ex], key=lambda y: y.lower())
                 cprint([ex, ' files were sorted numerically'],fg=['g','c'],ts='b')
-            DList[ex] = [Dpath+name for name in NList[ex]]
+            DList[ex] = [Dpath+S_ESC+name for name in NList[ex]]
             
         
             DSum = len(DList[ex])
@@ -2022,12 +2102,15 @@ def txt_dict_loader(txtfile,**kwargs):
 
 #%%
 def Keithley_xls_read(directory,**kwargs):
+    if directory == None:
+        directory = os.getcwd()
+        
     # Get a list of all the Excel files in the current directory
     files = [f for f in os.listdir(directory) if f.endswith('.xls')]
-
+    
     # Create an empty dictionary to store the data
     data = {}
-
+    
     # Loop over each file and each sheet within the file
     for file in files:
         filename = os.path.splitext(file)[0]
@@ -2041,8 +2124,8 @@ def Keithley_xls_read(directory,**kwargs):
                 row_data = sheet.row_values(row_index)
                 rows.append(row_data)
             # Extract the keys from the first row
-            keys = [cell_value for cell_value in sheet.row_values(0) if cell_value != ""]
-                
+            keys = [str(cell_value) for cell_value in sheet.row_values(0) if cell_value != ""]
+            
             # Convert data to a dictionary with the values in the first row as the keys
             flat_data = {}
             #Determine the SMU position data and create a key for this in flat_data
@@ -2063,7 +2146,7 @@ def Keithley_xls_read(directory,**kwargs):
                         
                        
                     elif row[0] !="": 
-                        run_key = int(row[0])
+                        run_key = str(int(row[0]))
                         row_dict = {}
                         for i, header in enumerate(keys):
                             if i in position_indices:
@@ -2074,7 +2157,7 @@ def Keithley_xls_read(directory,**kwargs):
                                 row_dict[header] = row[i]
                         flat_data[run_key] = row_dict
             file_data = flat_data
-            
+
         else:
             # Otherwise, read data as nested sheets
             for sheet_name in xls.sheet_names():
@@ -2094,7 +2177,7 @@ def Keithley_xls_read(directory,**kwargs):
                             continue
                 
                         if any("Run" in s for s in row):
-                            key = row[0]
+                            key = str(row[0])
                             settings_data[key] = {}
                             continue
                         
@@ -2104,37 +2187,50 @@ def Keithley_xls_read(directory,**kwargs):
                             values = row[1:]
                             values = [x for x in values if x != '']
                             if len(values) == 1:
-                                settings_data[key][header] = values[0]
+                                settings_data[key][header] = str(values[0])
                             else:
-                                settings_data[key][header] = values
+                                settings_data[key][header] = str(values)
                                 
-                    file_data[sheet_name] = settings_data            
+                    file_data[sheet_name] = settings_data   
+                    
                 else:
                     # Read data column by column into a dictionary with the first item in each column as the key
                     cols = {}
+                    cols["col headers"] = []
                     for col_index in range(sheet.ncols):
                         col_data = [x for x in sheet.col_values(col_index) if x != '']
                         key = col_data.pop(0)
                         if len(col_data) == 1:
                             col_data = col_data[0]
                         cols[key] = col_data 
+                        cols["col headers"].append(key)
                     # Store the data in the dictionary
                     file_data[sheet_name] = cols
         # Store the data for the file in the top-level dictionary
         data[filename] = file_data
         
     #Now we need to check the logbook run info against all included excel sheets so that we can import the correct logbook data.
-    log_key = [x for x in data.keys() if "LOG" in x.upper()][0]
-    for lkey in data[log_key].keys():
-        for key in data.keys():
-            if key == log_key:
+    log_keys = [x for x in data.keys() if "LOG" in x.upper()]
+    for log_key in log_keys: 
+        for lkey in data[log_key].keys():
+            for key in [key for key in data.keys() if "LOG" not in key.upper()]:
+               
+                if key == log_key:
+                    continue
+                
+                if any(lkey in s for s in data[key]):
+                    for runID in data[key].keys():
+                        if str(lkey) in str(runID):
+                            data[key][runID]['LOG'] = data[log_key][lkey]
+                            continue
+        del(data[log_key])
+    #Now we need to move the settings file into the 
+    for rkey in data.keys():
+        for runID in data[rkey]["Settings"].keys():
+            if runID in data[rkey].keys():
+                data[rkey][runID]['Settings'] = data[rkey]["Settings"][runID]
                 continue
-            
-            if any(str(lkey) in s for s in data[key]):
-                for runID in data[key].keys():
-                    if str(lkey) in runID:
-                        data[key][runID]['LOG'] = data[log_key][lkey]
-                        continue
+        del(data[rkey]["Settings"])
     return(data)
 
 def Nanonis_dat_read(file,**kwargs):
