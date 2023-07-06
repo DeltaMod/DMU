@@ -21,8 +21,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import axes3d #If you want to be able to use projection="3D", then you need this:
 import scipy
 import numpy as np
-from scipy import integrate
-from scipy import interpolate
+from scipy import integrate, interpolate, constants
 import json
 from collections import Counter
 import natsort
@@ -57,11 +56,14 @@ def AbsPowIntegrator(Data,x,y,z,WL):
 
 def bias_plotter(data,FIG,**kwargs): 
     ax = FIG.ax[0]
+    IFIG = False
+    IDF = None
     keys = list(data.keys())
     kwargdict = {'fwd':'fwd','f':'fwd','forward':'fwd',
                  'bwd':'rev','rev':'rev','reverse':'rev',
                  'title':'title','tit':'title',
-                 'tool':'tool','experiment':'exp','exp':'exp'}
+                 'tool':'tool','experiment':'exp','exp':'exp',
+                 'ideality':'ideality'}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -70,7 +72,7 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV')
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',ideality=False)
     xkey = []; ykey = []; fwdbwd = []
     
     #Separating plot kwargs into a different dict
@@ -105,11 +107,31 @@ def bias_plotter(data,FIG,**kwargs):
                 
             if kw.rev == True and i == 1:
                 ax.plot(data[xkey[0]],data[ykey[i]],label='Backward',**plotkwargs)
+            
         ax.set_xlabel(xkey[0])
         ax.set_ylabel(ykey[fwdbwd[0]])
         ax.legend()
         ax.set_title(kw.title)
         
+        if kw.ideality == True:
+            
+            #try:
+                tab20 = mcm.get_cmap("tab20",20)
+                IFIG = True
+                print(len(data[ykey[0]]))
+                print(len(data[xkey[0]]))
+                IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]],273,[1.3,2],[1.3,2],100,[1e-8, 3])
+                
+                IFIG = ezplot()
+
+                IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+
+
+                IFIG.ax[0].legend()
+            #except:
+                None
+                
     elif kw.tool == "Keithley":
         keys = data['col headers']
         plotkwargs = {}
@@ -122,33 +144,58 @@ def bias_plotter(data,FIG,**kwargs):
                     plotkwargs[k] = v
                     
         for k in keys:
-            if "voltage" in k.lower() or (k.endswith("V") == True and any(s.lower() in k.lower() for s in ["START","STOP"])==False):
+            if "voltage" in k.lower():
                 xkey.append(k)
-            elif "current" in k.lower() or (k.endswith("I") == True and any(s.lower() in k.lower() for s in ["START","STOP"])==False):
+            elif "current" in k.lower():
                 ykey.append(k)
         
         xkey.sort(); ykey.sort()
         
         if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"]:
             if len(xkey) == 1 and len(ykey) == 1:
-                ax.plot(data[xkey[0]],data[ykey[0]],label=ykey[0],**plotkwargs)
+                for m,data_x in enumerate(data[xkey[0]]): 
+                    ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
             
             elif len(xkey) > 1 and len(ykey)>1:
                 for n,key in enumerate(xkey):
-                    ax.plot(data[xkey[n]],data[ykey[n]],label=ykey[n],**plotkwargs)
+                    for m,data_x in enumerate(data[xkey[0]]): 
+                        ax.plot(data[xkey[n]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
                     
             elif len(xkey) == 1 and len(ykey)>1:
                 for n,key in enumerate(ykey):
-                    ax.plot(data[xkey[0]],data[ykey[n]],label=ykey[n],**plotkwargs)
+                    for m,data_x in enumerate(data[xkey[0]]):
+                        ax.plot(data[xkey[0]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
                     
             elif len(xkey) > 1 and len(ykey)==1:
                 for n,key in enumerate(xkey):
-                    ax.plot(data[xkey[n]],data[ykey[0]],label=ykey[0],**plotkwargs) 
+                    for m,data_x in enumerate(data[xkey[0]]):
+                        ax.plot(data[xkey[n]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs) 
+            
+                
+                
             ax.set_xlabel(xkey[0])
             ax.set_ylabel(ykey[0])
             ax.legend()
             ax.set_title(kw.title)
-             
+            
+            if kw.ideality == True:
+                IFIG = False
+                try:
+                    tab20 = mcm.get_cmap("tab20",20)
+                    
+                    IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],273,[1.3,2],[1.3,2],100,[1e-8, 3])
+                    
+                    IFIG = ezplot()
+    
+                    IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                    IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+    
+    
+                    IFIG.ax[0].legend()
+                    
+                except:
+                    None
+                    
         elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
             FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
             fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
@@ -165,17 +212,17 @@ def bias_plotter(data,FIG,**kwargs):
             axxy  = [ax_top_r,ax_bottom_r]
             if len(xkey) == 1 and len(ykey)>1:
                 for n,key in enumerate(ykey):
-                    axyy[n].plot(data[ykey[n]],label=ykey[n],**plotkwargs)
-                    axxy[n].plot(data[xkey[0]],label=xkey[0],**plotkwargs)
-                    axyy[n].set_ylabel(ykey[n])
-                    axxy[n].set_ylabel(xkey[0])
+                    axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
+                    axxy[n].plot(data[xkey[0]][0],label=xkey[0],**plotkwargs)
+                    axyy[n].set_ylabel(ykey[n][0])
+                    axxy[n].set_ylabel(xkey[0][0])
                     
             if len(xkey) > 1 and len(ykey)>1:
                 for n,key in enumerate(ykey):
-                    axyy[n].plot(data[ykey[n]],label=ykey[n],**plotkwargs)
-                    axxy[n].plot(data[xkey[n]],label=xkey[n],**plotkwargs)
-                    axyy[n].set_ylabel(ykey[n])
-                    axxy[n].set_ylabel(xkey[n])
+                    axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
+                    axxy[n].plot(data[xkey[1]][0],label=xkey[1],**plotkwargs)
+                    axyy[n].set_ylabel(ykey[n][0] + " [A]",color='blue')
+                    axxy[n].set_ylabel(xkey[1][0] + " [V]",color='orange')
                 #Fix colours
             if len(Pkwargs['c'])<4:
                 Pkwargs['c'] = mcm.get_cmap("tab20",20)
@@ -192,6 +239,9 @@ def bias_plotter(data,FIG,**kwargs):
             fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
  
             FIG.ax[0].set_title(kw.title)
+            
+            
+        return(IFIG,IDF)
 
 #%%
 def Single_NW_Diagram_Plotter(fig,ax,NanonisDat):
@@ -2100,22 +2150,89 @@ def txt_dict_loader(txtfile,**kwargs):
             d_dict[ent[FieldI]] =  ent[VarI]
     return(d_dict)
 
-#%%
+#%% Help Functions to determine discrete lists of forward and reverse bias
+#Checks if a list is not discrete
+def is_not_discrete(data):
+    for i in range(1, int(len(data)/5)):
+        if data[i] <= data[i - 1] or data[i] >= data[i + 1]:
+            return True
+
+    return False
+
+#%%Finds all indices where the data set changes direction
+def find_turning_points(data):
+    turning_points = [0]
+    if data[1] > data[0]:
+        increasing = True
+    else:
+        increasing = False
+    sep_tp = []
+    tp_i = 1
+    for i in range(1, len(data)-1):
+        if data[i] > data[i+1]:
+            if increasing == True:
+                turning_points.append(i)
+                sep_tp.append(turning_points[tp_i] - turning_points[tp_i-1])
+                tp_i += 1
+                increasing = False
+                
+        elif data[i] < data[i+1]:
+            if increasing == False:
+                turning_points.append(i)
+                sep_tp.append(turning_points[tp_i] - turning_points[tp_i-1])
+                tp_i += 1
+                increasing = True
+                
+    if len(turning_points) == 1:
+        turning_points = [0,len(data)]
+    elif len(turning_points)>1:
+        turning_points.append(len(data))
+        
+    if max(sep_tp) - min(sep_tp)>3:
+        turning_points = [0,len(data)]
+    return turning_points
+
+
+
+#%%Takes a list of lists, then returns them split up where the dependent variable changes direction. 
+
+def segment_sweep(L,indices):
+    swdat = []
+    inds = indices
+    slices = [[inds[i],inds[i+1]+1] for i in range(len(inds)-1)]
+    
+    slices[-1][1] = len(L)
+    for slc in slices:
+        swdat.append(L[slc[0]:slc[1]])
+    return(swdat)
+
+##
 def Keithley_xls_read(directory,**kwargs):
     if directory == None:
         directory = os.getcwd()
         
     # Get a list of all the Excel files in the current directory
-    files = [f for f in os.listdir(directory) if f.endswith('.xls')]
+    files = [directory+"\\"+f for f in os.listdir(directory) if f.endswith('.xls')]
     
     # Create an empty dictionary to store the data
     data = {}
     
-    # Loop over each file and each sheet within the file
-    for file in files:
-        filename = os.path.splitext(file)[0]
+    """
+    We must first handle the Logbook
+    """
+    logfiles = [file for file in files if "LOG" in file]
+    
+    for file in logfiles:
+        filename = os.path.splitext(file.split('\\')[-1])[0]
+        
         xls = xlrd.open_workbook(file)
         file_data = {}
+        """
+        Logbook Handling
+        -This section deals with extracting logbook information, and storing that in a dict that can then be imported 
+        into the full data structure!.
+        """
+        
         if 'LOG' in filename.upper():
             # If filename contains LOG, read data as a flat dictionary
             sheet = xls.sheet_by_index(0)
@@ -2135,6 +2252,8 @@ def Keithley_xls_read(directory,**kwargs):
                 flat_data['positions']["pos"+str(1+ind - min(smu_ind))] = {}
                 flat_data['positions']["pos"+str(1+ind - min(smu_ind))]['SMU'] = keys[ind]
             position_indices = [i for i, header in enumerate(keys) if 'POSITION' in header]
+            
+            #This section finds rows that are empty, and excludes them from our search
             for row in rows:
                 if all(x == '' for x in row) != True:
                     if row[0] == "":
@@ -2144,7 +2263,7 @@ def Keithley_xls_read(directory,**kwargs):
                             else:
                                 flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
                         
-                       
+                    #This section restructures "position" and "nw" to fit with the format desired.    
                     elif row[0] !="": 
                         run_key = str(int(row[0]))
                         row_dict = {}
@@ -2157,72 +2276,133 @@ def Keithley_xls_read(directory,**kwargs):
                                 row_dict[header] = row[i]
                         flat_data[run_key] = row_dict
             file_data = flat_data
-
-        else:
-            # Otherwise, read data as nested sheets
-            for sheet_name in xls.sheet_names():
-                sheet = xls.sheet_by_name(sheet_name)
-                
-                if sheet_name == "Settings":
-                    # Read data row by row into a list
-                    rows = []
-                    for row_index in range(sheet.nrows):  # Exclude header row
-                        row_data = sheet.row_values(row_index)
-                        rows.append(row_data)
-                    
-                    settings_data = {}
-                    for row in rows:
-                        if any("===" in s for s in row) or (all(not s.strip() for s in row)): 
-                            
-                            continue
-                
-                        if any("Run" in s for s in row):
-                            key = str(row[0])
-                            settings_data[key] = {}
-                            continue
-                        
-                        header = row[0]
-                        
-                        if len(row) > 1:
-                            values = row[1:]
-                            values = [x for x in values if x != '']
-                            if len(values) == 1:
-                                settings_data[key][header] = str(values[0])
-                            else:
-                                settings_data[key][header] = str(values)
-                                
-                    file_data[sheet_name] = settings_data   
-                    
-                else:
-                    # Read data column by column into a dictionary with the first item in each column as the key
-                    cols = {}
-                    cols["col headers"] = []
-                    for col_index in range(sheet.ncols):
-                        col_data = [x for x in sheet.col_values(col_index) if x != '']
-                        key = col_data.pop(0)
-                        if len(col_data) == 1:
-                            col_data = col_data[0]
-                        cols[key] = col_data 
-                        cols["col headers"].append(key)
-                    # Store the data in the dictionary
-                    file_data[sheet_name] = cols
-        # Store the data for the file in the top-level dictionary
+            
         data[filename] = file_data
         
+        
+        
+    data_files = [file for file in files if "LOG" not in file ]    
+# Loop over each file and each sheet within the file
+    for file in data_files:
+        file_data = {}
+        filename = os.path.splitext(file.split('\\')[-1])[0]
+        xls = xlrd.open_workbook(file)
+        
+        #First we need to find and import the settings:
+        settings_sheet = [sheet for sheet in xls.sheet_names() if "settings" in sheet.lower()]
+        run_sheets     = [sheet for sheet in xls.sheet_names() if "run" in sheet.lower()]
+        data[filename] = {}
+        """
+        Settings Sheet handling
+        Each xls file has one sheet called "Settings", this will need to be read in a row by row format.
+        Column headers are no longer important
+        """
+        
+        # Otherwise, read data as nested sheets
+        for sheet_name in settings_sheet:
+            sheet = xls.sheet_by_name(sheet_name)
+            # Read data row by row into a list
+            rows = []
+            for row_index in range(sheet.nrows):  # Exclude header row
+                row_data = sheet.row_values(row_index)
+                rows.append(row_data)
+                
+            settings_data = {}
+            for row in rows:
+                if any("===" in s for s in row) or (all(not s.strip() for s in row)): 
+                    
+                    continue
+        
+                if any("Run" in s for s in row):
+                    key = str(row[0])
+                    settings_data[key] = {}
+                    continue
+                
+                header = row[0]
+                
+                if len(row) > 1:
+                    values = row[1:]
+                    values = [x for x in values if x != '']
+                    if len(values) == 1:
+                        settings_data[key][header] = str(values[0])
+                    else:
+                        settings_data[key][header] = str(values)
+            file_data[sheet_name] = settings_data
+            
+            
+            
+        """
+        Data sheet handling
+        """
+        # Otherwise, read data as nested sheets
+        for sheet_name in run_sheets:
+            sheet = xls.sheet_by_name(sheet_name)
+            
+            if sheet_name != "Calc":
+                # Read data column by column into a dictionary with the first item in each column as the key
+                cols = {}
+                cols["col headers"] = []
+                for col_index in range(sheet.ncols):
+                    col_data = [x for x in sheet.col_values(col_index) if x != '']
+                    key = col_data.pop(0)
+                    if len(col_data) == 1:
+                        col_data = col_data[0]
+                    cols[key] = col_data 
+                   
+                    if (key.endswith("V") == True and any(s.lower() in key.lower() for s in ["START","STOP"])==False):
+                        cols['voltage'] = col_data
+                        key = 'voltage'
+                    elif (key.endswith("I") == True and any(s.lower() in key.lower() for s in ["START","STOP"])==False):
+                        cols['current'] = col_data
+                        key = 'current'
+                            
+                    cols["col headers"].append(key)
+                    
+                #Swap linear sweep data to segmented data 
+                voltage_keys = [key for key in list(cols.keys()) if "voltage" in key.lower()]
+
+                sweep_index_list = []
+                for key in voltage_keys:
+                    sweep_index_list.append(find_turning_points(cols[key]))
+                idx_short = min(range(len(sweep_index_list)), key=lambda i: len(sweep_index_list[i]))
+                sweep_indices = sweep_index_list[idx_short]
+                sweep_length = len(sweep_indices)
+                
+                
+                if len(sweep_indices) < 6 and sweep_indices[0] !=None:
+                    sweep_length = len(cols[key])
+                        
+                else:
+                    sweep_length = None
+                            
+                list_keys = [key for key, value in cols.items() if isinstance(value, list)]
+                for key in list_keys:
+                    if len(cols[key]) == sweep_length and sweep_length != None:
+                        cols[key]  = segment_sweep(cols[key],sweep_indices) 
+                # Store the data in the dictionary
+
+                file_data[sheet_name] = cols
+        # Store the data for the file in the top-level dictionary
+        data[filename] = file_data
+
+        
     #Now we need to check the logbook run info against all included excel sheets so that we can import the correct logbook data.
-    log_keys = [x for x in data.keys() if "LOG" in x.upper()]
+    log_keys  = [x for x in data.keys() if "LOG" in x.upper()]
+    data_keys = [x for x in data.keys() if "LOG" not in x.upper()]
+    
     for log_key in log_keys: 
         for lkey in data[log_key].keys():
-            for key in [key for key in data.keys() if "LOG" not in key.upper()]:
-               
+            for key in data_keys:
                 if key == log_key:
                     continue
                 
+                #Checks RunID in the logbook against the sheetnames to move the logbook into the right dict.
                 if any(lkey in s for s in data[key]):
                     for runID in data[key].keys():
                         if str(lkey) in str(runID):
                             data[key][runID]['LOG'] = data[log_key][lkey]
                             continue
+        
         del(data[log_key])
     #Now we need to move the settings file into the 
     for rkey in data.keys():
@@ -2411,7 +2591,31 @@ def txtparse(**kwargs):
                     
                     
     return(out_dict)
-    
-        
 
+def Ideality_Factor(I,V,T,fit_range,plot_range,N,p0):
+    q = constants.e
+    k = constants.Boltzmann
+    
+    def Diode_EQ(V,I_0,n):
+        return(I_0 * np.exp((q*V)/(n*k*T)))
+    
+    if max(I) < np.abs(min(I)):
+        I.reverse()
+        I = list(np.multiply(-1,I))
+
+    
+    v_i =  next((i for i, x in enumerate(V) if x > fit_range[0]), -1)
+    v_f =  next((i for i, x in enumerate(V) if x > fit_range[1]), -1)
+
+    
+    V_fit = V[v_i:v_f]
+    
+    I_fit = I[v_i:v_f]
+
+    popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=p0)
+    V_new = np.linspace(plot_range[0],plot_range[1],N)
+    I_new = Diode_EQ(V_new, *popt)
+    
+
+    return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V":V_fit,"I":I_fit})
         
