@@ -178,69 +178,71 @@ def bias_plotter(data,FIG,**kwargs):
                 ax.legend()
                 ax.set_title(kw.title)
             
-        if kw.ideality == True:
-            IFIG = False
-            try:
-                
-                tab20 = mcm.get_cmap("tab20",20)
-                
-                IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
-                if kw.plot == True:
-                    IFIG = ezplot()
-    
-                    IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
-                    IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
-    
-    
-                    IFIG.ax[0].legend()
-                
-            except:
-                None
-                    
-        elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
-            if kw.plot == True:
-                FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
-                fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
-                ax_top.spines["bottom"].set_visible(False)
-                ax_bottom.spines["top"].set_visible(False)
-                ax_top.tick_params(bottom=False)
-                ax_bottom.tick_params(top=False)
-                plt.subplots_adjust(hspace=0.1)
-        
-                ax_top_r = ax_top.twinx()
-                ax_bottom_r = ax_bottom.twinx()
-                
-                axyy  = [ax_top,ax_bottom]
-                axxy  = [ax_top_r,ax_bottom_r]
-                if len(xkey) == 1 and len(ykey)>1:
-                    for n,key in enumerate(ykey):
-                        axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
-                        axxy[n].plot(data[xkey[0]][0],label=xkey[0],**plotkwargs)
-                        axyy[n].set_ylabel(ykey[n][0])
-                        axxy[n].set_ylabel(xkey[0][0])
+                if kw.ideality == True:
+                    IFIG = False
+                    try:
                         
-                if len(xkey) > 1 and len(ykey)>1:
-                    for n,key in enumerate(ykey):
-                        axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
-                        axxy[n].plot(data[xkey[1]][0],label=xkey[1],**plotkwargs)
-                        axyy[n].set_ylabel(ykey[n][0] + " [A]",color='blue')
-                        axxy[n].set_ylabel(xkey[1][0] + " [V]",color='orange')
-                    #Fix colours
-                if len(Pkwargs['c'])<4:
-                    Pkwargs['c'] = mcm.get_cmap("tab20",20)
-                for axis in axyy:
-                    for i,line in enumerate(axis.get_lines()):
-                        line.set_color(Pkwargs['c'](i))
-                for axis in axxy:
-                    for i,line in enumerate(axis.get_lines()):
-                        line.set_color(Pkwargs['c'](i+3))
-                ax_bottom.set_xlabel("index")
-                ax_top.set_xlabel("index")
-                handles1,labels = ax_top.get_legend_handles_labels()
-                handles2,labels = ax_top_r.get_legend_handles_labels()
-                fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
-     
-                FIG.ax[0].set_title(kw.title)
+                        tab20 = mcm.get_cmap("tab20",20)
+                        
+                        IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
+                        if kw.plot == True:
+                            IFIG = ezplot()
+            
+                            IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                            IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+            
+            
+                            IFIG.ax[0].legend()
+                        
+                    except:
+                        None
+                    
+            elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
+                if kw.plot == True:
+                    FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
+                    fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
+                    ax_top.spines["bottom"].set_visible(False)
+                    ax_bottom.spines["top"].set_visible(False)
+                    ax_top.tick_params(bottom=False)
+                    ax_bottom.tick_params(top=False)
+                    plt.subplots_adjust(hspace=0.1)
+            
+                    ax_top_r = ax_top.twinx()
+                    ax_bottom_r = ax_bottom.twinx()
+                    
+                    axyy  = [ax_top,ax_bottom]
+                    axxy  = [ax_top_r,ax_bottom_r]
+                    print(ykey)
+                    print(xkey)
+                    if len(xkey) == 1 and len(ykey)>1:
+                        for n,key in enumerate(ykey):
+                            axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
+                            axxy[n].plot(data[xkey[0]][0],label=xkey[0],**plotkwargs)
+                            axyy[n].set_ylabel(ykey[n][0])
+                            axxy[n].set_ylabel(xkey[0][0])
+                            
+                    if len(xkey) > 1 and len(ykey)>1:
+                        for n,key in enumerate(ykey):
+                            axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
+                            axxy[n].plot(data[xkey[1]][0],label=xkey[1],**plotkwargs)
+                            axyy[n].set_ylabel(ykey[n] + " [A]",color='blue')
+                            axxy[n].set_ylabel(xkey[1] + " [V]",color='orange')
+                        #Fix colours
+                    if len(Pkwargs['c'])<4:
+                        Pkwargs['c'] = mcm.get_cmap("tab20",20)
+                    for axis in axyy:
+                        for i,line in enumerate(axis.get_lines()):
+                            line.set_color(Pkwargs['c'](i))
+                    for axis in axxy:
+                        for i,line in enumerate(axis.get_lines()):
+                            line.set_color(Pkwargs['c'](i+3))
+                    ax_bottom.set_xlabel("index")
+                    ax_top.set_xlabel("index")
+                    handles1,labels = ax_top.get_legend_handles_labels()
+                    handles2,labels = ax_top_r.get_legend_handles_labels()
+                    fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
+         
+                    FIG.ax[0].set_title(kw.title)
             
             
         return(IFIG,IDF)
@@ -2300,7 +2302,13 @@ def Keithley_xls_read(directory,**kwargs):
                             row_dict[header] = row[i]
                                 
                         flat_data[run_key] = row_dict
-                        
+                        if "device" in flat_data[run_key].keys() and "Device" not in flat_data[run_key].keys():
+                            flat_data[run_key]["Device"] = flat_data[run_key]["device"]
+                            del flat_data[run_key]['device']
+                        if "device" not in [entry.lower() for entry in list(flat_data[run_key].keys())]:
+                            flat_data[run_key]["Device"] = 'Unlabelled'
+                        if type(flat_data[run_key]["Device"]) != str:
+                            flat_data[run_key]["Device"] ="Unlabelled"
             file_data = flat_data
             
         data[filename] = file_data
