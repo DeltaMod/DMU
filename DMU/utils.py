@@ -929,13 +929,13 @@ def DataDir(**kwargs):
         Current solution is to give a cprint call telling you to load UVAR again if you make this change, or to return the newly edited file with the function...
     """ 
     S_ESC = LinWin()
-    kwargdict = {'a':'act','act':'act','action':'act'}
+    kwargdict = {"a":"act","act":"act","action":"act"}
     
-    actdict =   {'a':'add','add':'add','addfile':'add',
-                 'd':'delete','del':'delete','delete':'delete',
-                 'dupl':'dupes','dupes':'dupes','duplicates':'dupes',
-                 'list':'list','lst':'list','show':'list',
-                 'load':'load'}
+    actdict =   {"a":"add","add":"add","addfile":"add",
+                 "d":"delete","del":"delete","delete":"delete",
+                 "dupl":"dupes","dupes":"dupes","duplicates":"dupes",
+                 "list":"list","lst":"list","show":"list",
+                 "load":"load"}
       
     if len(kwargs) == 0:
         
@@ -944,20 +944,20 @@ def DataDir(**kwargs):
         act_keydict    = {}
         for i in range(len(act_keys)):    
             act_keydict[i]    = act_keys[i] 
-        kwText   = ":".join(['List of Actions']+[str(i)+' : '+ act_keys[i] for i in range(len(act_keys))]+['INPUT SELECTION']).split(':')
-        kwjc     = [':\n']+list(np.concatenate([[':']+['\n'] for i in range(int((len(kwText)-1)/2)) ]))+[':']
+        kwText   = ":".join(["List of Actions"]+[str(i)+" : "+ act_keys[i] for i in range(len(act_keys))]+["INPUT SELECTION"]).split(":")
+        kwjc     = [":\n"]+list(np.concatenate([[":"]+["\n"] for i in range(int((len(kwText)-1)/2)) ]))+[":"]
         kwFull   = np.concatenate([[kwText[i]]+[kwjc[i]] for i in range(len(kwjc))])
-        kwmt     = ['note']+['note']+list(np.concatenate([['stat']+['wrn']+['stat']+['stat'] for i in range(len(act_keys)) ]))+['curio']+['curio']
+        kwmt     = ["note"]+["note"]+list(np.concatenate([["stat"]+["wrn"]+["stat"]+["stat"] for i in range(len(act_keys)) ]))+["curio"]+["curio"]
         kwID = input(cprint(kwFull,mt=kwmt,tr=True))
         
-        kwargs = {'act':act_keydict[int(kwID)]}
+        kwargs = {"act":act_keydict[int(kwID)]}
     
     kw = KwargEval(kwargs, kwargdict, act=False)    
     
-    UV_dir = CUV(act='init',co=False)['Data_Directories_File']
+    UV_dir = CUV(act="init",co=False)["Data_Directories_File"]
     UV_dir,UV_pt = Rel_Checker(UV_dir)
     UV_dir = PathSet(UV_dir,p=UV_pt)
-    setattr(kw,'ddir', UV_dir)
+    setattr(kw,"ddir", UV_dir)
 
     def NewDict(Dict):
         NewDict  = {}
@@ -974,7 +974,7 @@ def DataDir(**kwargs):
             if i+1 != int(Dkeys[i]):
                 newdictbool = True
         if newdictbool == True:
-            cprint('Correcting provided dictionary to contain the right order of entires!',mt='wrn')
+            cprint("Correcting provided dictionary to contain the right order of entires!",mt="wrn")
             for i in range(len(Dict)):
                 NewDict[str(i+1)]  = DictList[i][1]
             return(NewDict)
@@ -985,58 +985,58 @@ def DataDir(**kwargs):
     try:
         kw.act = actdict[kw.act]
     except:
-        cprint(['Note that ','kw.act',' = ',str(kw.act),' does not correspond to an action!',' Skipping kwarg eval.'],mt = ['wrn','err','wrn','note'])
+        cprint(["Note that ","kw.act"," = ",str(kw.act)," does not correspond to an action!"," Skipping kwarg eval."],mt = ["wrn","err","wrn","note"])
         
     #Check if file exists, else write an empty file:
     if os.path.isfile(kw.ddir) == False:
-            jsonhandler(f = kw.ddir,d={},pt='abs',a='w')    
-    DirDict = jsonhandler(f = kw.ddir,pt='abs', a='r')
+            jsonhandler(f = kw.ddir,d={},pt="abs",a="w")    
+    DirDict = jsonhandler(f = kw.ddir,pt="abs", a="r")
     print(DirDict)
-    if kw.act == 'add':
+    if kw.act == "add":
         DirDict = NewDict(DirDict) #Make sure that the add command adds in the correct format
         print(DirDict)
         root = tk.Tk()
-        file_path = askdirectory(title = 'Please select a data directory to append to your data directories list!').replace('/',S_ESC)
+        file_path = askdirectory(title = "Please select a data directory to append to your data directories list!").replace("/",S_ESC)
         
         tk.Tk.withdraw(root)
         #First, we need to check that the dictionary has sequential keys, and if not, we need to rebuild these!
         
         DirDict[str(len(DirDict)+1)] = file_path
-        if file_path != '':
-            jsonhandler(f = kw.ddir,d=DirDict,pt='abs', a='w')
+        if file_path != "":
+            jsonhandler(f = kw.ddir,d=DirDict,pt="abs", a="w")
         else:
-            cprint('No file selected, aborting!',mt='err')
+            cprint("No file selected, aborting!",mt="err")
     
-    if kw.act == 'delete':
-        listdel  = ['Select a data directory to delete:\n']
-        cplist   = ['note'] 
+    if kw.act == "delete":
+        listdel  = ["Select a data directory to delete:\n"]
+        cplist   = ["note"] 
         DDI = list(DirDict.items())
         for i in range(len(DDI)):
-            cplist = cplist + ['wrn','note','stat','stat']
-            listdel = listdel+ [str(i),' : ',DDI[i][1], '\n']
-        cplist = cplist + ['curio']
-        listdel = listdel+['Enter number here: ']
+            cplist = cplist + ["wrn","note","stat","stat"]
+            listdel = listdel+ [str(i)," : ",DDI[i][1], "\n"]
+        cplist = cplist + ["curio"]
+        listdel = listdel+["Enter number here: "]
         
-        IPT = cprint(listdel,mt=cplist,jc='',tr=True)
+        IPT = cprint(listdel,mt=cplist,jc="",tr=True)
         index = input(IPT)
         try:
             index = int(index)
         except:
-            cprint('Non integer string entered! No fields will be deleted!',mt='err')
+            cprint("Non integer string entered! No fields will be deleted!",mt="err")
         if type(index) == int:
             DirDict.pop(DDI[index][0])
             DirDict = NewDict(DirDict)
                 
-            jsonhandler(f = kw.ddir,d=DirDict,pt='abs', a='w')
+            jsonhandler(f = kw.ddir,d=DirDict,pt="abs", a="w")
             
-            cprint(['Deleted ', '{'+str(DDI[index][0]),' : ',DDI[index][1],'}', ' from directory list file'],mt = ['note','wrn','note','stat','wrn','note'])
+            cprint(["Deleted ", "{"+str(DDI[index][0])," : ",DDI[index][1],"}", " from directory list file"],mt = ["note","wrn","note","stat","wrn","note"])
             
-    if kw.act == 'dupes':
+    if kw.act == "dupes":
         DDK = list(DirDict.keys())
         DDI = list(DirDict.values())
         UNQ = np.unique(DDI)
         if len(DDI) == len(UNQ):
-            cprint('No duplicates found!',mt='note')
+            cprint("No duplicates found!",mt="note")
         else:
             dupeID = []
             for unique in UNQ:
@@ -1047,26 +1047,26 @@ def DataDir(**kwargs):
                     
             print(DirDict)
             for dID in dupeID:
-                cprint(['Deleting', '{',DDK[dID], ':',DDI[dID],'}','from',kw.ddir],mt = ['note','wrn','curio','wrn','curio','wrn','note','stat'],jc=' ')
+                cprint(["Deleting", "{",DDK[dID], ":",DDI[dID],"}","from",kw.ddir],mt = ["note","wrn","curio","wrn","curio","wrn","note","stat"],jc=" ")
                 DirDict.pop(DDK[dID])
                 
-            cprint(['A total of','[',str(len(dupeID)),']','dupes were deleted.'],mt = ['note','wrn','curio','wrn','note'])
+            cprint(["A total of","[",str(len(dupeID)),"]","dupes were deleted."],mt = ["note","wrn","curio","wrn","note"])
             DirDict = NewDict(DirDict)
-            jsonhandler(f = kw.ddir,d=DirDict,pt='abs', a='w')
+            jsonhandler(f = kw.ddir,d=DirDict,pt="abs", a="w")
             
         
-    if kw.act == 'list':
-        listshow  = ['List of currently saved directories:\n']
-        cplist   = ['note'] 
+    if kw.act == "list":
+        listshow  = ["List of currently saved directories:\n"]
+        cplist   = ["note"] 
         DDN = list(DirDict.keys())
         DDI = list(DirDict.items())
         for i in range(len(DDI)):
-            cplist = cplist + ['wrn','note','stat','stat']
-            listshow = listshow+ [DDN[i],' : ',DDI[i][1], '\n']
+            cplist = cplist + ["wrn","note","stat","stat"]
+            listshow = listshow+ [DDN[i]," : ",DDI[i][1], "\n"]
         cplist = cplist
         cprint(listshow,mt=cplist)
         
-    if kw.act == 'load':
+    if kw.act == "load":
         return(DirDict)
 
 #%%
