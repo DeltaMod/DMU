@@ -13,6 +13,7 @@ import time
 import h5py
 import hdf5storage
 import matplotlib
+import matplotlib as mpl
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askdirectory
 from matplotlib import patches as ptc
@@ -27,7 +28,7 @@ from collections import Counter
 import natsort
 import csv
 import xlrd
-import matplotlib.cm as mcm
+
 
 #%%        
 def AbsPowIntegrator(Data,x,y,z,WL):
@@ -119,9 +120,10 @@ def bias_plotter(data,FIG,**kwargs):
         
         if kw.ideality == True:
         
-            tab20 = mcm.get_cmap("tab20",20)
+            tab20 = mpl.colormaps["tab20"]
             IFIG = True
             IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]])
+            
             if kw.plot == True:
                 IFIG = ezplot()
     
@@ -182,7 +184,7 @@ def bias_plotter(data,FIG,**kwargs):
                     IFIG = False
                     try:
                         
-                        tab20 = mcm.get_cmap("tab20",20)
+                        tab20 = mpl.colormaps["tab20"]
                         
                         IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
                         if kw.plot == True:
@@ -212,22 +214,44 @@ def bias_plotter(data,FIG,**kwargs):
                     
                     axyy  = [ax_top,ax_bottom]
                     axxy  = [ax_top_r,ax_bottom_r]
-                    if len(xkey) == 1 and len(ykey)>1:
-                        for n,key in enumerate(ykey):
-                            axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
-                            axxy[n].plot(data[xkey[0]][0],label=xkey[0],**plotkwargs)
-                            axyy[n].set_ylabel(ykey[n][0])
-                            axxy[n].set_ylabel(xkey[0][0])
+                    
+                    emitter  = data['emitter']
+                    detector = data['detector']
+                    
+                    #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
+                    for key in data.keys():
+                        if emitter['NWID'] in key:
+                            if "voltage" in key:
+                                Em_V_key = key
+                            if "current" in key:
+                                Em_I_key = key
+                        
+                        if detector['NWID'] in key:
+                            if "voltage" in key:
+                                Det_V_key = key
+                            if "current" in key:
+                                Det_I_key = key
                             
-                    if len(xkey) > 1 and len(ykey)>1:
-                        for n,key in enumerate(ykey):
-                            axyy[n].plot(data[ykey[n]][0],label=ykey[n],**plotkwargs)
-                            axxy[n].plot(data[xkey[1]][0],label=xkey[1],**plotkwargs)
-                            axyy[n].set_ylabel(ykey[n] + " [A]",color='blue')
-                            axxy[n].set_ylabel(xkey[1] + " [V]",color='orange')
+                    Em_V     =   data[Em_V_key][0]
+                    Em_I     =   data[Em_I_key][0]
+                    Det_V     =  data[Det_V_key][0]
+                    Det_I     =  data[Det_I_key][0]
+                    
+                    ax_top.plot(Det_I,label='Detector Current [I]',**plotkwargs)
+                    ax_top_r.plot(Em_V,label='Emitter Voltage [V]',**plotkwargs)
+                    ax_top.set_ylabel('$I_{Detector}$ [I]',color="Blue")
+                    ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color="Orange")
+                    
+                    ax_bottom.plot(Em_I,label='Emitter Current [I]',**plotkwargs)
+                    ax_bottom_r.plot(Em_V,label='Emitter Voltage [V]',**plotkwargs)
+                    
+                    ax_bottom.set_ylabel('$I_{Emitter}$ [I]',color  = "Blue")
+                    ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = "Orange")
+                    
+                    
                         #Fix colours
                     if len(Pkwargs['c'])<4:
-                        Pkwargs['c'] = mcm.get_cmap("tab20",20)
+                        Pkwargs['c'] = mpl.colormaps["tab20"]
                     for axis in axyy:
                         for i,line in enumerate(axis.get_lines()):
                             line.set_color(Pkwargs['c'](i))
@@ -1256,13 +1280,13 @@ class cmap_seq(object):
                      'interp':'interp','interpolation':'interp'}
         kuniq = np.unique(list(kwargdict.keys()))
         kw = KwargEval(kwargs, kwargdict, cmap='viridis',steps=100,custom=False,col1=None,col2=None,interp=None)
-
-        self.cmap = mcm.get_cmap(kw.cmap,kw.steps)
+        self.istep = 1/kw.steps
+        self.cmap = mpl.colormaps(kw.cmap)
         self.col  = self.cmap(self.i)
 
         
     def iter_cmap(self):
-        self.i += 1
+        self.i += self.istep
         self.col  = self.cmap(self.i)
         
     def reset(self):
@@ -2362,7 +2386,6 @@ def Keithley_xls_read(directory,**kwargs):
             file_data[sheet_name] = settings_data
             
             
-            
         """
         Data sheet handling
         """
@@ -2396,37 +2419,68 @@ def Keithley_xls_read(directory,**kwargs):
                         
                             
                     cols["col headers"].append(key)
-                    
-                #Swap linear sweep data to segmented data 
-                voltage_keys = [key for key in list(cols.keys()) if "voltage" in key.lower()]
-
-                sweep_index_list = []
-                for key in voltage_keys:
-                    sweep_index_list.append(find_turning_points(cols[key]))
-                    
-                idx_short = min(range(len(sweep_index_list)), key=lambda i: len(sweep_index_list[i]))
-                sweep_indices = sweep_index_list[idx_short]
-                sweep_length = len(sweep_indices)
                 
+                stats    = {"Npts"   : file_data["Settings"][sheet_name]["Number of Points"].strip("[]").replace('\'','').split(', '),
+                            "VStep"  : file_data["Settings"][sheet_name]["Step"].strip("[]").replace('\'','').split(', ') ,
+                            "VStart" : file_data["Settings"][sheet_name]["Start/Bias"].strip("[]").replace('\'','').split(', '),
+                            "VStop"  : file_data["Settings"][sheet_name]["Stop"].strip("[]").replace('\'','').split(', '),
+                            "OpMode"  : file_data["Settings"][sheet_name]["Operation Mode"].strip("[]").replace('\'','').split(', '),
+                            "NWID"  : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
+                            "SMU"  : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
+                            "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
                 
-                if len(sweep_indices) < 6 and sweep_indices[0] !=None:
-                    sweep_length = len(cols[key])
+                for key in stats.keys():
+                    for n,element in enumerate(stats[key]):
+                        if "Npts" in key:
+                            try:
+                                stats[key][n] = int(element)
+                            except:
+                                stats[key][n] = 0
+                        if key in ["Vstep","VStart","VStop","VStep"]:
+                            try: 
+                                stats[key][n] = float(element)
+                            except:
+                                stats[key][n] = None
+                        if key in ["FBSweep"]:
+                            if element == "Enabled":
+                                stats[key][n] = True
+                            else:
+                                stats[key][n] = False
+                for key in stats.keys():
+                    if len(stats[key]) == 1:
+                        stats[key] = stats[key][0]
                         
-                else:
-                    sweep_length = None
-                            
-                list_keys = [key for key, value in cols.items() if isinstance(value, list)]
-                for key in list_keys:
-                    if len(cols[key]) == sweep_length and sweep_length != None:
-                        cols[key]  = segment_sweep(cols[key],sweep_indices)
                     
-                    else:
-                        if "voltage" == key or "current" == key:
-                            cols[key] = [cols[key]]
-                            
-                # Store the data in the dictionary
-
-                file_data[sheet_name] = cols
+                #Swap linear sweep data to segmented data
+                if stats["FBSweep"] == True and stats["Npts"] == 2*(1+int(abs(stats["VStart"] - stats["VStop"])/abs(stats["VStep"]))):
+                   
+                    sweep_indices = [0,int(stats["Npts"]/2),stats["Npts"]]
+                else:
+                    sweep_indices = [0,max(stats["Npts"])]
+                    
+                if  file_data["Settings"][sheet_name]["Operation Mode"] == "Voltage Linear Sweep":
+                        
+                    list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
+                    for key in list_keys:
+                        cols[key]  = segment_sweep(cols[key],sweep_indices)
+                    # Store the data in the dictionary
+                    
+                    file_data[sheet_name] = cols
+                
+                if "Voltage Bias" and "Voltage List Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
+                    #Determine which nanowire is the emitter, and which is the detector:
+                    emitter_ID = stats["OpMode"].index('Voltage List Sweep')
+                    detector_ID = stats["OpMode"].index('Voltage Bias')
+                    
+                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"OpMode":'Voltage List Sweep'}
+                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"OpMode":'Voltage List Sweep'}
+                    
+                    # Store the data in the dictionary
+                    list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
+                    for key in list_keys:
+                        cols[key] = [cols[key]]
+                    file_data[sheet_name] = cols    
+        
         # Store the data for the file in the top-level dictionary
         data[filename] = file_data
 
