@@ -2457,15 +2457,15 @@ def Keithley_xls_read(directory,**kwargs):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
                     sweep_indices = [0,max(stats["Npts"])]
+                print(file_data["Settings"][sheet_name]["Operation Mode"] )    
+                if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
-                if  file_data["Settings"][sheet_name]["Operation Mode"][main_col] == "Voltage Linear Sweep":
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                     for key in list_keys:
                         cols[key]  = segment_sweep(cols[key],sweep_indices)
-                       
+                        
                     # Store the data in the dictionary
-                    
-                file_data[sheet_name] = cols
+                    file_data[sheet_name] = cols
                 
                 if "Voltage Bias" and "Voltage List Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     #Determine which nanowire is the emitter, and which is the detector:
