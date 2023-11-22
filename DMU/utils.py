@@ -1844,10 +1844,11 @@ def MatLoader(file,**kwargs):
     cprint('=-=-=-=-=-=-=-=-=-=-=- Running: MatLoader -=-=-=-=-=-=-=-=-=-=-=',mt = 'funct')
     S_ESC = LinWin()
     kwargdict = {'txt':'txt','textfile':'txt',
+                 'json':'json','jsonfile':'json',
                  'dir':'path','directory':'path','path':'path','p':'path',
                  'tf':'tf','txtfile':'tf',
                  'esc':'esc','escape_character':'esc','e':'esc','esc_char':'esc'}
-    kw = KwargEval(kwargs, kwargdict, txt  = False, path = 'same', tf  = None, esc  = None)
+    kw = KwargEval(kwargs, kwargdict,json=False,txt  = False, path = 'same', tf  = None, esc  = None)
     
     #Mat File Loading
     FIELDDICT = {}
@@ -1895,14 +1896,39 @@ def MatLoader(file,**kwargs):
     if kw.tf == None and kw.path == 'same':
         path = os.path.dirname(file)
     txtlp = Get_FileList(path, ext='.txt',pathtype='abs')[0]
-
+    jsonlp = Get_FileList(path, ext='.json',pathtype='abs')[0]
     txtind = [i for i, s in enumerate(txtlp['.txt']) if (s.split(S_ESC)[-1]).split('.')[0] in fname]
+    jsonind= [i for i, s in enumerate(jsonlp['.json']) if (s.split(S_ESC)[-1]).split('.')[0] in fname]
     try:
         data['txtfilepath'] = txtlp['.txt'][txtind[0]]
         data['txtname'] = data['txtfilepath'].split(S_ESC)[-1]
         d = []
     except:
         None
+    try:
+        data['jsonfilepath'] = jsonlp['.json'][jsonind[0]]
+        data['jsonname'] = data['jsonfilepath'].split(S_ESC)[-1]
+        d = []
+    except:
+        None
+        
+    if kw.json == True:
+        f = open(data["jsonfilepath"])
+        dat = json.load(f)
+        f.close()
+        namedata  = dat[list(dat.keys())[0]]["name"]["_data"]
+        valuedata = dat[list(dat.keys())[0]]["value"]["_data"]
+        dictdat   = {}
+        for i,val in enumerate(valuedata):
+            if type(val) == dict:
+                try:
+                    value = val["_data"]
+                except:
+                    value = val
+            else:
+                value = val
+            dictdat[namedata[i]] = value
+        data.update(dictdat)
         
     if kw.txt == True:
             #determine escape character if none is given
@@ -2428,7 +2454,7 @@ def Keithley_xls_read(directory,**kwargs):
                             "NWID"  : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
                             "SMU"  : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
                             "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
-                
+                return(stats)
                 for key in stats.keys():
                     for n,element in enumerate(stats[key]):
                         if "Npts" in key:
@@ -2440,7 +2466,7 @@ def Keithley_xls_read(directory,**kwargs):
                             try: 
                                 stats[key][n] = float(element)
                             except:
-                                stats[key][n] = None
+                                stats[key].pop(n)
                         if key in ["FBSweep"]:
                             if element == "Enabled":
                                 stats[key][n] = True
@@ -2449,17 +2475,23 @@ def Keithley_xls_read(directory,**kwargs):
                 for key in stats.keys():
                     if len(stats[key]) == 1:
                         stats[key] = stats[key][0]
+                    
                         
                     
+                     
+                
                 #Swap linear sweep data to segmented data
+                return(stats)    
                 if stats["FBSweep"] == True and stats["Npts"] == 2*(1+int(abs(stats["VStart"] - stats["VStop"])/abs(stats["VStep"]))):
-                   
+                    
                     sweep_indices = [0,int(stats["Npts"]/2),stats["Npts"]]
                 else:
                     sweep_indices = [0,max(stats["Npts"])]
+                
+                
                     
                 if  file_data["Settings"][sheet_name]["Operation Mode"] == "Voltage Linear Sweep":
-                        
+
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                     for key in list_keys:
                         cols[key]  = segment_sweep(cols[key],sweep_indices)
