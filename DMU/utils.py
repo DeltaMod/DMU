@@ -2454,7 +2454,7 @@ def Keithley_xls_read(directory,**kwargs):
                             "NWID"  : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
                             "SMU"  : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
                             "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
-                return(stats)
+                
                 for key in stats.keys():
                     for n,element in enumerate(stats[key]):
                         if "Npts" in key:
@@ -2466,7 +2466,7 @@ def Keithley_xls_read(directory,**kwargs):
                             try: 
                                 stats[key][n] = float(element)
                             except:
-                                stats[key].pop(n)
+                                stats[key][n] = None
                         if key in ["FBSweep"]:
                             if element == "Enabled":
                                 stats[key][n] = True
@@ -2475,28 +2475,22 @@ def Keithley_xls_read(directory,**kwargs):
                 for key in stats.keys():
                     if len(stats[key]) == 1:
                         stats[key] = stats[key][0]
-                    
-                        
-                    
-                     
                 
-                #Swap linear sweep data to segmented data
-                return(stats)    
-                if stats["FBSweep"] == True and stats["Npts"] == 2*(1+int(abs(stats["VStart"] - stats["VStop"])/abs(stats["VStep"]))):
                     
-                    sweep_indices = [0,int(stats["Npts"]/2),stats["Npts"]]
+                #Swap linear sweep data to segmented data
+                main_col = stats['Npts'].index(max(stats['Npts']))    
+                if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
+                    sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
                     sweep_indices = [0,max(stats["Npts"])]
-                
-                
+                print(file_data["Settings"][sheet_name]["Operation Mode"] )    
+                if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
-                if  file_data["Settings"][sheet_name]["Operation Mode"] == "Voltage Linear Sweep":
-
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                     for key in list_keys:
                         cols[key]  = segment_sweep(cols[key],sweep_indices)
+                        
                     # Store the data in the dictionary
-                    
                     file_data[sheet_name] = cols
                 
                 if "Voltage Bias" and "Voltage List Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
