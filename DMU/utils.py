@@ -2288,11 +2288,10 @@ def Keithley_xls_read(directory,**kwargs):
     We must first handle the Logbook
     """
     logfiles = [file for file in files if "LOG" in file]
-    
     for file in logfiles:
         filename = os.path.splitext(file.split('\\')[-1])[0]
         
-        xls = xlrd.open_workbook(file)
+        xls = xlrd.open_workbook(file)  
         file_data = {}
         """
         Logbook Handling
@@ -2301,6 +2300,7 @@ def Keithley_xls_read(directory,**kwargs):
         """
         
         if 'LOG' in filename.upper():
+            
             # If filename contains LOG, read data as a flat dictionary
             sheet = xls.sheet_by_index(0)
             rows = []
@@ -2326,14 +2326,23 @@ def Keithley_xls_read(directory,**kwargs):
             for row in rows:
                 if all(x == '' for x in row) != True:
                     if row[0] == "":
-                        if any(string in element for element in row for string in ["NW"]) == True:
+                        if any(string in element for element in row for string in ["NW","n-i-p","p-i-n"]) == True:
                             for i,var in enumerate(smu_ind):
-    #                            print("smu_ind " + str(var) + " --> produces for -1 = " + str(row[var-1]) +" for 0" + str(row[var]) + " for +1" + str(row[var+1]) )
+                            #print("smu_ind " + str(var) + " --> produces for -1 = " + str(row[var-1]) +" for 0" + str(row[var]) + " for +1" + str(row[var+1]) )
+                                
                                 if row[var] == "":
-                                    flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
+                                    if "NW" in row[var-1]:
+                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
+                                    if "n-i-p" in row[var-1] or "p-i-n" in row[var-1]:
+                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var-1]
                                 elif "NW" in row[var]:
-                                    flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
-                            break
+                                    if "NW" in row[var]:
+                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
+                                    if "n-i-p" in row[var] or "p-i-n" in row[var]:
+                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var]
+                    if row[0] != "":
+                        break
+                    
             for row in rows:
                 if all(x == '' for x in row) != True:
          
@@ -2360,9 +2369,7 @@ def Keithley_xls_read(directory,**kwargs):
             file_data = flat_data
             
         data[filename] = file_data
-        
-        
-        
+            
     data_files = [file for file in files if "LOG" not in file ]    
 # Loop over each file and each sheet within the file
     for file in data_files:
@@ -2391,11 +2398,11 @@ def Keithley_xls_read(directory,**kwargs):
                 
             settings_data = {}
             for row in rows:
-                if any("===" in s for s in row) or (all(not s.strip() for s in row)): 
+                if any("===" in s for s in row) or (all(not s.strip() for s in row)):  #We strip out all the === that separates the Settings.
                     
                     continue
         
-                if any("Run" in s for s in row):
+                if any("Run" in s for s in row): # We detect where to swap key into a new settings file
                     key = str(row[0])
                     settings_data[key] = {}
                     continue
@@ -2483,7 +2490,7 @@ def Keithley_xls_read(directory,**kwargs):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
                     sweep_indices = [0,max(stats["Npts"])]
-                print(file_data["Settings"][sheet_name]["Operation Mode"] )    
+                print(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"] )    
                 if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
@@ -2514,6 +2521,7 @@ def Keithley_xls_read(directory,**kwargs):
     #Now we need to check the logbook run info against all included excel sheets so that we can import the correct logbook data.
     log_keys  = [x for x in data.keys() if "LOG" in x.upper()]
     data_keys = [x for x in data.keys() if "LOG" not in x.upper()]
+
     
     for log_key in log_keys: 
         for lkey in data[log_key].keys():
@@ -2741,17 +2749,7 @@ def Ideality_Factor(I,V,**kwargs):
     if V[-1]<V[0]:
         V = np.flip(V)
         I = np.flip(I)
-
-    
-    """
-    if I[0]>I[-1]:
-        V = np.multiply(-1,V)
-        I = np.flip(I)
-    
-    if V[1]-V[0]<0:
-        V = np.flip(V)
-        I = np.flip(I)
-     """   
+   
         
     if kw.fit_range == None:
         kw.fit_range = 0.01
