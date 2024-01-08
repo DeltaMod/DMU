@@ -17,6 +17,7 @@ import matplotlib as mpl
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askdirectory
 from matplotlib import patches as ptc
+from matplotlib import colormaps as cmaps
 from matplotlib.transforms import Affine2D
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import axes3d #If you want to be able to use projection="3D", then you need this:
@@ -65,7 +66,9 @@ def bias_plotter(data,FIG,**kwargs):
                  'title':'title','tit':'title',
                  'tool':'tool','experiment':'exp','exp':'exp',
                  'ideality':'ideality',
-                 'plot':'plot'}
+                 'plot':'plot',
+                 'altplot':"altplot",
+                 'cols':'cols'}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -74,7 +77,7 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',ideality=False,plot=True)
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False)
     xkey = []; ykey = []; fwdbwd = []
     if kw.plot == True:
         ax = FIG.ax[0]
@@ -200,24 +203,14 @@ def bias_plotter(data,FIG,**kwargs):
                         None
                     
             elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
+                if kw.cols == None:
+                    cols = {"IE":[cmaps["tab20c"](0),cmaps["tab20c"](1)],
+                            "VE":[cmaps["tab20c"](4),cmaps["tab20c"](5)],
+                            "ID":[cmaps["tab20c"](8),cmaps["tab20c"](9)]}
                 if kw.plot == True:
-                    FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
-                    fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
-                    ax_top.spines["bottom"].set_visible(False)
-                    ax_bottom.spines["top"].set_visible(False)
-                    ax_top.tick_params(bottom=False)
-                    ax_bottom.tick_params(top=False)
-                    plt.subplots_adjust(hspace=0.1)
-            
-                    ax_top_r = ax_top.twinx()
-                    ax_bottom_r = ax_bottom.twinx()
-                    
-                    axyy  = [ax_top,ax_bottom]
-                    axxy  = [ax_top_r,ax_bottom_r]
-                    
                     emitter  = data['emitter']
                     detector = data['detector']
-                    
+                        
                     #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
                     for key in data.keys():
                         if emitter['NWID'] in key:
@@ -237,35 +230,107 @@ def bias_plotter(data,FIG,**kwargs):
                     Det_V     =  data[Det_V_key][0]
                     Det_I     =  data[Det_I_key][0]
                     
-                    ax_top.plot(Det_I,label='Detector Current [I]',**plotkwargs)
-                    ax_top_r.plot(Em_V,label='Emitter Voltage [V]',**plotkwargs)
-                    ax_top.set_ylabel('$I_{Detector}$ [I]',color="Blue")
-                    ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color="Orange")
+                    if kw.altplot == False:
+                        FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
+                        fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
+                        ax_top.spines["bottom"].set_visible(False)
+                        ax_bottom.spines["top"].set_visible(False)
+                        ax_top.tick_params(bottom=False)
+                        ax_bottom.tick_params(top=False)
+                        plt.subplots_adjust(hspace=0.1)
+                
+                        ax_top_r = ax_top.twinx()
+                        ax_bottom_r = ax_bottom.twinx()
+                        
+                        axyy  = [ax_top,ax_bottom]
+                        axxy  = [ax_top_r,ax_bottom_r]
                     
-                    ax_bottom.plot(Em_I,label='Emitter Current [I]',**plotkwargs)
-                    ax_bottom_r.plot(Em_V,label='Emitter Voltage [V]',**plotkwargs)
+                        
+                        ax_top.plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
+                        ax_top_r.plot(Em_V,label='Emitter Voltage [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.set_ylabel('$I_{Detector}$ [I]',color=cols["ID"][0])
+                        ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
+                        
+                        ax_bottom.plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
+                        ax_bottom_r.plot(Em_V,label='Emitter Voltage [V]',color=cols["VE"][1],**plotkwargs)
+                        
+                        ax_bottom.set_ylabel('$I_{Emitter}$ [I]',   color  = cols["IE"][0])
+                        ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = cols["VE"][0])
+                        
+                        
+                            #Fix colours
+                        if len(Pkwargs['c'])<4:
+                            Pkwargs['c'] = mpl.colormaps["tab20"]
+                        for axis in axyy:
+                            for i,line in enumerate(axis.get_lines()):
+                                line.set_color(Pkwargs['c'](i))
+                        for axis in axxy:
+                            for i,line in enumerate(axis.get_lines()):
+                                line.set_color(Pkwargs['c'](i+3))
+                        ax_bottom.set_xlabel("index")
+                        ax_top.set_xlabel("index")
+                        handles1,labels = ax_top.get_legend_handles_labels()
+                        handles2,labels = ax_top_r.get_legend_handles_labels()
+                        fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
+             
+                        FIG.ax[0].set_title(kw.title)
+                    if kw.altplot==True:
+
+                        FIG.fig,FIG.ax[0] = plt.subplots()
+                        FIG.fig.subplots_adjust(right=0.75)
+                        FIG.ax[1] = FIG.ax[0].twinx()
+                        FIG.ax[2] = FIG.ax[0].twinx()
+                        FIG.ax[2].spines.right.set_position(("axes", 1.2))
+                        
+                        p1, = FIG.ax[0].plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
+                        p2, = FIG.ax[1].plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
+                        p3, = FIG.ax[2].plot(Em_V,'-.',label='Emitter Voltage [V]',color=cols["VE"][1],linewidth = 1)
+                        
+                        FIG.ax[0].set_xlabel("Index")
+                        FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
+                        FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
+                        FIG.ax[2].set_ylabel('$V_{Emitter}$ V [V]',color=cols["VE"][0])
+                        
+                        #We want to set axis limits so that Voltage = 90% of the ylim
+                        def rpad(data,ratio):
+                            drange = np.max(data)-np.min(data)
+                            dpad   = (drange*(1/ratio) - drange)/2
+                            return([np.min(data)-dpad,np.max(data)+dpad])
+                        Vlim = rpad(Em_V,0.9)
+                        FIG.ax[2].set_ylim(Vlim)
+                        
+                        RatioMod = None #WORKHERE
+                        FIG.ax[0].set_ylim(rpad(Det_I,0.8))
+                        FIG.ax[1].set_ylim(rpad(Em_I,0.85))
+                        
+                        
+                        
+                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
+                        
                     
-                    ax_bottom.set_ylabel('$I_{Emitter}$ [I]',color  = "Blue")
-                    ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = "Orange")
-                    
-                    
-                        #Fix colours
-                    if len(Pkwargs['c'])<4:
-                        Pkwargs['c'] = mpl.colormaps["tab20"]
-                    for axis in axyy:
-                        for i,line in enumerate(axis.get_lines()):
-                            line.set_color(Pkwargs['c'](i))
-                    for axis in axxy:
-                        for i,line in enumerate(axis.get_lines()):
-                            line.set_color(Pkwargs['c'](i+3))
-                    ax_bottom.set_xlabel("index")
-                    ax_top.set_xlabel("index")
-                    handles1,labels = ax_top.get_legend_handles_labels()
-                    handles2,labels = ax_top_r.get_legend_handles_labels()
-                    fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
-         
-                    FIG.ax[0].set_title(kw.title)
-            
+                        #Setting Spine colours and tickparameters
+                        FIG.ax[0].yaxis.label.set_color(cols["ID"][0])
+                        FIG.ax[1].yaxis.label.set_color(cols["IE"][0])
+                        FIG.ax[2].yaxis.label.set_color(cols["VE"][0])
+                        
+                        tkw = dict(size=4, width=1.5)
+                        FIG.ax[0].tick_params(axis='y', colors=cols["ID"][0], **tkw)
+                        
+                        FIG.ax[1].tick_params(axis='y', colors=cols["IE"][0], **tkw)
+                        FIG.ax[1].spines["right"].set_color(cols["IE"][0])
+                     
+                        
+                        FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
+                        FIG.ax[2].spines["right"].set_color(cols["VE"][0])
+                        
+                        FIG.ax[0].tick_params(axis='x', **tkw)
+                        
+                        FIG.ax[0].legend(handles=[p1, p2, p3],fontsize=7)
+                        
+                        for ax in FIG.ax:
+                            FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
+                            FIG.ax[ax].yaxis.grid(False, which='both')
+                            FIG.ax[0].yaxis.grid(True, which='both',color=cmaps["tab20c"](11))
             
         return(IFIG,IDF)
 
@@ -2804,4 +2869,25 @@ def Ideality_Factor(I,V,**kwargs):
 
 
     return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data})
-        
+
+def align_axis_zeros(axes):
+
+    ylims_current = {}   #  Current ylims
+    ylims_mod     = {}   #  Modified ylims
+    deltas        = {}   #  ymax - ymin for ylims_current
+    ratios        = {}   #  ratio of the zero point within deltas
+
+    for ax in axes:
+        ylims_current[ax] = list(ax.get_ylim())
+                        # Need to convert a tuple to a list to manipulate elements.
+        deltas[ax]        = ylims_current[ax][1] - ylims_current[ax][0]
+        ratios[ax]        = -ylims_current[ax][0]/deltas[ax]
+    
+    for ax in axes:      # Loop through all axes to ensure each ax fits in others.
+        ylims_mod[ax]     = [np.nan,np.nan]   # Construct a blank list
+        ylims_mod[ax][1]  = max(deltas[ax] * (1-np.array(list(ratios.values()))))
+                        # Choose the max value among (delta for ax)*(1-ratios),
+                        # and apply it to ymax for ax
+        ylims_mod[ax][0]  = min(-deltas[ax] * np.array(list(ratios.values())))
+                        # Do the same for ymin
+        ax.set_ylim(tuple(ylims_mod[ax]))        
