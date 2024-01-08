@@ -280,7 +280,7 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.fig.subplots_adjust(right=0.75)
                         FIG.ax[1] = FIG.ax[0].twinx()
                         FIG.ax[2] = FIG.ax[0].twinx()
-                        FIG.ax[2].spines.right.set_position(("axes", 1.2))
+                        FIG.ax[2].spines.right.set_position(("axes", 1.25))
                         
                         p1, = FIG.ax[0].plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
                         p2, = FIG.ax[1].plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
@@ -295,13 +295,15 @@ def bias_plotter(data,FIG,**kwargs):
                         def rpad(data,ratio):
                             drange = np.max(data)-np.min(data)
                             dpad   = (drange*(1/ratio) - drange)/2
-                            return([np.min(data)-dpad,np.max(data)+dpad])
-                        Vlim = rpad(Em_V,0.9)
+                            return([np.min(data)-dpad,np.max(data)+dpad],dpad)
+                        
+                        Vlim,Vpad = rpad(Em_V,0.9)
                         FIG.ax[2].set_ylim(Vlim)
                         
-                        RatioMod = None #WORKHERE
-                        FIG.ax[0].set_ylim(rpad(Det_I,0.8))
-                        FIG.ax[1].set_ylim(rpad(Em_I,0.85))
+                        #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
+                        RatioMod = (np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0]) 
+                        FIG.ax[0].set_ylim(rpad(Det_I,0.8*RatioMod)[0])
+                        FIG.ax[1].set_ylim(rpad(Em_I,0.85*RatioMod)[0])
                         
                         
                         
@@ -318,11 +320,9 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         FIG.ax[1].tick_params(axis='y', colors=cols["IE"][0], **tkw)
                         FIG.ax[1].spines["right"].set_color(cols["IE"][0])
-                     
+                        
                         
                         FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
-                        FIG.ax[2].spines["right"].set_color(cols["VE"][0])
-                        
                         FIG.ax[0].tick_params(axis='x', **tkw)
                         
                         FIG.ax[0].legend(handles=[p1, p2, p3],fontsize=7)
