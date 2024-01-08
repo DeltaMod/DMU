@@ -2,9 +2,8 @@ name: Publish a Python distribution to PyPI
 
 
 on:
-  release:
-    types: [push]
-
+  push:
+    
 
 jobs:
   deploy:
