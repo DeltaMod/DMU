@@ -157,7 +157,7 @@ def bias_plotter(data,FIG,**kwargs):
         xkey.sort(); ykey.sort()
         if kw.plot == True:
             if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]:
-
+                print(data[xkey[0]])
                 if len(xkey) == 1 and len(ykey) == 1:
                     for m,data_x in enumerate(data[xkey[0]]): 
                         ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
@@ -2518,7 +2518,7 @@ def Keithley_xls_read(directory,**kwargs):
         Each xls file has one sheet called "Settings", this will need to be read in a row by row format.
         Column headers are no longer important
         """
-        
+        #####!!!!#####!!! use "string".isDigit() to figure out if it can be a float. Then do list comprehension of contents of string lists.  
         # Otherwise, read data as nested sheets
         for sheet_name in settings_sheet:
             sheet = xls.sheet_by_name(sheet_name)
@@ -2629,6 +2629,8 @@ def Keithley_xls_read(directory,**kwargs):
                     for key in list_keys:
                         cols[key]  = segment_sweep(cols[key],sweep_indices)
                         
+                        
+                        
                     # Store the data in the dictionary
                     file_data[sheet_name] = cols
                 
@@ -2654,7 +2656,7 @@ def Keithley_xls_read(directory,**kwargs):
                 # Store the data in the dictionary
                 list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                 for key in list_keys:
-                    cols[key] = [cols[key]]
+                    cols[key] = cols[key]
                 file_data[sheet_name] = cols    
         
         # Store the data for the file in the top-level dictionary
