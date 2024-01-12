@@ -57,7 +57,7 @@ def AbsPowIntegrator(Data,x,y,z,WL):
 #%%
 
 def bias_plotter(data,FIG,**kwargs): 
-    
+    FIG.hold_on = False
     IFIG = False
     IDF = None
     keys = list(data.keys())
@@ -124,10 +124,10 @@ def bias_plotter(data,FIG,**kwargs):
         if kw.ideality == True:
         
             tab20 = mpl.colormaps["tab20"]
-            IFIG = True
             IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]])
             
             if kw.plot == True:
+                IFIG = True
                 IFIG = ezplot()
     
                 IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
@@ -156,7 +156,8 @@ def bias_plotter(data,FIG,**kwargs):
         
         xkey.sort(); ykey.sort()
         if kw.plot == True:
-            if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"]:
+            if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]:
+
                 if len(xkey) == 1 and len(ykey) == 1:
                     for m,data_x in enumerate(data[xkey[0]]): 
                         ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
@@ -229,7 +230,21 @@ def bias_plotter(data,FIG,**kwargs):
                     Em_I     =   data[Em_I_key][0]
                     Det_V     =  data[Det_V_key][0]
                     Det_I     =  data[Det_I_key][0]
+                    #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)
                     
+                    
+                    
+                    
+                    if abs(np.max(Det_I)) < abs(np.min(Det_I)):
+                        Det_I = -np.array(Det_I)
+                    
+                    if abs(np.max(Em_I)) < abs(np.min(Em_I)):
+                        if Em_V(Em_I.index(np.min(Em_I))) < 0:
+                            Em_V = -np.array(Em_V)
+                            
+                        Em_I = -np.array(Em_I)
+                        
+                        
                     if kw.altplot == False:
                         FIG.fig,(FIG.ax[0],FIG.ax[1]) = plt.subplots(nrows=2, sharex=True)
                         fig, ax_top, ax_bottom = [FIG.fig,FIG.ax[0],FIG.ax[1]]
@@ -274,6 +289,7 @@ def bias_plotter(data,FIG,**kwargs):
                         fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
              
                         FIG.ax[0].set_title(kw.title)
+                        
                     if kw.altplot==True:
 
                         FIG.fig,FIG.ax[0] = plt.subplots()
@@ -332,6 +348,52 @@ def bias_plotter(data,FIG,**kwargs):
                             FIG.ax[ax].yaxis.grid(False, which='both')
                             FIG.ax[0].yaxis.grid(True, which='both',color=cmaps["tab20c"](11))
             
+            elif "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" in data["Settings"]["Test Name"]:
+                FIG.hold_on = True
+                if "iteration" not in FIG.keys():
+                    FIG.iteration = 0
+                    
+                if kw.cols == None:
+                    cols = [cmaps["Set3"](i) for i in range(12)]
+                    
+                if kw.plot == True:
+                    emitter  = data['emitter']
+                    detector = data['detector']
+                        
+                    #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
+                    for key in data.keys():
+                        if emitter['NWID'] in key:
+                            if "voltage" in key:
+                                Em_V_key = key
+                            if "current" in key:
+                                Em_I_key = key
+                        
+                        if detector['NWID'] in key:
+                            if "voltage" in key:
+                                Det_V_key = key
+                            if "current" in key:
+                                Det_I_key = key
+                            
+                    Em_V     =   data[Em_V_key][0]
+                    Em_I     =   data[Em_I_key][0]
+                    Det_V     =  data[Det_V_key][0]
+                    Det_I     =  data[Det_I_key][0]
+                    #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)
+                    
+                    if abs(np.max(Det_I)) < abs(np.min(Det_I)):
+                        Det_I = -np.array(Det_I)
+                    
+                    if abs(np.max(Em_I)) < abs(np.min(Em_I)):
+                        if Em_V(Em_I.index(np.min(Em_I))) < 0:
+                            Em_V = -np.array(Em_V)
+                            
+                        Em_I = -np.array(Em_I)
+                    Det_Vmean = np.mean(Det_V)
+                    FIG.ax[0].plot(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Detector}=$"+f'{Det_Vmean:.3f}')
+                    FIG.ax[0].set_xlabel("V_{Emitter}")
+                    FIG.ax[0].set_ylabel("$I_{Detector}$ [I]")
+                    FIG.ax[0].legend()
+                
         return(IFIG,IDF)
 
 #%%
@@ -2389,24 +2451,29 @@ def Keithley_xls_read(directory,**kwargs):
             #position_indices = [i for i, header in enumerate(keys) if 'POSITION' in header]
             #This section finds rows that are empty, and excludes them from our search
             for row in rows:
-                if all(x == '' for x in row) != True:
-                    if row[0] == "":
-                        if any(string in element for element in row for string in ["NW","n-i-p","p-i-n"]) == True:
-                            for i,var in enumerate(smu_ind):
-                            #print("smu_ind " + str(var) + " --> produces for -1 = " + str(row[var-1]) +" for 0" + str(row[var]) + " for +1" + str(row[var+1]) )
-                                
-                                if row[var] == "":
-                                    if "NW" in row[var-1]:
-                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
-                                    if "n-i-p" in row[var-1] or "p-i-n" in row[var-1]:
-                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var-1]
-                                elif "NW" in row[var]:
-                                    if "NW" in row[var]:
-                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
-                                    if "n-i-p" in row[var] or "p-i-n" in row[var]:
-                                        flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var]
-                    if row[0] != "":
-                        break
+                try:
+                    if all(x == '' for x in row) != True:
+                        if row[0] == "":
+                            if any(string in element for element in row for string in ["NW","n-i-p","p-i-n"]) == True:
+                                for i,var in enumerate(smu_ind):
+                                #print("smu_ind " + str(var) + " --> produces for -1 = " + str(row[var-1]) +" for 0" + str(row[var]) + " for +1" + str(row[var+1]) )
+                                    
+                                    if row[var] == "":
+                                        print(row)
+                                        if "NW" in row[var-1]:
+                                            flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
+                                        if "n-i-p" in row[var-1] or "p-i-n" in row[var-1]:
+                                            flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var-1]
+                                    elif "NW" in row[var]:
+                                        if "NW" in row[var]:
+                                            flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var]
+                                        if "n-i-p" in row[var] or "p-i-n" in row[var]:
+                                            flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW Orientation'] = row[var]
+                        if row[0] != "":
+                            break
+                except:
+                    print("WARN: First run row is likely empty")
+                    break    
                     
             for row in rows:
                 if all(x == '' for x in row) != True:
@@ -2565,19 +2632,30 @@ def Keithley_xls_read(directory,**kwargs):
                     # Store the data in the dictionary
                     file_data[sheet_name] = cols
                 
-                if "Voltage Bias" and "Voltage List Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
+                if all(any(i in j for j in ["Voltage Bias", "Voltage List Sweep" ]) for i in stats["OpMode"]):
                     #Determine which nanowire is the emitter, and which is the detector:
                     emitter_ID = stats["OpMode"].index('Voltage List Sweep')
                     detector_ID = stats["OpMode"].index('Voltage Bias')
+                    emitter_OP = "Voltage List Sweep"; detector_OP = "Voltage Bias"
+                
+                if all(any(i in j for j in ["Voltage Bias","Voltage Linear Sweep"]) for i in stats["OpMode"]):
+                    #Determine which nanowire is the emitter, and which is the detector:
+
+                    emitter_ID = stats["OpMode"].index('Voltage Linear Sweep')
+                    detector_ID = stats["OpMode"].index('Voltage Bias')
+                    emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"
                     
-                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"OpMode":'Voltage List Sweep'}
-                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"OpMode":'Voltage List Sweep'}
+                try:
+                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"OpMode":emitter_OP}
+                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"OpMode":detector_OP}
+                except:
+                    None
                     
-                    # Store the data in the dictionary
-                    list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
-                    for key in list_keys:
-                        cols[key] = [cols[key]]
-                    file_data[sheet_name] = cols    
+                # Store the data in the dictionary
+                list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
+                for key in list_keys:
+                    cols[key] = [cols[key]]
+                file_data[sheet_name] = cols    
         
         # Store the data for the file in the top-level dictionary
         data[filename] = file_data
