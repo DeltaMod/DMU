@@ -2400,7 +2400,45 @@ def segment_sweep(L,indices):
         swdat.append(L[slc[0]:slc[1]])
     return(swdat)
 
-##
+#%%
+def string_to_type(DATA):
+    def stdof(string):
+        #This function returns int, float or string based on string input. If it detects a nested list, it returns FALSE
+        if string.isdigit():
+            return(int(string))
+        
+        elif "." in string and string.replace(".","").isnumeric():
+            return(float(string))
+        
+        
+    def stt(string):
+        
+        if string.isdigit():
+            return(int(string))
+        
+        elif "." in string and string.replace(".","").isnumeric():
+            return(float(string))
+        
+        elif "[" in string and "]" in string:
+            strlist = string.replace("[","").replace("]","").split(',')
+            NEWLIST = []
+            for item in strlist:
+                                
+        else:
+            return(string)
+            
+    if type(DATA) == str:
+        return(stt(DATA))   
+    
+    if type(DATA) == list:
+        NEWDATA = []
+        for item in DATA:
+            NEWDATA.append(stt(item))
+        return(NEWDATA)
+    
+    if type(DATA) == dict:
+        None
+#%%
 def Keithley_xls_read(directory,**kwargs):
     if directory == None:
         directory = os.getcwd()
@@ -2518,6 +2556,7 @@ def Keithley_xls_read(directory,**kwargs):
         Each xls file has one sheet called "Settings", this will need to be read in a row by row format.
         Column headers are no longer important
         """
+        
         #####!!!!#####!!! use "string".isDigit() to figure out if it can be a float. Then do list comprehension of contents of string lists.  
         # Otherwise, read data as nested sheets
         for sheet_name in settings_sheet:
