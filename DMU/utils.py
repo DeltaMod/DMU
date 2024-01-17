@@ -15,6 +15,7 @@ import hdf5storage
 import matplotlib
 import matplotlib as mpl
 import tkinter as tk
+
 from tkinter.filedialog import askopenfilename, askdirectory
 from matplotlib import patches as ptc
 from matplotlib import colormaps as cmaps
@@ -31,7 +32,49 @@ import csv
 import xlrd
 
 
-#%%        
+#%%
+import logging
+
+class CustomFormatter(logging.Formatter):
+
+    magenta  = "\033[1;35m"
+    lblue    = "\033[1;34m"
+    yellow   = "\033[1;33m"
+    red      = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    reset    = "\x1b[0m"
+    format   = "%(asctime)s - %(name)s \n %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
+
+    FORMATS = {
+        logging.DEBUG: magenta + format + reset,
+        logging.INFO: lblue + format + reset,
+        logging.WARNING: yellow + format + reset,
+        logging.ERROR: red + format + reset,
+        logging.CRITICAL: bold_red + format + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
+# create logger with 'spam_application'
+logger = logging.getLogger("DMU_UTILS")
+logger.setLevel(logging.DEBUG)
+
+# create console handler with a higher log level
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+ch.setFormatter(CustomFormatter())
+if (logger.hasHandlers()):
+    logger.handlers.clear()
+
+logger.addHandler(ch)
+
+
+#%%
+        
 def AbsPowIntegrator(Data,x,y,z,WL):
     
     """
@@ -157,7 +200,7 @@ def bias_plotter(data,FIG,**kwargs):
         xkey.sort(); ykey.sort()
         if kw.plot == True:
             if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]:
-                print(data[xkey[0]])
+
                 if len(xkey) == 1 and len(ykey) == 1:
                     for m,data_x in enumerate(data[xkey[0]]): 
                         ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
@@ -2401,44 +2444,95 @@ def segment_sweep(L,indices):
     return(swdat)
 
 #%%
-def string_to_type(DATA):
-    def stdof(string):
-        #This function returns int, float or string based on string input. If it detects a nested list, it returns FALSE
+def Convert_to_type(DATA):
+    
+    def strtt(string):
+        try:
+            string = string.replace("'","")
+            if string != string.lstrip():
+                string = string.lstrip()
+                
+        except:
+            None
+            
+        if type(string) in [float,int]:
+            return(string)
+        
+            
+        if type(string) == type(None):
+            return(string)
+        
+        if type(string) in [list,dict]:
+            return(string)
+        
+        #This function returns int, float or string based on string input. If it detects a nested list, it returns FALSE - it shouldn't be given nested lists.
         if string.isdigit():
             return(int(string))
-        
-        elif "." in string and string.replace(".","").isnumeric():
-            return(float(string))
-        
-        
-    def stt(string):
-        
-        if string.isdigit():
+        elif string.replace("-","").isdigit():
             return(int(string))
         
-        elif "." in string and string.replace(".","").isnumeric():
-            return(float(string))
+        if "." in string: 
+            if string.replace(".","").replace("-","").isnumeric():
+                return(float(string))
+            else:
+                try:
+                    return(float(string))
+                except:
+                    None
         
-        elif "[" in string and "]" in string:
+        if ("[" and "]") in string:
             strlist = string.replace("[","").replace("]","").split(',')
             NEWLIST = []
             for item in strlist:
-                                
-        else:
-            return(string)
-            
-    if type(DATA) == str:
-        return(stt(DATA))   
+                if item != item.lstrip():
+                    item = item.lstrip()
+                NEWLIST.append(item)
+            return(NEWLIST)
+        
+        return(string)
     
-    if type(DATA) == list:
+    def litt(li):
         NEWDATA = []
-        for item in DATA:
-            NEWDATA.append(stt(item))
+        for item in li:
+            NEWDATA.append(strtt(item))
+            
         return(NEWDATA)
     
-    if type(DATA) == dict:
-        None
+    def liditt(lidi):
+        if type(lidi) == list:
+            NEWDATA = litt(lidi)
+            return(NEWDATA)
+        
+        if type(lidi) == dict:
+            for key in lidi.keys():
+                lidi[key] = strtt(lidi[key])
+                if type(lidi[key]) == list:
+                    lidi[key] = litt(lidi[key])
+                    
+                
+            return(lidi)
+    
+    if type(DATA) == str:
+        DATA = strtt(DATA)
+        
+    if type(DATA) in [dict,list]:
+        DATA = liditt(DATA)
+    
+    return(DATA)
+        
+    
+    
 #%%
+def check_number(number):
+    if isinstance(number, (int, np.integer)) or isinstance(number, (float, np.floating)):
+        return(True)
+    else:
+        return(False)
+    
+def num_only(DATA):
+    DATA = np.array(DATA).flatten()
+    return([val for val in DATA if check_number(val) == True])
+
 def Keithley_xls_read(directory,**kwargs):
     if directory == None:
         directory = os.getcwd()
@@ -2510,7 +2604,7 @@ def Keithley_xls_read(directory,**kwargs):
                         if row[0] != "":
                             break
                 except:
-                    print("WARN: First run row is likely empty")
+                    logging.warning("First run row is likely empty")
                     break    
                     
             for row in rows:
@@ -2587,7 +2681,49 @@ def Keithley_xls_read(directory,**kwargs):
                         settings_data[key][header] = str(values[0])
                     else:
                         settings_data[key][header] = str(values)
-            file_data[sheet_name] = settings_data
+            
+            
+            settings_data_new = settings_data
+            #Data and key replacements for specific columns. Done for code clarity!
+            # stats    = {"Npts"   : file_data["Settings"][sheet_name]["Number of Points"],
+            #             "VStep"  : file_data["Settings"][sheet_name]["Step"],
+            #             "VStart" : file_data["Settings"][sheet_name]["Start/Bias"],
+            #             "VStop"  : file_data["Settings"][sheet_name]["Stop"],
+            #             "Operation Mode" : file_data["Settings"][sheet_name]["Operation Mode"],
+            #             "NWID"   : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
+            #             "SMU"    : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
+            #             "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
+            
+            newdef = {"N/A":None,"Enabled":True,"Disabled":False,"OFF":False,"ON":True}
+            keydef = {"Number of Points":"Npts","Step":"VStep","Start/Bias":"VStart","Stop":"VStop","Name":"NWID","Instrument":"SMU","Dual Sweep":"FBSweep"}
+            
+            for key in settings_data_new.keys():
+                settings_data_new[key] = Convert_to_type(settings_data_new[key])
+
+    
+            for runNO in settings_data_new.keys():
+                settings_data_new[runNO]["Formulas"] = {}
+
+                keylist = list(settings_data_new[runNO].keys())
+                for key in keylist:     
+                    
+                    if type(settings_data_new[runNO][key]) == list:
+                        
+                        for i,item in enumerate(settings_data_new[runNO][key]):
+                            if item in newdef.keys():
+                                settings_data_new[runNO][key][i] = newdef[item]
+                                
+                    if "=" in key:
+                        settings_data_new[runNO]["Formulas"][key.split("=")[0]] = key
+                        settings_data_new[runNO].pop(key)    
+                        
+                    if key in keydef.keys():
+                        settings_data_new[runNO][keydef[key]] = settings_data_new[runNO][key] 
+                        settings_data_new[runNO].pop(key)    
+               
+                    
+            file_data[sheet_name] = settings_data_new
+            
             
             
         """
@@ -2623,45 +2759,39 @@ def Keithley_xls_read(directory,**kwargs):
                         
                             
                     cols["col headers"].append(key)
+                #Load in the settings sheet to allow for quick reference to settings used during the run.
                 
-                stats    = {"Npts"   : file_data["Settings"][sheet_name]["Number of Points"].strip("[]").replace('\'','').split(', '),
-                            "VStep"  : file_data["Settings"][sheet_name]["Step"].strip("[]").replace('\'','').split(', ') ,
-                            "VStart" : file_data["Settings"][sheet_name]["Start/Bias"].strip("[]").replace('\'','').split(', '),
-                            "VStop"  : file_data["Settings"][sheet_name]["Stop"].strip("[]").replace('\'','').split(', '),
-                            "OpMode"  : file_data["Settings"][sheet_name]["Operation Mode"].strip("[]").replace('\'','').split(', '),
-                            "NWID"  : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
-                            "SMU"  : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
-                            "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
+                stats    = file_data["Settings"][sheet_name]
                 
-                for key in stats.keys():
-                    for n,element in enumerate(stats[key]):
-                        if "Npts" in key:
-                            try:
-                                stats[key][n] = int(element)
-                            except:
-                                stats[key][n] = 0
-                        if key in ["Vstep","VStart","VStop","VStep"]:
-                            try: 
-                                stats[key][n] = float(element)
-                            except:
-                                stats[key][n] = None
-                        if key in ["FBSweep"]:
-                            if element == "Enabled":
-                                stats[key][n] = True
-                            else:
-                                stats[key][n] = False
-                for key in stats.keys():
-                    if len(stats[key]) == 1:
-                        stats[key] = stats[key][0]
+                # for key in stats.keys():
+                #     for n,element in enumerate(stats[key]):
+                #         if "Npts" in key:
+                #             try:
+                #                 stats[key][n] = int(element)
+                #             except:
+                #                 stats[key][n] = 0
+                #         if key in ["Vstep","VStart","VStop","VStep"]:
+                #             try: 
+                #                 stats[key][n] = float(element)
+                #             except:
+                #                 stats[key][n] = None
+                #         if key in ["FBSweep"]:
+                #             if element == "Enabled":
+                #                 stats[key][n] = True
+                #             else:
+                #                 stats[key][n] = False
+                # for key in stats.keys():
+                #     if len(stats[key]) == 1:
+                #         stats[key] = stats[key][0]
                 
                     
                 #Swap linear sweep data to segmented data
-                main_col = stats['Npts'].index(max(stats['Npts']))    
+                main_col = stats['Npts'].index(max(num_only(stats['Npts'])))    
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
-                    sweep_indices = [0,max(stats["Npts"])]
-                print(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"] )    
+                    sweep_indices = [0,max(num_only(stats["Npts"]))]
+                print(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] )    
                 if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
@@ -2673,22 +2803,25 @@ def Keithley_xls_read(directory,**kwargs):
                     # Store the data in the dictionary
                     file_data[sheet_name] = cols
                 
-                if all(any(i in j for j in ["Voltage Bias", "Voltage List Sweep" ]) for i in stats["OpMode"]):
+                if all(any(i in j for j in ["Voltage Bias", "Voltage List Sweep" ]) for i in stats["Operation Mode"]):
                     #Determine which nanowire is the emitter, and which is the detector:
-                    emitter_ID = stats["OpMode"].index('Voltage List Sweep')
-                    detector_ID = stats["OpMode"].index('Voltage Bias')
+                    emitter_ID = stats["Operation Mode"].index('Voltage List Sweep')
+                    detector_ID = stats["Operation Mode"].index('Voltage Bias')
                     emitter_OP = "Voltage List Sweep"; detector_OP = "Voltage Bias"
                 
-                if all(any(i in j for j in ["Voltage Bias","Voltage Linear Sweep"]) for i in stats["OpMode"]):
+                elif all(any(i in j for j in ["Voltage Bias","Voltage Linear Sweep"]) for i in stats["Operation Mode"]):
                     #Determine which nanowire is the emitter, and which is the detector:
 
-                    emitter_ID = stats["OpMode"].index('Voltage Linear Sweep')
-                    detector_ID = stats["OpMode"].index('Voltage Bias')
+                    emitter_ID = stats["Operation Mode"].index('Voltage Linear Sweep')
+                    detector_ID = stats["Operation Mode"].index('Voltage Bias')
                     emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"
+                
+                
+                    
                     
                 try:
-                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"OpMode":emitter_OP}
-                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"OpMode":detector_OP}
+                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
+                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
                 except:
                     None
                     
