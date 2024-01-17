@@ -88,7 +88,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name="DMU",
-    version="0.1.5",
+    version="0.1.6",
     packages=find_packages(),
     scripts=[TrgtScr],
 

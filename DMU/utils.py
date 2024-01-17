@@ -268,15 +268,12 @@ def bias_plotter(data,FIG,**kwargs):
                                 Det_V_key = key
                             if "current" in key:
                                 Det_I_key = key
-                            
-                    Em_V     =   data[Em_V_key][0]
-                    Em_I     =   data[Em_I_key][0]
-                    Det_V     =  data[Det_V_key][0]
-                    Det_I     =  data[Det_I_key][0]
+                    
+                    Em_V     =   data[Em_V_key]
+                    Em_I     =   data[Em_I_key]
+                    Det_V     =  data[Det_V_key]
+                    Det_I     =  data[Det_I_key]
                     #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)
-                    
-                    
-                    
                     
                     if abs(np.max(Det_I)) < abs(np.min(Det_I)):
                         Det_I = -np.array(Det_I)
@@ -360,7 +357,10 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2].set_ylim(Vlim)
                         
                         #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
-                        RatioMod = (np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0]) 
+                        try: 
+                            RatioMod = (np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])
+                        except:
+                            None
                         FIG.ax[0].set_ylim(rpad(Det_I,0.8*RatioMod)[0])
                         FIG.ax[1].set_ylim(rpad(Em_I,0.85*RatioMod)[0])
                         
@@ -393,11 +393,12 @@ def bias_plotter(data,FIG,**kwargs):
             
             elif "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" in data["Settings"]["Test Name"]:
                 FIG.hold_on = True
-                if "iteration" not in FIG.keys():
+                
+                if "iteration" not in vars(FIG).keys():
                     FIG.iteration = 0
                     
                 if kw.cols == None:
-                    cols = [cmaps["Set3"](i) for i in range(12)]
+                    cols = [cmaps["Set2"](i) for i in range(12)]
                     
                 if kw.plot == True:
                     emitter  = data['emitter']
@@ -416,7 +417,7 @@ def bias_plotter(data,FIG,**kwargs):
                                 Det_V_key = key
                             if "current" in key:
                                 Det_I_key = key
-                            
+
                     Em_V     =   data[Em_V_key][0]
                     Em_I     =   data[Em_I_key][0]
                     Det_V     =  data[Det_V_key][0]
@@ -432,11 +433,11 @@ def bias_plotter(data,FIG,**kwargs):
                             
                         Em_I = -np.array(Em_I)
                     Det_Vmean = np.mean(Det_V)
-                    FIG.ax[0].plot(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Detector}=$"+f'{Det_Vmean:.3f}')
-                    FIG.ax[0].set_xlabel("V_{Emitter}")
+                    FIG.ax[0].plot(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
+                    FIG.ax[0].set_xlabel("$V_{Emitter}$ [V]")
                     FIG.ax[0].set_ylabel("$I_{Detector}$ [I]")
                     FIG.ax[0].legend()
-                
+                    FIG.iteration+=1
         return(IFIG,IDF)
 
 #%%
@@ -2591,7 +2592,7 @@ def Keithley_xls_read(directory,**kwargs):
                                 #print("smu_ind " + str(var) + " --> produces for -1 = " + str(row[var-1]) +" for 0" + str(row[var]) + " for +1" + str(row[var+1]) )
                                     
                                     if row[var] == "":
-                                        print(row)
+                               
                                         if "NW" in row[var-1]:
                                             flat_data['positions']["pos"+str(1+var-min(smu_ind))]['NW'] = row[var-1]
                                         if "n-i-p" in row[var-1] or "p-i-n" in row[var-1]:
@@ -2762,36 +2763,18 @@ def Keithley_xls_read(directory,**kwargs):
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
                 
                 stats    = file_data["Settings"][sheet_name]
+
+                main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
                 
-                # for key in stats.keys():
-                #     for n,element in enumerate(stats[key]):
-                #         if "Npts" in key:
-                #             try:
-                #                 stats[key][n] = int(element)
-                #             except:
-                #                 stats[key][n] = 0
-                #         if key in ["Vstep","VStart","VStop","VStep"]:
-                #             try: 
-                #                 stats[key][n] = float(element)
-                #             except:
-                #                 stats[key][n] = None
-                #         if key in ["FBSweep"]:
-                #             if element == "Enabled":
-                #                 stats[key][n] = True
-                #             else:
-                #                 stats[key][n] = False
-                # for key in stats.keys():
-                #     if len(stats[key]) == 1:
-                #         stats[key] = stats[key][0]
+              
                 
-                    
-                #Swap linear sweep data to segmented data
-                main_col = stats['Npts'].index(max(num_only(stats['Npts'])))    
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
                     sweep_indices = [0,max(num_only(stats["Npts"]))]
+                    
                 print(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] )    
+                
                 if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
@@ -2802,29 +2785,58 @@ def Keithley_xls_read(directory,**kwargs):
                         
                     # Store the data in the dictionary
                     file_data[sheet_name] = cols
-                
-                if all(any(i in j for j in ["Voltage Bias", "Voltage List Sweep" ]) for i in stats["Operation Mode"]):
-                    #Determine which nanowire is the emitter, and which is the detector:
-                    emitter_ID = stats["Operation Mode"].index('Voltage List Sweep')
-                    detector_ID = stats["Operation Mode"].index('Voltage Bias')
-                    emitter_OP = "Voltage List Sweep"; detector_OP = "Voltage Bias"
-                
-                elif all(any(i in j for j in ["Voltage Bias","Voltage Linear Sweep"]) for i in stats["Operation Mode"]):
-                    #Determine which nanowire is the emitter, and which is the detector:
-
-                    emitter_ID = stats["Operation Mode"].index('Voltage Linear Sweep')
-                    detector_ID = stats["Operation Mode"].index('Voltage Bias')
-                    emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"
-                
+                """
+                Determining which, if any, nanowire is the emitter or detector. The rule for this is as follows:
+                    For any linear sweep:
+                        Constant bias   => detector
+                        Voltage sweep   => emitter
+                        Common/No bias  => "detector" - in this case, the plotting should reflect this
+                    
+                    For any list sweep:
+                        constant bias => Detector
+                """
+                if len(stats["Operation Mode"]) == 2:
+                    if "Voltage List Sweep" in stats["Operation Mode"]:
+                        em_key = "Voltage List Sweep"
+                    elif "Voltage Linear Sweep" in stats["Operation Mode"]:
+                        em_key = "Voltage Linear Sweep"
+                    
+                    emitter_ID = stats["Operation Mode"].index(em_key)
+                    detector_ID = None
+                    emitter_OP = em_key; detector_OP = None
+                    
+                    
+                    
+                if len(stats["Operation Mode"]) > 2:   
+                    if "Voltage Bias" in stats["Operation Mode"] and "Voltage List Sweep" in stats["Operation Mode"]:
+                        #Determine which nanowire is the emitter, and which is the detector:
+    
+                        emitter_ID = stats["Operation Mode"].index('Voltage List Sweep')
+                        detector_ID = stats["Operation Mode"].index('Voltage Bias')
+                        emitter_OP = "Voltage List Sweep"; detector_OP = "Voltage Bias"
+                    
+                    elif "Voltage Bias" in stats["Operation Mode"] and "Voltage Linear Sweep" in stats["Operation Mode"]:
+                        #Determine which nanowire is the emitter, and which is the detector:
+    
+                        emitter_ID = stats["Operation Mode"].index('Voltage Linear Sweep')
+                        detector_ID = stats["Operation Mode"].index('Voltage Bias')
+                        emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"
+                    
                 
                     
                     
-                try:
-                    cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
-                    cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
-                except:
-                    None
-                    
+                if detector_ID != None: 
+                    try:
+                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
+                        cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
+                    except:
+                        logging.warning(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] + " - FAILED to set Emitter!" )    
+                elif detector_ID == None:
+                    try:
+                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
+                        cols["detector"] = {"SMU":None,'NWID':None,"Operation Mode":detector_OP}
+                    except:
+                        logging.warning(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] + " - FAILED to set Emitter!" )    
                 # Store the data in the dictionary
                 list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                 for key in list_keys:
@@ -3058,7 +3070,7 @@ def Ideality_Factor(I,V,**kwargs):
     def Diode_EQ(V,I_0,n):
         return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
     
-
+    
     if max(I) < np.abs(min(I)):
         I = list(np.multiply(-1,I))
         V = list(np.multiply(-1,V))
@@ -3066,7 +3078,8 @@ def Ideality_Factor(I,V,**kwargs):
     if V[-1]<V[0]:
         V = np.flip(V)
         I = np.flip(I)
-   
+    
+    
         
     if kw.fit_range == None:
         kw.fit_range = 0.01
@@ -3084,10 +3097,10 @@ def Ideality_Factor(I,V,**kwargs):
     elif type(kw.fit_range) == list:        
         v_i =  next((i for i, x in enumerate(V) if x > kw.fit_range[0]), -1)
         v_f =  next((i for i, x in enumerate(V) if x > kw.fit_range[1]), -1)
-     
+    
     V_fit = V[v_i:v_f]
     I_fit = I[v_i:v_f]
-     
+
     if kw.plot_range == "all":
         kw.plot_range = [min(V),max(V)]
     
@@ -3104,17 +3117,31 @@ def Ideality_Factor(I,V,**kwargs):
     if kw.data_range == "positive":
         v_id =  next((i for i, x in enumerate(V) if x > 0), -1)
         v_fd =  next((i for i, x in enumerate(V) if x > max(V)), -1)
-     
+        
         V_data = V[v_id:v_fd]
         I_data = I[v_id:v_fd]
     else:
         V_data = V
         I_data = I
-    
-    if kw.p0 == None:
-        kw.p0 = [kw.fit_range[0]*max(np.abs(I)),3] 
-    
+        
+    if len(V_fit)>50:
+        V_fit = V_fit[0:len(V_fit) - 15]
+        I_fit = I_fit[0:len(I_fit) - 15]
+    elif len(V_fit)>25 and len(V_fit)<50:
+        V_fit = V_fit[0:len(V_fit) - 8]
+        I_fit = I_fit[0:len(I_fit) - 8]
+    elif len(V_fit)>10 and len(V_fit)<25:
+        V_fit = V_fit[0:len(V_fit) - 5]
+        I_fit = I_fit[0:len(I_fit) - 5]
 
+
+    if kw.p0 == None:
+        n = V_fit[0]*4
+        if n <2:
+            n = 3
+        kw.p0 = [kw.fit_range[0]*max(np.abs(I)),n] 
+    
+    
     popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)
     V_new  = np.linspace(kw.plot_range[0],kw.plot_range[1],kw.N)
     I_new  = Diode_EQ(V_new, *popt)
