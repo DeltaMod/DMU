@@ -90,7 +90,7 @@ installREQ = [item for item in installREQ if item not in ["logging"]]
 
 setup(
     name="DMU",
-    version="0.1.5",
+    version="0.1.7",
     packages=find_packages(),
     scripts=[TrgtScr],
 
