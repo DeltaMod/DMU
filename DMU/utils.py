@@ -279,7 +279,7 @@ def bias_plotter(data,FIG,**kwargs):
                         Det_I = -np.array(Det_I)
                     
                     if abs(np.max(Em_I)) < abs(np.min(Em_I)):
-                        if Em_V(Em_I.index(np.min(Em_I))) < 0:
+                        if Em_V[Em_I.index(np.min(Em_I))] < 0:
                             Em_V = -np.array(Em_V)
                             
                         Em_I = -np.array(Em_I)
