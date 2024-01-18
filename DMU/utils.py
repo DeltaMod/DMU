@@ -333,11 +333,23 @@ def bias_plotter(data,FIG,**kwargs):
                     if kw.altplot==True:
 
                         FIG.fig,FIG.ax[0] = plt.subplots()
-                        FIG.fig.subplots_adjust(right=0.75)
+                        
                         FIG.ax[1] = FIG.ax[0].twinx()
                         FIG.ax[2] = FIG.ax[0].twinx()
-                        FIG.ax[2].spines.right.set_position(("axes", 1.25))
+                        FIG.ax[2].spines.right.set_position(("axes", 1.05))
                         
+                        # Calculate the width of the label on the second axis
+                        label_width = max(t.label.get_window_extent().width for t in FIG.ax[1].yaxis.get_major_ticks())
+                        
+                        # Set the position of FIG.ax[2]'s spine dynamically
+                        right_offset = 1.025  # Initial offset
+                        new_right_offset = right_offset + label_width / FIG.fig.get_figwidth()
+                        FIG.ax[2].spines.right.set_position(("axes", new_right_offset))
+                        
+                        # Adjust subplot layout to barely fit ax[2]
+                        FIG.fig.subplots_adjust(right=new_right_offset + 0.05)  # Adjust this value as needed
+                        
+                        #TIME = data[]
                         p1, = FIG.ax[0].plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
                         p2, = FIG.ax[1].plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
                         p3, = FIG.ax[2].plot(Em_V,'-.',label='Emitter Voltage [V]',color=cols["VE"][1],linewidth = 1)
@@ -345,7 +357,7 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[0].set_xlabel("Index")
                         FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
                         FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
-                        FIG.ax[2].set_ylabel('$V_{Emitter}$ V [V]',color=cols["VE"][0])
+                        FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
