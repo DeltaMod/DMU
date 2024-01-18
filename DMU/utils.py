@@ -336,18 +336,6 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         FIG.ax[1] = FIG.ax[0].twinx()
                         FIG.ax[2] = FIG.ax[0].twinx()
-                        FIG.ax[2].spines.right.set_position(("axes", 1.05))
-                        
-                        # Calculate the width of the label on the second axis
-                        label_width = max(t.label.get_window_extent().width for t in FIG.ax[1].yaxis.get_major_ticks())
-                        
-                        # Set the position of FIG.ax[2]'s spine dynamically
-                        right_offset = 1.025  # Initial offset
-                        new_right_offset = right_offset + label_width / FIG.fig.get_figwidth()
-                        FIG.ax[2].spines.right.set_position(("axes", new_right_offset))
-                        
-                        # Adjust subplot layout to barely fit ax[2]
-                        FIG.fig.subplots_adjust(right=new_right_offset + 0.05)  # Adjust this value as needed
                         
                         #TIME = data[]
                         p1, = FIG.ax[0].plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
@@ -359,6 +347,27 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
+
+                        print("OLD RESULT was 116")      
+                        # Assuming you have plotted something on ax[1] to create the ylabel
+                        text_ylabel_ax1 = FIG.ax[1].get_yaxis().get_label()
+                        
+                        # Get the tight bounding box of the ylabel in figure coordinates
+                        bbox_ylabel_ax1_fig = text_ylabel_ax1.get_tightbbox(renderer=FIG.fig.canvas.get_renderer()).transformed(FIG.fig.dpi_scale_trans.inverted())
+                        
+                        # Get the right spine of ax[1]
+                        spine_ax1 = FIG.ax[1].spines.right
+                        
+                        # Get the tight bounding box of the spine in figure coordinates
+                        bbox_spine_ax1_fig = spine_ax1.get_tightbbox(renderer=FIG.fig.canvas.get_renderer()).transformed(FIG.fig.dpi_scale_trans.inverted())
+                        
+                        spine_w = bbox_spine_ax1_fig.width * FIG.fig.get_dpi()
+                        label_w = bbox_ylabel_ax1_fig.width *FIG.fig.get_dpi()
+                        # Print the results
+                        print(f"Width of YLabel in ax[1] (pts): {label_w}")
+                        print(f"Width of Right spine in ax[1] (pts): {spine_w}")
+
+                        FIG.ax[2].spines.right.set_position(("outward", spine_w+1.25*label_w))
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
                             drange = np.max(data)-np.min(data)
