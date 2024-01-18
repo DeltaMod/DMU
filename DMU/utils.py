@@ -347,8 +347,7 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
-
-                        print("OLD RESULT was 116")      
+   
                         # Assuming you have plotted something on ax[1] to create the ylabel
                         text_ylabel_ax1 = FIG.ax[1].get_yaxis().get_label()
                         
@@ -364,9 +363,7 @@ def bias_plotter(data,FIG,**kwargs):
                         spine_w = bbox_spine_ax1_fig.width * FIG.fig.get_dpi()
                         label_w = bbox_ylabel_ax1_fig.width *FIG.fig.get_dpi()
                         # Print the results
-                        print(f"Width of YLabel in ax[1] (pts): {label_w}")
-                        print(f"Width of Right spine in ax[1] (pts): {spine_w}")
-
+                      
                         FIG.ax[2].spines.right.set_position(("outward", spine_w+1.25*label_w))
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
