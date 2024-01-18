@@ -85,17 +85,18 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
+installREQ = [module_filter(modules)+["docutils>=0.3"]]
+installREQ = [item for item in installREQ if item not in ["logging"]]
 
 setup(
     name="DMU",
-    version="0.1.6",
+    version="0.1.5",
     packages=find_packages(),
     scripts=[TrgtScr],
 
     # Project uses reStructuredText, so ensure that the docutils get
     # installed or upgraded on the target machine
-    install_requires=[module_filter(modules)+["docutils>=0.3"]],
-    
+    install_requires =installREQ,
     package_data={
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.json"],
