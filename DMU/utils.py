@@ -394,6 +394,7 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         
                         FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
+                        FIG.ax[2].spines["right"].set_color(cols["VE"][0])
                         FIG.ax[0].tick_params(axis='x', **tkw)
                         
                         FIG.ax[0].legend(handles=[p1, p2, p3],fontsize=7)

@@ -86,7 +86,7 @@ with open("README.md", "r") as fh:
 
 
 installREQ = [module_filter(modules)+["docutils>=0.3"]]
-installREQ = [item for item in installREQ if item not in ["logging"]]
+installREQ = [[item for item in installREQ[0] if item not in ["logging"]]]
 
 setup(
     name="DMU",
