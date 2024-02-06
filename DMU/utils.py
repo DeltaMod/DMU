@@ -173,8 +173,8 @@ def bias_plotter(data,FIG,**kwargs):
                 IFIG = True
                 IFIG = ezplot()
     
-                IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
-                IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+                IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
     
     
                 IFIG.ax[0].legend()
@@ -226,7 +226,7 @@ def bias_plotter(data,FIG,**kwargs):
                 ax.set_ylabel(ykey[0])
                 ax.legend()
                 ax.set_title(kw.title)
-            
+                
                 if kw.ideality == True:
                     IFIG = False
                     try:
@@ -236,10 +236,11 @@ def bias_plotter(data,FIG,**kwargs):
                         IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
                         if kw.plot == True:
                             IFIG = ezplot()
-            
-                            IFIG.ax[0].plot(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
-                            IFIG.ax[0].plot(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
-            
+                            Vneg = IDF['V'][np.where(IDF['I']<0)]
+                            Ineg = np.abs(IDF['I'][np.where(IDF['I']<0)])
+                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                            IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=2,c=tab20(2),label='abs(IV data)')
             
                             IFIG.ax[0].legend()
                         
@@ -3082,44 +3083,64 @@ def Ideality_Factor(I,V,**kwargs):
                   "p0":"p0",'guess':"p0"}
     
     kw = KwargEval(kwargs, kwargdict,T=273,fit_range=None,plot_range=None,N=200,p0=None,data_range=None)
-    
+   
     q = constants.e
     k = constants.Boltzmann
     
+    #def Diode_EQ(V,I_0,n):
+    #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
+    
     def Diode_EQ(V,I_0,n):
-        return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
+        return(I_0 * (np.exp((q*V)/(n*k*kw.T)) - 1)) 
     
-    
+    #We need to turn the data the right way round (forward bias is positive voltages for positive currents)
     if max(I) < np.abs(min(I)):
-        I = list(np.multiply(-1,I))
-        V = list(np.multiply(-1,V))
+        I = np.multiply(-1,I)
+        V = np.multiply(-1,V)
 
     if V[-1]<V[0]:
         V = np.flip(V)
         I = np.flip(I)
     
+    if type(V) == list:
+        V = np.array(V)
+    if type(I) == list:
+        I = np.array(I)
     
         
     if kw.fit_range == None:
-        kw.fit_range = 0.01
+        kw.fit_range = [1.5,0] # Order of magnitude range, order of start 10**1 over baseline (0 = no range)
+    
+    if type(kw.fit_range) in [float,int]:
+        kw.fit_range = [kw.fit_range,0]
     
     
-    if type(kw.fit_range) == float:
-        I_range = [kw.fit_range*max(I),max(I)]
-        
-        v_i =  next((i for i, x in enumerate(I) if x > I_range[0]), -1)
-        v_f =  next((i for i, x in enumerate(I) if x > I_range[1]), -1)
-        kw.fit_range = [V[v_i],V[v_f]]
-        
+   
+    #Now we need to find the baseline, this will be done by taking the average of all points one magnitude over the positive minimum!
+    Ipos    = I[np.where(I>0)[0]]  ; Vpos  = V[np.where(I>0)[0]]
+    IBL     = Ipos[Ipos<np.min(Ipos)*10] # Values we will consider in determining the "baseline"
+    Imax    = np.max(Ipos)
+    Ibase   = np.mean(IBL) 
+    magdiff = np.floor(np.log10(Imax/Ibase))
+    Istart  = Ibase*10**kw.fit_range[1] 
+    if magdiff > kw.fit_range[0] and Istart < np.max(I):
+        mag_ub = magdiff - kw.fit_range[0]
+    else: 
+        mag_ub = magdiff - 1
+        Istart = Ibase
+
+    I_ub    = Imax * 10**(-mag_ub)
+    I_lb    = Istart
+    
+    I_logr  = Ipos[np.where(Ipos>I_lb)[0]];             V_logr = Vpos[np.where(Ipos>I_lb)[0]]
+    I_logr  = I_logr[np.where(I_logr<I_ub)[0]]; V_logr = V_logr[np.where(I_logr<I_ub)[0]]
+    
+    
+
+    V_fit = V_logr
+    I_fit = I_logr
 
     
-    elif type(kw.fit_range) == list:        
-        v_i =  next((i for i, x in enumerate(V) if x > kw.fit_range[0]), -1)
-        v_f =  next((i for i, x in enumerate(V) if x > kw.fit_range[1]), -1)
-    
-    V_fit = V[v_i:v_f]
-    I_fit = I[v_i:v_f]
-
     if kw.plot_range == "all":
         kw.plot_range = [min(V),max(V)]
     
@@ -3127,7 +3148,7 @@ def Ideality_Factor(I,V,**kwargs):
         kw.plot_range = [0,max(V)]
         
     elif kw.plot_range == None:
-        kw.plot_range = [min(V_fit),max(V_fit)]
+        kw.plot_range = [V_fit[0],max(V)]
         
     if type(kw.data_range) == list:
         v_id =  next((i for i, x in enumerate(V) if x > kw.data_range[0]), -1)
@@ -3142,23 +3163,15 @@ def Ideality_Factor(I,V,**kwargs):
     else:
         V_data = V
         I_data = I
-        
-    if len(V_fit)>50:
-        V_fit = V_fit[0:len(V_fit) - 15]
-        I_fit = I_fit[0:len(I_fit) - 15]
-    elif len(V_fit)>25 and len(V_fit)<50:
-        V_fit = V_fit[0:len(V_fit) - 8]
-        I_fit = I_fit[0:len(I_fit) - 8]
-    elif len(V_fit)>10 and len(V_fit)<25:
-        V_fit = V_fit[0:len(V_fit) - 5]
-        I_fit = I_fit[0:len(I_fit) - 5]
 
 
     if kw.p0 == None:
-        n = V_fit[0]*4
+        
+        n = V_fit[0]*3
         if n <2:
             n = 3
-        kw.p0 = [kw.fit_range[0]*max(np.abs(I)),n] 
+        
+        kw.p0 = [kw.fit_range[1]*Ibase,n] 
     
     
     popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)

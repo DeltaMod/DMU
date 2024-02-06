@@ -2,7 +2,14 @@
 from matplotlib import pyplot as plt
 ## for Palatino and other serif fonts use:
 def graph_style(*var):
+    """
+    *var = str allows you to choose a preset style for your plots:
     
+    Available styles:
+    'default' - standard 16/2:9/1.5 with TeX
+    'WideNarrow' - A vertically short wide plot. Meant to fit two vertically in the same space as two would fit horizontally 
+    'TwoWide' - Similar to default, but with paper specific purposes to fit two in one \linewidth
+    """ 
     if len(var) == 0:
         style = ('default')
     elif len(var) == 1:
