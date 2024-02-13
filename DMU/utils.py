@@ -97,6 +97,87 @@ def AbsPowIntegrator(Data,x,y,z,WL):
     
     return(P_tot)
 
+#%% PLOT TOOLS
+def dummy_text_params(string,FIG,fontsize=12,usetex=True,visible=False):
+    #This function just guesses based on fontsize, there's no way to do this nicely so we won't try:
+    
+    dummy = {"width":None,"height":None} 
+    HMOD = 2;  WMOD = 0.175;
+    dummy["height"] = (HMOD*fontsize)/FIG.fig.dpi
+    dummy["width"] = (WMOD * len(string) * fontsize )/FIG.fig.dpi
+       
+    return(dummy)
+    
+
+# Automatically adjust tick locations to intervals that do not require two decimal places
+def adjust_ticks(ticks):
+    nums      = []
+    ooms      = []
+    
+    #First, we find out the highest oom that we will base all our nums on
+    for tick in ticks:
+        if tick != 0:
+            ooms.append(np.floor(np.log10(abs(tick))))
+    oom = np.max(ooms)
+    
+    nums = np.array(ticks)/10**oom
+    diffs = np.diff(nums)
+    
+    def diffnum_converter(diff,nums):
+        proxval = [0.1,0.2,0.5,1.0,2.0]
+        diffnum = min(proxval, key=lambda x: abs(x - diff))
+        new_low =  nums[0] - (nums[0] % diffnum)
+        new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
+        
+        if len(np.round(np.arange(new_low-diffnum,new_high+diffnum,diffnum),2)) >=12:
+            try:
+                diffnum = proxval[proxval.index(diffnum) + 1]
+            except:
+                diffnum = diffnum*2
+                
+            new_low =  nums[0] - (nums[0] % diffnum)
+            new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
+        
+        new_nums = np.round(np.arange(new_low-5*diffnum,new_high+5*diffnum,diffnum),2)
+        return(new_nums)
+
+    new_nums = diffnum_converter(diffs[0],nums)
+    
+    for num in new_nums:
+        new_ticks = new_nums * np.power(10,oom)
+        
+    return(new_ticks)
+
+def align_axis_zeros(axes):
+
+    ylims_current = {}   #  Current ylims
+    ylims_mod     = {}   #  Modified ylims
+    deltas        = {}   #  ymax - ymin for ylims_current
+    ratios        = {}   #  ratio of the zero point within deltas
+
+    for ax in axes:
+        ylims_current[ax] = list(ax.get_ylim())
+                        # Need to convert a tuple to a list to manipulate elements.
+        deltas[ax]        = ylims_current[ax][1] - ylims_current[ax][0]
+        ratios[ax]        = -ylims_current[ax][0]/deltas[ax]
+    
+    for ax in axes:      # Loop through all axes to ensure each ax fits in others.
+        ylims_mod[ax]     = [np.nan,np.nan]   # Construct a blank list
+        ylims_mod[ax][1]  = max(deltas[ax] * (1-np.array(list(ratios.values()))))
+                        # Choose the max value among (delta for ax)*(1-ratios),
+                        # and apply it to ymax for ax
+        ylims_mod[ax][0]  = min(-deltas[ax] * np.array(list(ratios.values())))
+                        # Do the same for ymin
+        ax.set_ylim(tuple(ylims_mod[ax]))        
+        
+class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
+    def __init__(self, useOffset=True, useMathText=False):
+        super().__init__(useOffset=useOffset, useMathText=useMathText)
+        self._set_format()
+
+    def _set_format(self):
+        self.format = "%1.1f"  # Give format here
+        
 #%%
 
 def bias_plotter(data,FIG,**kwargs): 
@@ -111,7 +192,10 @@ def bias_plotter(data,FIG,**kwargs):
                  'ideality':'ideality',
                  'plot':'plot',
                  'altplot':"altplot",
-                 'cols':'cols'}
+                 'cols':'cols',
+                 'ncols':'ncols',
+                 'bounds_padding':'bounds_padding',
+                 "legend_loc":"legend_loc"}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -120,7 +204,7 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False)
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85],legend_loc="best")
     xkey = []; ykey = []; fwdbwd = []
     if kw.plot == True:
         ax = FIG.ax[0]
@@ -269,11 +353,13 @@ def bias_plotter(data,FIG,**kwargs):
                                 Det_V_key = key
                             if "current" in key:
                                 Det_I_key = key
+                                
                     
-                    Em_V     =   data[Em_V_key]
-                    Em_I     =   data[Em_I_key]
+                    Em_V      =   data[Em_V_key]
+                    Em_I      =   data[Em_I_key]
                     Det_V     =  data[Det_V_key]
                     Det_I     =  data[Det_I_key]
+                    
                     #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)
                     
                     if abs(np.max(Det_I)) < abs(np.min(Det_I)):
@@ -302,13 +388,13 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
-                        ax_top_r.plot(Em_V,label='Emitter Voltage [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.plot(data["Time"],Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
+                        ax_top_r.plot(data["Time"],Em_V,label='Emitter Voltage [V]',color=cols["VE"][1]**plotkwargs)
                         ax_top.set_ylabel('$I_{Detector}$ [I]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
-                        ax_bottom.plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
-                        ax_bottom_r.plot(Em_V,label='Emitter Voltage [V]',color=cols["VE"][1],**plotkwargs)
+                        ax_bottom.plot(data["Time"],Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
+                        ax_bottom_r.plot(data["Time"],Em_V,label='Emitter Voltage [V]',color=cols["VE"][1],**plotkwargs)
                         
                         ax_bottom.set_ylabel('$I_{Emitter}$ [I]',   color  = cols["IE"][0])
                         ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = cols["VE"][0])
@@ -323,8 +409,8 @@ def bias_plotter(data,FIG,**kwargs):
                         for axis in axxy:
                             for i,line in enumerate(axis.get_lines()):
                                 line.set_color(Pkwargs['c'](i+3))
-                        ax_bottom.set_xlabel("index")
-                        ax_top.set_xlabel("index")
+                        ax_bottom.set_xlabel("Time [s]")
+                        ax_top.set_xlabel("Time [s]")
                         handles1,labels = ax_top.get_legend_handles_labels()
                         handles2,labels = ax_top_r.get_legend_handles_labels()
                         fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
@@ -339,55 +425,80 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
-                        p2, = FIG.ax[1].plot(Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
-                        p3, = FIG.ax[2].plot(Em_V,'-.',label='Emitter Voltage [V]',color=cols["VE"][1],linewidth = 1)
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
+                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
+                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='Emitter Voltage [V]',color=cols["VE"][1],linewidth = 1)
                         
-                        FIG.ax[0].set_xlabel("Index")
+                        FIG.ax[0].set_xlabel("Time [s]")
                         FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
                         FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
    
-                        # Assuming you have plotted something on ax[1] to create the ylabel
-                        text_ylabel_ax1 = FIG.ax[1].get_yaxis().get_label()
-                        
-                        # Get the tight bounding box of the ylabel in figure coordinates
-                        bbox_ylabel_ax1_fig = text_ylabel_ax1.get_tightbbox(renderer=FIG.fig.canvas.get_renderer()).transformed(FIG.fig.dpi_scale_trans.inverted())
-                        
                         # Get the right spine of ax[1]
-                        spine_ax1 = FIG.ax[1].spines.right
+                        bboxes = {}
+                        for ax in FIG.ax:
+                            bbox = FIG.ax[ax].get_position()
+                            
+                            bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
+                            
+                            FIG.ax[ax].set_position(bbox)
+                            bboxes[ax] = bbox
+
+
+                        TICKS = []
+                        for key in FIG.ax.keys():
+                            TICKS.append(FIG.ax[key].get_yticks())
+
+                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
+
+                        for i,oticks in enumerate(TICKS):
+                            current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
+                            ticks = adjust_ticks(oticks)                                #adjust ticks based on original ticks
+                            FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
+                            FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
+                            #use the scalar formatter 
+                            yfmt = ScalarFormatterForceFormat()
+                            yfmt.set_powerlimits((-2,2))
+                            FIG.ax[i].yaxis.set_major_formatter(yfmt)
+                            FIG.ax[i].set_ylim(current_ylim)
+
+                        ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
+                        #We will get the width of a single "-" in figure coordinates too.
+                        minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        # Get the tight bounding box of the spine in figure coordinates
-                        bbox_spine_ax1_fig = spine_ax1.get_tightbbox(renderer=FIG.fig.canvas.get_renderer()).transformed(FIG.fig.dpi_scale_trans.inverted())
+                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*5*ticklabelwidth))
                         
-                        spine_w = bbox_spine_ax1_fig.width * FIG.fig.get_dpi()
-                        label_w = bbox_ylabel_ax1_fig.width *FIG.fig.get_dpi()
-                        # Print the results
-                      
-                        FIG.ax[2].spines.right.set_position(("outward", spine_w+1.25*label_w))
+                        
+
+
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
                             drange = np.max(data)-np.min(data)
                             dpad   = (drange*(1/ratio) - drange)/2
                             return([np.min(data)-dpad,np.max(data)+dpad],dpad)
-                        
+
+
                         Vlim,Vpad = rpad(Em_V,0.9)
                         FIG.ax[2].set_ylim(Vlim)
-                        
+
+
                         #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
                         try: 
                             RatioMod = (np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])
                         except:
                             None
+
                         FIG.ax[0].set_ylim(rpad(Det_I,0.8*RatioMod)[0])
                         FIG.ax[1].set_ylim(rpad(Em_I,0.85*RatioMod)[0])
-                        
-                        
-                        
+                        #%%    
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
-                    
+                        
+                        
+                        
+                        
+                        
                         #Setting Spine colours and tickparameters
                         FIG.ax[0].yaxis.label.set_color(cols["ID"][0])
                         FIG.ax[1].yaxis.label.set_color(cols["IE"][0])
@@ -403,14 +514,37 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
                         FIG.ax[2].spines["right"].set_color(cols["VE"][0])
                         FIG.ax[0].tick_params(axis='x', **tkw)
-                        
-                        FIG.ax[0].legend(handles=[p1, p2, p3],fontsize=7)
+                        legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False) 
+                        # Get the font size for the legend text
+                        if kw.legend_loc == "upper center":
+                            legendheight = dummy_text_params("DUMMY",FIG,fontsize=plt.rcParams["legend.fontsize"])["height"] # Get the width of the bounding box in figure coordinates
+                            legend.set_bbox_to_anchor((0, 0.75*legendheight, 1, 1))
                         
                         for ax in FIG.ax:
                             FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
                             FIG.ax[ax].yaxis.grid(False, which='both')
                             FIG.ax[0].yaxis.grid(True, which='both',color=cmaps["tab20c"](11))
-            
+                        
+                        
+                        for ax in FIG.ax:
+                            if ax != 0:
+
+                                for j, tickobj in enumerate(FIG.ax[ax].get_yticklabels()):
+
+                                    ticktext   = tickobj.get_text()
+                                    if ticktext == "":
+                                        ticktext = "-1"
+                                        
+                                    if float(ticktext.replace("−","-"))>=0:
+                                        tick_position = tickobj.get_position()
+
+                                        # Create a new position with the x-axis translation
+                                        new_position = (tick_position[0] + minuslabelwidth, tick_position[1])
+                         
+                                        # Set the new position for the tick label
+                                        tickobj.set_position(new_position)
+                                        #ticktrans = mpl.transforms.Affine2D().translate(minuslabelwidth*FIG.fig.dpi,0) 
+                                        #tickobj.set_transform(tickobj.get_transform() + ticktrans)
             elif "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" in data["Settings"]["Test Name"]:
                 FIG.hold_on = True
                 
@@ -2720,7 +2854,7 @@ def Keithley_xls_read(directory,**kwargs):
             
             for key in settings_data_new.keys():
                 settings_data_new[key] = Convert_to_type(settings_data_new[key])
-
+            
     
             for runNO in settings_data_new.keys():
                 settings_data_new[runNO]["Formulas"] = {}
@@ -2783,9 +2917,10 @@ def Keithley_xls_read(directory,**kwargs):
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
                 
                 stats    = file_data["Settings"][sheet_name]
-
-                main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
                 
+                main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
+
+                cols["Time"] = np.linspace(0,stats["Npts"][main_col]*stats["Hold Time"],stats["Npts"][main_col])
               
                 
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
@@ -2862,7 +2997,8 @@ def Keithley_xls_read(directory,**kwargs):
                 for key in list_keys:
                     cols[key] = cols[key]
                 file_data[sheet_name] = cols    
-        
+                
+                
         # Store the data for the file in the top-level dictionary
         data[filename] = file_data
 
