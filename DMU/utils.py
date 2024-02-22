@@ -587,7 +587,7 @@ def bias_plotter(data,FIG,**kwargs):
                             
                         Em_I = -np.array(Em_I)
                     Det_Vmean = np.mean(Det_V)
-                    FIG.ax[0].plot(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
+                    FIG.ax[0].semilogy(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
                     FIG.ax[0].set_xlabel("$V_{Emitter}$ [V]")
                     FIG.ax[0].set_ylabel("$I_{Detector}$ [I]")
                     FIG.ax[0].legend()
