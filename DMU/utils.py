@@ -1930,29 +1930,52 @@ def Init_LDI():
         DataDir(act='add')
 
 #%%
+def convert_to_json_serializable(item):
+    if isinstance(item, dict):
+        return {key: convert_to_json_serializable(value) for key, value in item.items()}
+    elif isinstance(item, np.ndarray):
+        try:
+            return item.unique().tolist()
+        except AttributeError:
+            return item.tolist()
+    elif isinstance(item, (list, tuple)):
+        return [convert_to_json_serializable(element) for element in item]
+    elif isinstance(item, (int, float)):
+        return item
+    elif callable(getattr(item, 'tolist', None)):
+        return item.tolist()
+    else:
+        return str(item)
 
-def json_savedata(data,filename,overwrite=False):
-    
+def json_savedata(data, filename, overwrite=False):
     directory = os.getcwd()
-    # Get a list of all the Excel files in the current directory
     files = [f for f in os.listdir(directory) if f.endswith('.json')]
-    
-    if filename in files and overwrite == False:
+
+    if filename in files and not overwrite:
         print("RENAME YOUR FILE OR RUN DELETE IN NEXT CELL")
     else:
-        
         with open(filename, "w") as f:
-            newdict = {}
-            for key,item in data.items():
-                try:
-                    newdict[key] = item.tolist()
-                except:
-                    newdict[key] = item
-                    
-            JSONDATA = json.dumps(newdict)
-            json.dump(JSONDATA,f)
+            json.dump(convert_to_json_serializable(data), f, indent=2)
+            
+
 #%%            
 def json_loaddata(filename):
+    try:
+        with open(filename, 'r') as f:
+            json_dictdata = json.load(f)
+
+        PLOTDATA = {}
+        for key, item in json_dictdata.items():
+            if isinstance(item, list):    
+                PLOTDATA[key] = np.array(item)
+            else:
+                PLOTDATA[key] = item
+
+        return PLOTDATA
+        
+    except Exception as e:
+        logging.warning("JSON might be JSON-formatted string, trying again with a different solve")
+        
     try:
         f = open(filename)
         json_dictdata = json.loads(json.load(f))
@@ -1966,7 +1989,7 @@ def json_loaddata(filename):
         return(PLOTDATA)
         
     except:
-        print("can't load file, you probably have an incorrect name")   
+        logging.warning("JSON can't be read, are you sure you have the right path?") 
 #%%        
 
 def jsonhandler(**kwargs):
