@@ -1930,6 +1930,45 @@ def Init_LDI():
         DataDir(act='add')
 
 #%%
+
+def json_savedata(data,filename,overwrite=False):
+    
+    directory = os.getcwd()
+    # Get a list of all the Excel files in the current directory
+    files = [f for f in os.listdir(directory) if f.endswith('.json')]
+    
+    if filename in files and overwrite == False:
+        print("RENAME YOUR FILE OR RUN DELETE IN NEXT CELL")
+    else:
+        
+        with open(filename, "w") as f:
+            newdict = {}
+            for key,item in data.items():
+                try:
+                    newdict[key] = item.tolist()
+                except:
+                    newdict[key] = item
+                    
+            JSONDATA = json.dumps(newdict)
+            json.dump(JSONDATA,f)
+#%%            
+def json_loaddata(filename):
+    try:
+        f = open(filename)
+        json_dictdata = json.loads(json.load(f))
+        PLOTDATA = {}
+        for key,item in json_dictdata.items():
+            if type(item) == list:    
+                PLOTDATA[key] = np.array(item)
+            else:
+                PLOTDATA[key] = item
+                
+        return(PLOTDATA)
+        
+    except:
+        print("can't load file, you probably have an incorrect name")   
+#%%        
+
 def jsonhandler(**kwargs):
     """
      DESCRIPTION.
