@@ -34,12 +34,12 @@ import xlrd
 
 #%% Importing and executing logging
 import logging
-from custom_logger import get_custom_logger
+from . custom_logger import get_custom_logger
 logger = get_custom_logger("DMU_UTILS")
 
 #%% Importing plot tools 
-from plot_utils import *
-from utils_utils import *
+from . plot_utils import *
+from . utils_utils import *
 #%%
         
 def AbsPowIntegrator(Data,x,y,z,WL):

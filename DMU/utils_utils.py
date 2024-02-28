@@ -1,7 +1,7 @@
 import os
 #%% Importing and executing logging
 import logging
-from custom_logger import get_custom_logger
+from . custom_logger import get_custom_logger
 logger = get_custom_logger("DMU_UTILSUTILS")
 #%%    
 def cprint(String,**kwargs):
