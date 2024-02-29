@@ -204,7 +204,7 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85],legend_loc="best")
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best")
     xkey = []; ykey = []; fwdbwd = []
     if kw.plot == True:
         ax = FIG.ax[0]
@@ -388,13 +388,13 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(data["Time"],Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
-                        ax_top_r.plot(data["Time"],Em_V,label='Emitter Voltage [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],**plotkwargs)
+                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
                         ax_top.set_ylabel('$I_{Detector}$ [I]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
-                        ax_bottom.plot(data["Time"],Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
-                        ax_bottom_r.plot(data["Time"],Em_V,label='Emitter Voltage [V]',color=cols["VE"][1],**plotkwargs)
+                        ax_bottom.plot(data["Time"],Em_I,label='$I_{Emitter}$ [I]',color=cols["IE"][1],**plotkwargs)
+                        ax_bottom_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1],**plotkwargs)
                         
                         ax_bottom.set_ylabel('$I_{Emitter}$ [I]',   color  = cols["IE"][0])
                         ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = cols["VE"][0])
@@ -425,9 +425,9 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='Detector Current [I]',color=cols["ID"][1],**plotkwargs)
-                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='Emitter Current [I]',color=cols["IE"][1],**plotkwargs)
-                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='Emitter Voltage [V]',color=cols["VE"][1],linewidth = 1)
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],**plotkwargs)
+                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [I]',color=cols["IE"][1],**plotkwargs)
+                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = 1)
                         
                         FIG.ax[0].set_xlabel("Time [s]")
                         FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
@@ -440,7 +440,8 @@ def bias_plotter(data,FIG,**kwargs):
                         for ax in FIG.ax:
                             bbox = FIG.ax[ax].get_position()
                             
-                            bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
+                            bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1];
+                            bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3];
                             
                             FIG.ax[ax].set_position(bbox)
                             bboxes[ax] = bbox
