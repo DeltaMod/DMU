@@ -362,7 +362,7 @@ def bias_plotter(data,FIG,**kwargs):
 
                         for i,oticks in enumerate(TICKS):
                             current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
-                            ticks = adjust_ticks(oticks,current_ylim)                   #adjust ticks based on original ticks
+                            ticks = adjust_ticks(oticks,current_ylim,numticks=12)       #adjust ticks based on original ticks
                             FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
                             FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
                             #use the scalar formatter 

@@ -101,7 +101,7 @@ def get_combined_legend(FIG):
     return(flatten(leg_handles),flatten(leg_labels))
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
-def adjust_ticks(ticks,axrange=None,numticks=8):
+def adjust_ticks(ticks,axrange=None,numticks=12):
     nums      = []
     ooms      = []
     
@@ -136,7 +136,7 @@ def adjust_ticks(ticks,axrange=None,numticks=8):
             new_low =  nums[0] - (nums[0] % diffnum)
             new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
             
-            if len(np.arange(new_low,new_high,diffnum)) >=8:
+            if len(np.arange(new_low,new_high,diffnum)) >=numticks:
                 try:
                     diffnum = proxval[proxval.index(diffnum) + 1]
                 except:
