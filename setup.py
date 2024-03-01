@@ -102,7 +102,7 @@ setup(
         "": ["*.txt", "*.json"],
         # And include any *.msg files found in the "hello" package, too:
         "hello": ["*.msg"],
-    },
+    }, 
     # metadata to display on PyPI
     author="Atli Vidar Már FLodgren",
     author_email="vidar.flodgren@sljus.lu.se",
