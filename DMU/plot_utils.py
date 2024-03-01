@@ -101,38 +101,54 @@ def get_combined_legend(FIG):
     return(flatten(leg_handles),flatten(leg_labels))
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
-def adjust_ticks(ticks):
+def adjust_ticks(ticks,axrange=None,numticks=8):
     nums      = []
     ooms      = []
     
     #First, we find out the highest oom that we will base all our nums on
+    if axrange == None:
+        axrange = [float(ticks[-1]),float( ticks[0])]
+        
     for tick in ticks:
         if tick != 0:
             ooms.append(np.floor(np.log10(abs(tick))))
     oom = np.max(ooms)
     
-    nums = np.array(ticks)/10**oom
+    nums = np.array(ticks)/(10**oom)
     diffs = np.diff(nums)
     
-    def diffnum_converter(diff,nums):
-        proxval = [0.1,0.2,0.5,1.0,2.0]
-        diffnum = min(proxval, key=lambda x: abs(x - diff))
+    axrange = axrange/(10**oom)
+    diffnum = (axrange[1]-axrange[0])/numticks
+    
+    def diffnum_converter(diff,nums,numticks):
+        proxval = [0.01,0.02,0.05,0.1,0.2,0.5,1.0,2.0,5.0,10,20,50,100]
+        
+        diffnum = min(proxval, key=lambda x: abs(x - diff))  
         new_low =  nums[0] - (nums[0] % diffnum)
         new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
         
-        if len(np.round(np.arange(new_low-diffnum,new_high+diffnum,diffnum),2)) >=12:
+        if len(np.arange(new_low,new_high,diffnum)) >=numticks+2:
             try:
                 diffnum = proxval[proxval.index(diffnum) + 1]
             except:
-                diffnum = diffnum*2
+                diffnum = 2*diffnum
+            
+            new_low =  nums[0] - (nums[0] % diffnum)
+            new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
+            
+            if len(np.arange(new_low,new_high,diffnum)) >=8:
+                try:
+                    diffnum = proxval[proxval.index(diffnum) + 1]
+                except:
+                    diffnum = diffnum*2
                 
             new_low =  nums[0] - (nums[0] % diffnum)
             new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
-        
+            
         new_nums = np.round(np.arange(new_low-5*diffnum,new_high+5*diffnum,diffnum),2)
         return(new_nums)
 
-    new_nums = diffnum_converter(diffs[0],nums)
+    new_nums = diffnum_converter(diffnum,nums,numticks)
     
     for num in new_nums:
         new_ticks = new_nums * np.power(10,oom)

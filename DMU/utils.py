@@ -326,39 +326,12 @@ def bias_plotter(data,FIG,**kwargs):
                         for ax in FIG.ax:
                             bbox = FIG.ax[ax].get_position()
                             
-                            bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1];
-                            bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3];
+                            bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
                             
                             FIG.ax[ax].set_position(bbox)
                             bboxes[ax] = bbox
 
-
-                        TICKS = []
-                        for key in FIG.ax.keys():
-                            TICKS.append(FIG.ax[key].get_yticks())
-
-                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
-
-                        for i,oticks in enumerate(TICKS):
-                            current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
-                            ticks = adjust_ticks(oticks)                                #adjust ticks based on original ticks
-                            FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
-                            FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
-                            #use the scalar formatter 
-                            yfmt = ScalarFormatterForceFormat()
-                            yfmt.set_powerlimits((-2,2))
-                            FIG.ax[i].yaxis.set_major_formatter(yfmt)
-                            FIG.ax[i].set_ylim(current_ylim)
-
-                        ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
-                        #We will get the width of a single "-" in figure coordinates too.
-                        minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*5*ticklabelwidth))
-                        
-                        
-
-
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
                             drange = np.max(data)-np.min(data)
@@ -378,12 +351,31 @@ def bias_plotter(data,FIG,**kwargs):
 
                         FIG.ax[0].set_ylim(rpad(Det_I,0.8*RatioMod)[0])
                         FIG.ax[1].set_ylim(rpad(Em_I,0.85*RatioMod)[0])
-                        #%%    
+                        
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
+                        TICKS = []
+                        for key in FIG.ax.keys():
+                            TICKS.append(FIG.ax[key].get_yticks())
+
+                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
+
+                        for i,oticks in enumerate(TICKS):
+                            current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
+                            ticks = adjust_ticks(oticks,current_ylim)                   #adjust ticks based on original ticks
+                            FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
+                            FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
+                            #use the scalar formatter 
+                            yfmt = ScalarFormatterForceFormat()
+                            yfmt.set_powerlimits((-2,2))
+                            FIG.ax[i].yaxis.set_major_formatter(yfmt)
+                            FIG.ax[i].set_ylim(current_ylim)
+
+                        ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
+                        #We will get the width of a single "-" in figure coordinates too.
+                        minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        
-                        
+                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*5*ticklabelwidth))
                         
                         
                         #Setting Spine colours and tickparameters
