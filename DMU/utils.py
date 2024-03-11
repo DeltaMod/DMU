@@ -2970,27 +2970,41 @@ def Ideality_Factor(I,V,**kwargs):
         V = np.flip(V)
         I = np.flip(I)
     
+    
     if type(V) == list:
         V = np.array(V)
     if type(I) == list:
         I = np.array(I)
     
-        
     if kw.fit_range == None:
-        kw.fit_range = [1.5,0] # Order of magnitude range, order of start 10**1 over baseline (0 = no range)
+        kw.fit_range = [2,0] # Order of magnitude range, order of start 10**n over baseline (0 = no range)
     
     if type(kw.fit_range) in [float,int]:
         kw.fit_range = [kw.fit_range,0]
+        
+    
+    incr = strictly_increasing(I)
+    
+    Vseq   = V[incr["longest"]]
+    
+    Inoise = I[incr["noise"]] 
+    Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
+    Iseq   = I[incr["longest"]]
+    
+    
     
     
    
-    #Now we need to find the baseline, this will be done by taking the average of all points one magnitude over the positive minimum!
-    Ipos    = I[np.where(I>0)[0]]  ; Vpos  = V[np.where(I>0)[0]]
-    IBL     = Ipos[Ipos<np.min(Ipos)*10] # Values we will consider in determining the "baseline"
+    #Now we need to find the baseline, this will be done by taking the average of the noise points for a minimum!
+    print("UASHDLKASUHD")
+    Ipos    = Iseq  ; Vpos  = Vseq
     Imax    = np.max(Ipos)
-    Ibase   = np.mean(IBL) 
+    Ibase   = np.mean(Inoise) 
     magdiff = np.floor(np.log10(Imax/Ibase))
     Istart  = Ibase*10**kw.fit_range[1] 
+    Iend    = Ibase*10**kw.fit_range[0]
+    print(Istart)
+    print(Iend)
     if magdiff > kw.fit_range[0] and Istart < np.max(I):
         mag_ub = magdiff - kw.fit_range[0]
     else: 

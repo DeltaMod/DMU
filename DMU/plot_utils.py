@@ -264,7 +264,7 @@ def KwargEval(fkwargs,kwargdict,**kwargs):
                 setattr(kwclass,kwarg, kval)
                 
             except:
-                cprint(['kwarg =',kwarg,'does not exist!',' Skipping kwarg eval.'],mt = ['wrn','err','wrn','note'],co=kwclass.co)
+                logger.warn(" ".join(['kwarg =',str(kwarg),'does not exist!',' Skipping kwarg eval.']))
     #Setting the class kwargs from the function kwargs!     
     for kwarg in fkwargs:
         fkwarg_key = kwarg
@@ -286,6 +286,26 @@ def KwargEval(fkwargs,kwargdict,**kwargs):
 
 
 #%%Finds all indices where the data set changes direction
+def strictly_increasing(items,returns="all"):
+    sublists = [[]]
+    lid      = 0
+    diffs = np.diff(items)
+    
+    if diffs[0]>=0:
+        sublists[0].append(0)
+        
+    for i,diff in enumerate(diffs):
+        if diff>= 0:
+            sublists[lid].append(i+1)
+        if diff<0:
+            sublists.append([])
+            lid += 1
+    lengths = np.array([len(L) for L in sublists])
+    longest_list = sublists[int(np.where(lengths == np.max(lengths))[0])]
+    noise_indices = [i for i,a in enumerate(items) if i not in longest_list ]
+    
+    return({"sublists":sublists,"longest":longest_list,"noise":noise_indices})
+
 def find_turning_points(data):
     
     turning_points = [0]
