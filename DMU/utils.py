@@ -2977,12 +2977,12 @@ def Ideality_Factor(I,V,**kwargs):
         I = np.array(I)
     
     if kw.fit_range == None:
-        kw.fit_range = [2,0] # Order of magnitude range, order of start 10**n over baseline (0 = no range)
+        kw.fit_range = [2.5,0] # Order of magnitude range, order of start 10**n over baseline (0 = no range)
     
     if type(kw.fit_range) in [float,int]:
         kw.fit_range = [kw.fit_range,0]
         
-    
+
     incr = strictly_increasing(I)
     
     Vseq   = V[incr["longest"]]
@@ -2991,31 +2991,28 @@ def Ideality_Factor(I,V,**kwargs):
     Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
     Iseq   = I[incr["longest"]]
     
+    #Now we need to find the baseline, this will be done by taking the median of the noise points for a minimum!
+
+    Imax    = np.max(Iseq)
+    try:
+        Ibase   = Iseq[1]
+    except:
+        Ibase = Iseq[0]
     
-    
-    
-   
-    #Now we need to find the baseline, this will be done by taking the average of the noise points for a minimum!
-    print("UASHDLKASUHD")
-    Ipos    = Iseq  ; Vpos  = Vseq
-    Imax    = np.max(Ipos)
-    Ibase   = np.mean(Inoise) 
     magdiff = np.floor(np.log10(Imax/Ibase))
+    
     Istart  = Ibase*10**kw.fit_range[1] 
     Iend    = Ibase*10**kw.fit_range[0]
-    print(Istart)
-    print(Iend)
-    if magdiff > kw.fit_range[0] and Istart < np.max(I):
-        mag_ub = magdiff - kw.fit_range[0]
-    else: 
-        mag_ub = magdiff - 1
-        Istart = Ibase
-
-    I_ub    = Imax * 10**(-mag_ub)
-    I_lb    = Istart
     
-    I_logr  = Ipos[np.where(Ipos>I_lb)[0]];             V_logr = Vpos[np.where(Ipos>I_lb)[0]]
-    I_logr  = I_logr[np.where(I_logr<I_ub)[0]]; V_logr = V_logr[np.where(I_logr<I_ub)[0]]
+    if magdiff < kw.fit_range[0]:
+        kw.fit_range[0] = magdiff/2 
+    
+    I_logr = Iseq[np.where(Iseq<Iend)]
+    V_logr = Vseq[np.where(Iseq<Iend)]
+    
+
+   # I_logr  = Iseq[np.where(Iseq>Istart)[0]];           V_logr = Vseq[np.where(Iseq>Istart)[0]]
+   # I_logr  = I_logr[np.where(I_logr<Iend)[0]];         V_logr = V_logr[np.where(I_logr<Iend)[0]]
     
     
 
@@ -3049,17 +3046,18 @@ def Ideality_Factor(I,V,**kwargs):
 
     if kw.p0 == None:
         
-        n = V_fit[0]*3
-        if n <2:
-            n = 3
+        n = V_fit[0]*4
+
         
-        kw.p0 = [kw.fit_range[1]*Ibase,n] 
+        kw.p0 = [Ibase,n] 
     
     
     popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)
     V_new  = np.linspace(kw.plot_range[0],kw.plot_range[1],kw.N)
     I_new  = Diode_EQ(V_new, *popt)
-
+    
+    V_new = V_new[np.where(I_new<=np.max(I))]
+    I_new = I_new[np.where(I_new<=np.max(I))]
 
     return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data})
 
