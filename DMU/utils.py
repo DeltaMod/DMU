@@ -136,15 +136,15 @@ def bias_plotter(data,FIG,**kwargs):
         
         if kw.ideality == True:
         
-            tab20 = mpl.colormaps["tab20"]
+            tab20 = mpl.colormaps["tab20c"]
             IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]])
             
             if kw.plot == True:
                 IFIG = True
                 IFIG = ezplot()
     
-                IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
-                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
+                IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(1),label='ideality='+"{0:.5g}".format(IDF['n']))
+                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(5),label='IV data')
     
     
                 IFIG.ax[0].legend()
@@ -201,16 +201,16 @@ def bias_plotter(data,FIG,**kwargs):
                     IFIG = False
                     try:
                         
-                        tab20 = mpl.colormaps["tab20"]
+                        tab20 = mpl.colormaps["tab20c"]
                         
                         IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
                         if kw.plot == True:
                             IFIG = ezplot()
                             Vneg = IDF['V'][np.where(IDF['I']<0)]
                             Ineg = np.abs(IDF['I'][np.where(IDF['I']<0)])
-                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
+                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=2,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
                             IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
-                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=2,c=tab20(2),label='abs(IV data)')
+                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=2,c=tab20(9),label='abs(IV data)')
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
                             IFIG.ax[0].legend()
@@ -328,7 +328,7 @@ def bias_plotter(data,FIG,**kwargs):
                             bbox = FIG.ax[ax].get_position()
                             
                             bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
-                            
+                            bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3]; 
                             FIG.ax[ax].set_position(bbox)
                             bboxes[ax] = bbox
 
@@ -472,6 +472,17 @@ def bias_plotter(data,FIG,**kwargs):
                     FIG.ax[0].set_ylabel("$I_{Detector}$ [I]")
                     FIG.ax[0].legend()
                     FIG.iteration+=1
+        if type(IFIG) != bool:
+            # Get the right spine of ax[1]
+            bboxes = {}
+            for ax in IFIG.ax:
+                bbox = IFIG.ax[ax].get_position()
+                
+                bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
+                bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3]; 
+                IFIG.ax[ax].set_position(bbox)
+                bboxes[ax] = bbox
+
         return(IFIG,IDF)
 
 #%%
@@ -3028,7 +3039,7 @@ def Ideality_Factor(I,V,**kwargs):
         kw.plot_range = [0,max(V)]
         
     elif kw.plot_range == None:
-        kw.plot_range = [V_fit[0],max(V)]
+        kw.plot_range = [abs(V_fit[0])/2,max(V)]
         
     if type(kw.data_range) == list:
         v_id =  next((i for i, x in enumerate(V) if x > kw.data_range[0]), -1)
