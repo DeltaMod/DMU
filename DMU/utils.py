@@ -211,7 +211,8 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=1,color=tab20(0),label='ideality='+"{0:.5g}".format(IDF['n']))
                             IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
                             IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=2,c=tab20(2),label='abs(IV data)')
-            
+                            IFIG.ax[0].set_xlabel("Voltage [V]")
+                            IFIG.ax[0].set_ylabel("Current [A]")
                             IFIG.ax[0].legend()
                         
                     except:
