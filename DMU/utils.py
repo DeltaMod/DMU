@@ -275,8 +275,8 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],**plotkwargs)
-                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],linewidth=2,**plotkwargs)
+                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth=2,**plotkwargs)
                         ax_top.set_ylabel('$I_{Detector}$ [I]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
@@ -312,9 +312,9 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],**plotkwargs)
-                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [I]',color=cols["IE"][1],**plotkwargs)
-                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = 1)
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,linestyle='-',label='$I_{Detector}$ [I]',linewidth=2,markersize=7,markeredgewidth=0,markerfacecolor=cols["ID"][0],marker=".",color=cols["ID"][1],**plotkwargs)
+                        p2, = FIG.ax[1].plot(data["Time"],Em_I,linestyle='-' ,label='$I_{Emitter}$ [I]', linewidth=2,markersize=7,markeredgewidth=0,markerfacecolor=cols["IE"][0],marker=".",color=cols["IE"][1],**plotkwargs)
+                        p3, = FIG.ax[2].plot(data["Time"],Em_V,linestyle='-.',label='$V_{Emitter}$ [V]', linewidth=2,markersize=0, markeredgewidth=0,markerfacecolor=cols["VE"][0], color=cols["VE"][1])
                         
                         FIG.ax[0].set_xlabel("Time [s]")
                         FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
@@ -376,7 +376,7 @@ def bias_plotter(data,FIG,**kwargs):
                         #We will get the width of a single "-" in figure coordinates too.
                         minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*5*ticklabelwidth))
+                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*4.5*ticklabelwidth))
                         
                         
                         #Setting Spine colours and tickparameters
@@ -396,9 +396,11 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[0].tick_params(axis='x', **tkw)
                         legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False) 
                         # Get the font size for the legend text
+                       
                         if kw.legend_loc == "upper center":
                             legendheight = dummy_text_params("DUMMY",FIG,fontsize=plt.rcParams["legend.fontsize"])["height"] # Get the width of the bounding box in figure coordinates
-                            legend.set_bbox_to_anchor((0, 0.75*legendheight, 1, 1))
+                            for t in legend.get_texts(): t.set_va('bottom')
+                            legend.set_bbox_to_anchor((0, 0.5*legendheight, 1, 1))
                         
                         for ax in FIG.ax:
                             FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
@@ -419,7 +421,7 @@ def bias_plotter(data,FIG,**kwargs):
                                         tick_position = tickobj.get_position()
 
                                         # Create a new position with the x-axis translation
-                                        new_position = (tick_position[0] + minuslabelwidth, tick_position[1])
+                                        new_position = (tick_position[0] + 0.8*minuslabelwidth, tick_position[1])
                          
                                         # Set the new position for the tick label
                                         tickobj.set_position(new_position)
