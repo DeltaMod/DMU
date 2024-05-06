@@ -335,44 +335,40 @@ def bias_plotter(data,FIG,**kwargs):
                             bboxes[ax] = bbox
 
                         
+                        
                         #We want to set axis limits so that Voltage = 90% of the ylim
                         def rpad(data,ratio):
                             drange = np.max(data)-np.min(data)
                             dpad   = (drange*(1/ratio) - drange)/2
                             return([np.min(data)-dpad,np.max(data)+dpad],dpad)
 
-
-                        Vlim,Vpad = rpad(Em_V,0.9)
+                        V_range = 0.95
+                        
+                        Vlim,Vpad = rpad(Em_V,0.95)
+                        
                         FIG.ax[2].set_ylim(Vlim)
-
-
+                        
+                                                    
                         #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
+                        
                         try: 
-                            RatioMod = (np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])
+                            RatioMod = np.array([(np.min(Em_V) - Vpad)/(Vlim[1] - Vlim[0]) ,(np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])]) * (1/(0.9*V_range)) 
                         except:
                             None
-
-                        FIG.ax[0].set_ylim(rpad(Det_I,0.9*RatioMod)[0])
-                        FIG.ax[1].set_ylim(rpad(Em_I,0.95*RatioMod)[0])
+                        #NOTE: 0.5 RATIO MOD means that 0.5 of the TOTAL RANGE should fit.
+                        
+                        DetIMod = 1
+                        EmIMod  = 1
+                        
+                        FIG.ax[0].set_ylim(np.max(np.abs(Det_I))*(RatioMod[0]/(np.sum(np.abs(RatioMod)))*DetIMod), 
+                                           np.max(np.abs(Det_I))*(RatioMod[1]/(np.sum(np.abs(RatioMod)))*DetIMod))  
+                        FIG.ax[1].set_ylim(np.max(np.abs(Em_I))*RatioMod[0]*EmIMod,np.max(np.abs(Em_I))*RatioMod[1]*EmIMod)  
                         
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
-                        TICKS = []
-                        for key in FIG.ax.keys():
-                            TICKS.append(FIG.ax[key].get_yticks())
+                        #for nax in FIG.ax:
+                        #    adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True)       #adjust ticks based on original ticks
 
-                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
-
-                        for i,oticks in enumerate(TICKS):
-                            current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
-                            ticks = adjust_ticks(oticks,current_ylim,numticks=5)       #adjust ticks based on original ticks
-                            FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
-                            FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
-                            #use the scalar formatter 
-                            yfmt = ScalarFormatterForceFormat()
-                            yfmt.set_powerlimits((-2,2))
-                            FIG.ax[i].yaxis.set_major_formatter(yfmt)
-                            FIG.ax[i].set_ylim(current_ylim)
 
                         ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         #We will get the width of a single "-" in figure coordinates too.
