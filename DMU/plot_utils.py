@@ -102,6 +102,11 @@ def get_combined_legend(FIG):
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
 def adjust_ticks(ticks,axrange=None,numticks=12):
+    """
+    Provide the axis bounds to auto-generate new ticks such that the total number is as near to numticks as possible.
+    """
+    
+    crudespace = np.linspace(axrange[0],axrange[1],numticks)
     nums      = []
     ooms      = []
     
