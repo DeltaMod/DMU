@@ -82,7 +82,7 @@ def graph_style(*var):
                             'text.usetex': False,
                             #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
                             'font.family': 'Arial',
-                    		'font.size': 28,
+                    		'font.size': 30,
                     		'axes.grid': False,
                     		'xtick.minor.visible':True,
                     		'ytick.minor.visible':True,
@@ -90,9 +90,30 @@ def graph_style(*var):
                     		'xtick.labelsize':28,
                             'ytick.labelsize':28,
                             'legend.fontsize':28,
+                            'lines.linewidth':6,
                             'legend.title_fontsize':28,
                             'figure.dpi':200,   
                     		'axes.axisbelow':True,
                     		'figure.autolayout':False,
                             'figure.constrained_layout.use':False
-                            }
+                            })
+                
+    elif style == "PP2_4by3":
+        plt.rcParams.update({
+                    'text.usetex': False,
+                    #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
+                    'font.family': 'Arial',
+            		'font.size': 30,
+            		'figure.figsize':[4*4,3*4],
+            		'xtick.labelsize':30,
+                    'ytick.labelsize':30,
+                    'legend.fontsize':30,
+                    'lines.linewidth':6,
+                    'legend.title_fontsize':30,
+                    'figure.dpi':200,   
+            		'axes.grid':False,
+            		'axes.axisbelow':True,
+            		'figure.autolayout':False,
+                    'figure.constrained_layout.use':False
+                    })
+        

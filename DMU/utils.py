@@ -66,6 +66,8 @@ def AbsPowIntegrator(Data,x,y,z,WL):
 #%%
 
 def bias_plotter(data,FIG,**kwargs): 
+    rcLinewidth = plt.rcParams['lines.linewidth']
+    
     FIG.hold_on = False
     IFIG = False
     IDF = None
@@ -142,9 +144,9 @@ def bias_plotter(data,FIG,**kwargs):
             if kw.plot == True:
                 IFIG = True
                 IFIG = ezplot()
-    
-                IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=2,color=tab20(1),label='ideality='+"{0:.5g}".format(IDF['n']))
-                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(5),label='IV data')
+                
+                IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=rcLinewidth,color=tab20(1),label='ideality='+"{0:.5g}".format(IDF['n']))
+                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=rcLinewidth*0.75,c=tab20(5),label='IV data')
     
     
                 IFIG.ax[0].legend()
@@ -208,9 +210,9 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG = ezplot()
                             Vneg = IDF['V'][np.where(IDF['I']<0)]
                             Ineg = np.abs(IDF['I'][np.where(IDF['I']<0)])
-                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=2,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
-                            IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=2,c=tab20(1),label='IV data')
-                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=2,c=tab20(9),label='abs(IV data)')
+                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=rcLinewidth,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
+                            IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=rcLinewidth,c=tab20(1),label='IV data')
+                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=rcLinewidth,c=tab20(9),label='abs(IV data)')
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
                             IFIG.ax[0].legend()
@@ -312,9 +314,9 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs)
-                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs)
-                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = 1)
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
+                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth)
+                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5)
                         
                         FIG.ax[0].set_xlabel("Time [s]")
                         FIG.ax[0].set_ylabel("$I_{Detector}$ [A]" ,color=cols["ID"][0])
@@ -363,7 +365,7 @@ def bias_plotter(data,FIG,**kwargs):
 
                         for i,oticks in enumerate(TICKS):
                             current_ylim = FIG.ax[i].get_ylim()                         #Get current limits
-                            ticks = adjust_ticks(oticks,current_ylim,numticks=12)       #adjust ticks based on original ticks
+                            ticks = adjust_ticks(oticks,current_ylim,numticks=5)       #adjust ticks based on original ticks
                             FIG.ax[i].set_yticks(ticks)                                 #set new tick locations
                             FIG.ax[i].set_yticklabels([f"{val:.1e}" for val in ticks])  #set new ticklabels
                             #use the scalar formatter 
@@ -404,9 +406,6 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         for ax in FIG.ax:
                             FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
-                            FIG.ax[ax].yaxis.grid(False, which='both')
-                            FIG.ax[0].yaxis.grid(True, which='both',color=cmaps["tab20c"](11))
-                        
                         
                         for ax in FIG.ax:
                             if ax != 0:
