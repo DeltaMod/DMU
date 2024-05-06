@@ -31,7 +31,6 @@ import natsort
 import csv
 import xlrd
 
-
 #%% Importing and executing logging
 import logging
 from . custom_logger import get_custom_logger
@@ -137,6 +136,7 @@ def bias_plotter(data,FIG,**kwargs):
         if kw.ideality == True:
         
             tab20 = mpl.colormaps["tab20c"]
+
             IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]])
             
             if kw.plot == True:
@@ -275,15 +275,15 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [I]',color=cols["ID"][1],linewidth=2,**plotkwargs)
-                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth=2,**plotkwargs)
-                        ax_top.set_ylabel('$I_{Detector}$ [I]',color=cols["ID"][0])
+                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs)
+                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.set_ylabel('$I_{Detector}$ [A]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
-                        ax_bottom.plot(data["Time"],Em_I,label='$I_{Emitter}$ [I]',color=cols["IE"][1],**plotkwargs)
+                        ax_bottom.plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs)
                         ax_bottom_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1],**plotkwargs)
                         
-                        ax_bottom.set_ylabel('$I_{Emitter}$ [I]',   color  = cols["IE"][0])
+                        ax_bottom.set_ylabel('$I_{Emitter}$ [A]',   color  = cols["IE"][0])
                         ax_bottom_r.set_ylabel('$V_{Emitter}$ V [V]',color = cols["VE"][0])
                         
                         
@@ -312,13 +312,13 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,linestyle='-',label='$I_{Detector}$ [I]',linewidth=2,markersize=7,markeredgewidth=0,markerfacecolor=cols["ID"][0],marker=".",color=cols["ID"][1],**plotkwargs)
-                        p2, = FIG.ax[1].plot(data["Time"],Em_I,linestyle='-' ,label='$I_{Emitter}$ [I]', linewidth=2,markersize=7,markeredgewidth=0,markerfacecolor=cols["IE"][0],marker=".",color=cols["IE"][1],**plotkwargs)
-                        p3, = FIG.ax[2].plot(data["Time"],Em_V,linestyle='-.',label='$V_{Emitter}$ [V]', linewidth=2,markersize=0, markeredgewidth=0,markerfacecolor=cols["VE"][0], color=cols["VE"][1])
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs)
+                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs)
+                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = 1)
                         
                         FIG.ax[0].set_xlabel("Time [s]")
-                        FIG.ax[0].set_ylabel("$I_{Detector}$ [I]" ,color=cols["ID"][0])
-                        FIG.ax[1].set_ylabel('$I_{Emitter}$ [I]'  , color=cols["IE"][0])
+                        FIG.ax[0].set_ylabel("$I_{Detector}$ [A]" ,color=cols["ID"][0])
+                        FIG.ax[1].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
    
@@ -350,8 +350,8 @@ def bias_plotter(data,FIG,**kwargs):
                         except:
                             None
 
-                        FIG.ax[0].set_ylim(rpad(Det_I,0.8*RatioMod)[0])
-                        FIG.ax[1].set_ylim(rpad(Em_I,0.85*RatioMod)[0])
+                        FIG.ax[0].set_ylim(rpad(Det_I,0.9*RatioMod)[0])
+                        FIG.ax[1].set_ylim(rpad(Em_I,0.95*RatioMod)[0])
                         
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
@@ -471,7 +471,7 @@ def bias_plotter(data,FIG,**kwargs):
                     Det_Vmean = np.mean(Det_V)
                     FIG.ax[0].semilogy(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
                     FIG.ax[0].set_xlabel("$V_{Emitter}$ [V]")
-                    FIG.ax[0].set_ylabel("$I_{Detector}$ [I]")
+                    FIG.ax[0].set_ylabel("$I_{Detector}$ [A]")
                     FIG.ax[0].legend()
                     FIG.iteration+=1
         if type(IFIG) != bool:

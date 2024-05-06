@@ -187,6 +187,11 @@ class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
         self.format = "%1.1f"  # Give format here
         
 #%%
+def ClearAxis(fig):
+    for ax in fig.axes:
+        ax.grid(which='major', visible = False)
+        ax.grid(which='minor', visible = False)
+        
 def DefaultGrid(ax):
     ax.grid(which='major', color='darkgrey', linestyle='--')
     ax.grid(which='minor', color='#CCCCCC', linestyle=':')  

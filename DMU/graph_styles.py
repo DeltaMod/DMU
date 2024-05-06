@@ -76,3 +76,23 @@ def graph_style(*var):
                             'axes.axisbelow':True,
                             'figure.autolayout':True 
                             })
+                
+    elif style == "PP1_Wide":
+                plt.rcParams.update({
+                            'text.usetex': False,
+                            #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
+                            'font.family': 'Arial',
+                    		'font.size': 28,
+                    		'axes.grid': False,
+                    		'xtick.minor.visible':True,
+                    		'ytick.minor.visible':True,
+                    		'figure.figsize':[16,9/1.5],
+                    		'xtick.labelsize':28,
+                            'ytick.labelsize':28,
+                            'legend.fontsize':28,
+                            'legend.title_fontsize':28,
+                            'figure.dpi':200,   
+                    		'axes.axisbelow':True,
+                    		'figure.autolayout':False,
+                            'figure.constrained_layout.use':False
+                            }
