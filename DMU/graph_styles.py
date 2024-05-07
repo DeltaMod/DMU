@@ -17,6 +17,7 @@ def graph_style(*var):
     
     if style == 'default':
         plt.rcParams.update({
+                        
                             "text.usetex": True,
                             "font.family": "serif",
                             "font.serif": ["CMU"],
@@ -79,19 +80,29 @@ def graph_style(*var):
                 
     elif style == "PP1_Wide":
                 plt.rcParams.update({
+                            'axes.formatter.use_mathtext':True,
                             'text.usetex': False,
                             #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
                             'font.family': 'Arial',
-                    		'font.size': 30,
+                    		'font.size': 36,
                     		'axes.grid': False,
                     		'xtick.minor.visible':True,
                     		'ytick.minor.visible':True,
                     		'figure.figsize':[16,9/1.5],
-                    		'xtick.labelsize':28,
-                            'ytick.labelsize':28,
-                            'legend.fontsize':28,
-                            'lines.linewidth':6,
-                            'legend.title_fontsize':28,
+                    		'xtick.labelsize':32,
+                            'ytick.labelsize':32,
+                            'legend.fontsize':32,
+                            'lines.linewidth':5,
+                            'xtick.major.size':12,     # major tick size in points
+                            'xtick.minor.size':8,       # minor tick size in points
+                            'xtick.major.width':4,     # major tick size in points
+                            'xtick.minor.width':2,       # minor tick size in points
+                            'ytick.major.size':12,     # major tick size in points
+                            'ytick.minor.size':6,       # minor tick size in points
+                            'ytick.major.width':4,     # major tick size in points
+                            'ytick.minor.width':2,       # minor tick size in points
+                            'axes.linewidth': 2,     # edge line width
+                            'legend.title_fontsize':32,
                             'figure.dpi':200,   
                     		'axes.axisbelow':True,
                     		'figure.autolayout':False,
@@ -100,16 +111,26 @@ def graph_style(*var):
                 
     elif style == "PP2_4by3":
         plt.rcParams.update({
+                    'axes.formatter.use_mathtext':True,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
                     'font.family': 'Arial',
-            		'font.size': 30,
+            		'font.size': 36,
             		'figure.figsize':[4*4,3*4],
-            		'xtick.labelsize':30,
-                    'ytick.labelsize':30,
-                    'legend.fontsize':30,
-                    'lines.linewidth':6,
-                    'legend.title_fontsize':30,
+            		'xtick.labelsize':32,
+                    'ytick.labelsize':32,
+                    'legend.fontsize':32,
+                    'lines.linewidth':5,
+                    'xtick.major.size':12,     # major tick size in points
+                    'xtick.minor.size':8,       # minor tick size in points
+                    'xtick.major.width':4,     # major tick size in points
+                    'xtick.minor.width':2,       # minor tick size in points
+                    'ytick.major.size':12,     # major tick size in points
+                    'ytick.minor.size':6,       # minor tick size in points
+                    'ytick.major.width':4,     # major tick size in points
+                    'ytick.minor.width':2,       # minor tick size in points
+                    'axes.linewidth': 2,     # edge line width
+                    'legend.title_fontsize':32,
                     'figure.dpi':200,   
             		'axes.grid':False,
             		'axes.axisbelow':True,

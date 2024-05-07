@@ -352,29 +352,40 @@ def bias_plotter(data,FIG,**kwargs):
                         #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
                         
                         try: 
-                            RatioMod = np.array([(np.min(Em_V) - Vpad)/(Vlim[1] - Vlim[0]) ,(np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])]) * (1/(0.9*V_range)) 
+                            RM1 = np.array([(np.min(Em_V) - Vpad)/(Vlim[1] - Vlim[0]) ,(np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])])  
+                            RM2 = np.array([(np.min(Em_I))/(np.max(Em_I) - np.min(Em_I)) ,(np.max(Em_I))/(np.max(Em_I) - np.min(Em_I))])  
                         except:
                             None
                         #NOTE: 0.5 RATIO MOD means that 0.5 of the TOTAL RANGE should fit.
+                            
+                        maxmod = 1 - np.abs(RM1[1] - RM2[1])
+                        minmod = -(1-np.max(np.abs(RM1)))
+                        #%%
+                        def mod_mod(val):
+                            #0.5 = 2, 1 = 1
+                            mod = 1/val
+                            return(mod)
+                        #%%
+
+                        DetIMod = 1.4*mod_mod(RM1[1])
+                        EmIMod  = 1.2*mod_mod(RM1[1])
                         
-                        DetIMod = 1
-                        EmIMod  = 1
-                        
-                        FIG.ax[0].set_ylim(np.max(np.abs(Det_I))*(RatioMod[0]/(np.sum(np.abs(RatioMod)))*DetIMod), 
-                                           np.max(np.abs(Det_I))*(RatioMod[1]/(np.sum(np.abs(RatioMod)))*DetIMod))  
-                        FIG.ax[1].set_ylim(np.max(np.abs(Em_I))*RatioMod[0]*EmIMod,np.max(np.abs(Em_I))*RatioMod[1]*EmIMod)  
+                        FIG.ax[0].set_ylim(np.max(np.abs(Det_I))*minmod*DetIMod, 
+                                           np.max(np.abs(Det_I))*maxmod*DetIMod)  
+                        FIG.ax[1].set_ylim(np.max(np.abs(Em_I))*minmod*EmIMod,
+                                           np.max(np.abs(Em_I))*maxmod*EmIMod)  
                         
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
-                        #for nax in FIG.ax:
-                        #    adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True)       #adjust ticks based on original ticks
+                        for nax in FIG.ax:
+                            adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True)       #adjust ticks based on original ticks
 
 
                         ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         #We will get the width of a single "-" in figure coordinates too.
                         minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*4.5*ticklabelwidth))
+                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*4*ticklabelwidth))
                         
                         
                         #Setting Spine colours and tickparameters
@@ -392,14 +403,18 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
                         FIG.ax[2].spines["right"].set_color(cols["VE"][0])
                         FIG.ax[0].tick_params(axis='x', **tkw)
-                        legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False) 
+                        legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False,columnspacing=0.8,handlelength=1.5) 
                         # Get the font size for the legend text
                        
                         if kw.legend_loc == "upper center":
                             legendheight = dummy_text_params("DUMMY",FIG,fontsize=plt.rcParams["legend.fontsize"])["height"] # Get the width of the bounding box in figure coordinates
                             for t in legend.get_texts(): t.set_va('bottom')
-                            legend.set_bbox_to_anchor((0, 0.5*legendheight, 1, 1))
-                        
+                            legend.set_bbox_to_anchor((0, 0.6*legendheight, 1, 1))
+                        t1 = FIG.ax[0].yaxis.get_offset_text().get_position()
+                        t2 = FIG.ax[1].yaxis.get_offset_text().get_position()
+                        FIG.ax[0].yaxis.get_offset_text().set_position((t1[0] - 0.125,t1[1] + 0.125))
+                        FIG.ax[1].yaxis.get_offset_text().set_position((t2[0] + 0.125,t2[1] + 0.125))
+
                         for ax in FIG.ax:
                             FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
                         
@@ -412,7 +427,7 @@ def bias_plotter(data,FIG,**kwargs):
                                     if ticktext == "":
                                         ticktext = "-1"
                                         
-                                    if float(ticktext.replace("−","-"))>=0:
+                                    if float(ticktext.replace("$\\mathdefault{","").replace("}$","").replace("−","-"))>=0:
                                         tick_position = tickobj.get_position()
 
                                         # Create a new position with the x-axis translation

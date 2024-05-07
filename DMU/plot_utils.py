@@ -102,7 +102,7 @@ def get_combined_legend(FIG):
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
 #%%
-def adjust_ticks(ax,which="both",Nx=7,Ny=7,xpad=1,ypad=1,respect_zero =True):
+def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True):
     """
     Input: 
         ax: axis that we want to adjust ticks for, this should be done AFTER the axlims have been set.
@@ -183,7 +183,7 @@ def align_axis_zeros(axes):
         ax.set_ylim(tuple(ylims_mod[ax]))        
 
 class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
-    def __init__(self, useOffset=True, useMathText=False):
+    def __init__(self, useOffset=True, useMathText=True):
         super().__init__(useOffset=useOffset, useMathText=useMathText)
         self.set_format()
 
