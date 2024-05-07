@@ -92,7 +92,7 @@ def graph_style(*var):
                     		'xtick.labelsize':32,
                             'ytick.labelsize':32,
                             'legend.fontsize':32,
-                            'lines.linewidth':5,
+                            'lines.linewidth':4,
                             'xtick.major.size':12,     # major tick size in points
                             'xtick.minor.size':8,       # minor tick size in points
                             'xtick.major.width':4,     # major tick size in points
@@ -120,7 +120,7 @@ def graph_style(*var):
             		'xtick.labelsize':32,
                     'ytick.labelsize':32,
                     'legend.fontsize':32,
-                    'lines.linewidth':5,
+                    'lines.linewidth':4,
                     'xtick.major.size':12,     # major tick size in points
                     'xtick.minor.size':8,       # minor tick size in points
                     'xtick.major.width':4,     # major tick size in points
