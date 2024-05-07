@@ -101,64 +101,63 @@ def get_combined_legend(FIG):
     return(flatten(leg_handles),flatten(leg_labels))
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
-def adjust_ticks(ticks,axrange=None,numticks=12):
+#%%
+def adjust_ticks(ax,which="both",Nx=7,Ny=7,xpad=1,ypad=1,respect_zero =True):
     """
-    Provide the axis bounds to auto-generate new ticks such that the total number is as near to numticks as possible.
+    Input: 
+        ax: axis that we want to adjust ticks for, this should be done AFTER the axlims have been set.
+        which: which ticks to adjust any of - ["both","xticks","yticks"]
+        Nx: number of xticks, default = 7 (can be included even if which="yticks") 
+        Ny: number of yticks, default = 7 (can be included even if which="xticks")
+        xpad: symmetric overlap of extra xticks (so, if your range is [-0.5,0,0.5] then it will add [-1,0.5,0,0.5,1])
+        ypad: symmetric overlap of extra yticks (so, if your range is [-0.5,0,0.5] then it will add [-1,0.5,0,0.5,1])        
+        respect_zero: Forces the zero tick to be included
+    Output: Adjusted axticks such that the number of ticks is as close to your chosen Nx and Ny as possible, without using than 2 sig fig e.g. 0.25 
     """
     
-    crudespace = np.linspace(axrange[0],axrange[1],numticks)
-    nums      = []
-    ooms      = []
-    
-    #First, we find out the highest oom that we will base all our nums on
-    if axrange == None:
-        axrange = [float(ticks[-1]),float( ticks[0])]
+    def limcalc(lim,N,pad,respect_zero=True):
+        proxvals = np.array([0.01,0.02,0.05,0.1,0.2,0.5,1.0,2.0,5.0,10,20,50,100])
+        rawspace = np.linspace(lim[0],lim[1],N)
+        rawdiff  = np.diff(rawspace)[0]
+        oom      = np.floor(np.log10(abs(rawdiff)))
+        oomdiff  = rawdiff/10**oom    
+        oomlim = lim/10**oom
+        padlim = [oomlim[0]-pad*oomdiff,oomlim[1]+pad*oomdiff]
+        prox = np.abs(proxvals - oomdiff)
+        tickdiff = proxvals[np.where(prox == np.min(prox))[0]][0]
         
-    for tick in ticks:
-        if tick != 0:
-            ooms.append(np.floor(np.log10(abs(tick))))
-    oom = np.max(ooms)
-    
-    nums = np.array(ticks)/(10**oom)
-    diffs = np.diff(nums)
-    
-    axrange = axrange/(10**oom)
-    diffnum = (axrange[1]-axrange[0])/numticks
-    
-    def diffnum_converter(diff,nums,numticks):
-        proxval = [0.01,0.02,0.05,0.1,0.2,0.5,1.0,2.0,5.0,10,20,50,100]
-        
-        diffnum = min(proxval, key=lambda x: abs(x - diff))  
-        new_low =  nums[0] - (nums[0] % diffnum)
-        new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
-        
-        if len(np.arange(new_low,new_high,diffnum)) >=numticks+2:
-            try:
-                diffnum = proxval[proxval.index(diffnum) + 1]
-            except:
-                diffnum = 2*diffnum
+        if respect_zero == False:
+            ticks = np.arange(round(padlim[0]/tickdiff)*tickdiff,round(padlim[1]/tickdiff)*tickdiff,tickdiff)
             
-            new_low =  nums[0] - (nums[0] % diffnum)
-            new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
-            
-            if len(np.arange(new_low,new_high,diffnum)) >=numticks:
-                try:
-                    diffnum = proxval[proxval.index(diffnum) + 1]
-                except:
-                    diffnum = diffnum*2
-                
-            new_low =  nums[0] - (nums[0] % diffnum)
-            new_high = (nums[-1] + diffnum) - (nums[-1] % diffnum)
-            
-        new_nums = np.round(np.arange(new_low-5*diffnum,new_high+5*diffnum,diffnum),2)
-        return(new_nums)
-
-    new_nums = diffnum_converter(diffnum,nums,numticks)
-    
-    for num in new_nums:
-        new_ticks = new_nums * np.power(10,oom)
+        elif respect_zero == True:
+            ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)) ,  np.arange(0,padlim[1],tickdiff)])
         
-    return(new_ticks)
+        return(ticks*10**oom,[f"{val:.1e}" for val in ticks],oom)
+        
+    
+    xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits((-2,2))
+    yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits((-2,2))
+    
+    
+    if which == "both" or which == "xticks":
+        xlim = ax.get_xlim()
+        xticks,xticklabels,xoom = limcalc(xlim,Nx,xpad,respect_zero)
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(xticklabels)
+        if xoom >1:
+            xfmt.set_format("%2d")
+        ax.xaxis.set_major_formatter(xfmt)
+        ax.set_xlim(xlim)
+        
+    if which == "both" or which == "yticks":
+        ylim = ax.get_ylim()
+        yticks,yticklabels,yoom = limcalc(ylim,Ny,ypad,respect_zero)
+        ax.set_yticks(yticks)
+        ax.set_yticklabels(yticklabels)
+        if yoom >1:
+            yfmt.set_format("%2d")
+        ax.yaxis.set_major_formatter(yfmt)
+        ax.set_ylim(ylim)
 
 
 def align_axis_zeros(axes):
@@ -182,14 +181,14 @@ def align_axis_zeros(axes):
         ylims_mod[ax][0]  = min(-deltas[ax] * np.array(list(ratios.values())))
                         # Do the same for ymin
         ax.set_ylim(tuple(ylims_mod[ax]))        
-        
+
 class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
     def __init__(self, useOffset=True, useMathText=False):
         super().__init__(useOffset=useOffset, useMathText=useMathText)
-        self._set_format()
+        self.set_format()
 
-    def _set_format(self):
-        self.format = "%1.1f"  # Give format here
+    def set_format(self,form="%1.1f"):
+        self.format = form  # Give format here
         
 #%%
 def ClearAxis(fig):
@@ -366,4 +365,5 @@ def segment_sweep(L,indices):
     for slc in slices:
         swdat.append(L[slc[0]:slc[1]])
     return(swdat)
+
 
