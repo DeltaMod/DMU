@@ -324,7 +324,7 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
    
-                        # Get the right spine of ax[1]
+                        # Get the right spine of ax[1] 
                         bboxes = {}
                         for ax in FIG.ax:
                             bbox = FIG.ax[ax].get_position()
