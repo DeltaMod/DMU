@@ -82,7 +82,8 @@ def bias_plotter(data,FIG,**kwargs):
                  'cols':'cols',
                  'ncols':'ncols',
                  'bounds_padding':'bounds_padding',
-                 "legend_loc":"legend_loc"}
+                 "legend_loc":"legend_loc",
+                 "legend_off":"legend_off"}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -91,7 +92,7 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best")
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best",legend_off=(0,0,0,0))
     xkey = []; ykey = []; fwdbwd = []
     if kw.plot == True:
         ax = FIG.ax[0]
@@ -342,9 +343,9 @@ def bias_plotter(data,FIG,**kwargs):
                             dpad   = (drange*(1/ratio) - drange)/2
                             return([np.min(data)-dpad,np.max(data)+dpad],dpad)
 
-                        V_range = 0.95
+                        V_range = 0.925
                         
-                        Vlim,Vpad = rpad(Em_V,0.95)
+                        Vlim,Vpad = rpad(Em_V,0.925)
                         
                         FIG.ax[2].set_ylim(Vlim)
                         
@@ -378,7 +379,7 @@ def bias_plotter(data,FIG,**kwargs):
                         align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
                         
                         for nax in FIG.ax:
-                            adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True)       #adjust ticks based on original ticks
+                            adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
 
 
                         ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
@@ -393,23 +394,24 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[1].yaxis.label.set_color(cols["IE"][0])
                         FIG.ax[2].yaxis.label.set_color(cols["VE"][0])
                         
-                        tkw = dict(size=4, width=1.5)
-                        FIG.ax[0].tick_params(axis='y', colors=cols["ID"][0], **tkw)
                         
-                        FIG.ax[1].tick_params(axis='y', colors=cols["IE"][0], **tkw)
+                        FIG.ax[0].tick_params(which="both", axis='y', colors=cols["ID"][0])
+                        
+                        FIG.ax[1].tick_params(which="both",axis='y', colors=cols["IE"][0])
                         FIG.ax[1].spines["right"].set_color(cols["IE"][0])
                         
                         
-                        FIG.ax[2].tick_params(axis='y', colors=cols["VE"][0], **tkw)
+                        FIG.ax[2].tick_params(which="both",axis='y', colors=cols["VE"][0])
                         FIG.ax[2].spines["right"].set_color(cols["VE"][0])
-                        FIG.ax[0].tick_params(axis='x', **tkw)
+                        FIG.ax[0].tick_params(axis='x')
                         legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False,columnspacing=0.8,handlelength=1.5) 
                         # Get the font size for the legend text
                        
                         if kw.legend_loc == "upper center":
                             legendheight = dummy_text_params("DUMMY",FIG,fontsize=plt.rcParams["legend.fontsize"])["height"] # Get the width of the bounding box in figure coordinates
                             for t in legend.get_texts(): t.set_va('bottom')
-                            legend.set_bbox_to_anchor((0, 0.6*legendheight, 1, 1))
+                            legend.set_bbox_to_anchor([sum(x) for x in zip((0, 0.6*legendheight, 1, 1),kw.legend_off)])
+     
                         t1 = FIG.ax[0].yaxis.get_offset_text().get_position()
                         t2 = FIG.ax[1].yaxis.get_offset_text().get_position()
                         FIG.ax[0].yaxis.get_offset_text().set_position((t1[0] - 0.125,t1[1] + 0.125))

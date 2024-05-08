@@ -102,7 +102,7 @@ def get_combined_legend(FIG):
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
 #%%
-def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True):
+def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whole_numbers_only=False):
     """
     Input: 
         ax: axis that we want to adjust ticks for, this should be done AFTER the axlims have been set.
@@ -115,7 +115,7 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True):
     Output: Adjusted axticks such that the number of ticks is as close to your chosen Nx and Ny as possible, without using than 2 sig fig e.g. 0.25 
     """
     
-    def limcalc(lim,N,pad,respect_zero=True):
+    def limcalc(lim,N,pad,respect_zero=True,whole_numbers_only=False):
         proxvals = np.array([0.01,0.02,0.05,0.1,0.2,0.5,1.0,2.0,5.0,10,20,50,100])
         rawspace = np.linspace(lim[0],lim[1],N)
         rawdiff  = np.diff(rawspace)[0]
@@ -131,17 +131,31 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True):
             
         elif respect_zero == True:
             ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)) ,  np.arange(0,padlim[1],tickdiff)])
+        ticks = np.unique(ticks)
         
+        if whole_numbers_only == True:
+            
+            tickooms = [np.min(np.floor(np.log10(np.abs([tick for tick in ticks if tick !=float(0)])))), np.max(np.floor(np.log10(np.abs([tick for tick in ticks if tick !=float(0)])))) ] 
+          
+            if tickooms[0] == tickooms[1]:
+                newticks = []
+                for tick in ticks:
+                    if tickooms[0] == tickooms[1]:
+                        numstr = str(float(f"{tick:.1f}"))
+                        if numstr.split(".")[1] =="0" :
+                            newticks.append(tick)
+                        ticks = np.array(newticks)
+
         return(ticks*10**oom,[f"{val:.1e}" for val in ticks],oom)
         
     
-    xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits((-2,2))
-    yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits((-2,2))
+    xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits((-2,3))
+    yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits((-2,3))
     
     
     if which == "both" or which == "xticks":
         xlim = ax.get_xlim()
-        xticks,xticklabels,xoom = limcalc(xlim,Nx,xpad,respect_zero)
+        xticks,xticklabels,xoom = limcalc(xlim,Nx,xpad,respect_zero,whole_numbers_only)
         ax.set_xticks(xticks)
         ax.set_xticklabels(xticklabels)
         if xoom >1:
@@ -151,9 +165,10 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True):
         
     if which == "both" or which == "yticks":
         ylim = ax.get_ylim()
-        yticks,yticklabels,yoom = limcalc(ylim,Ny,ypad,respect_zero)
+        yticks,yticklabels,yoom = limcalc(ylim,Ny,ypad,respect_zero,whole_numbers_only)
         ax.set_yticks(yticks)
         ax.set_yticklabels(yticklabels)
+        
         if yoom >1:
             yfmt.set_format("%2d")
         ax.yaxis.set_major_formatter(yfmt)

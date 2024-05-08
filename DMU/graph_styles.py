@@ -79,58 +79,70 @@ def graph_style(*var):
                             })
                 
     elif style == "PP1_Wide":
-                plt.rcParams.update({
-                            'axes.formatter.use_mathtext':True,
-                            'text.usetex': False,
-                            #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
-                            'font.family': 'Arial',
-                    		'font.size': 36,
-                    		'axes.grid': False,
-                    		'xtick.minor.visible':True,
-                    		'ytick.minor.visible':True,
-                    		'figure.figsize':[16,9/1.5],
-                    		'xtick.labelsize':32,
-                            'ytick.labelsize':32,
-                            'legend.fontsize':32,
-                            'lines.linewidth':4,
-                            'xtick.major.size':12,     # major tick size in points
-                            'xtick.minor.size':8,       # minor tick size in points
-                            'xtick.major.width':4,     # major tick size in points
-                            'xtick.minor.width':2,       # minor tick size in points
-                            'ytick.major.size':12,     # major tick size in points
-                            'ytick.minor.size':6,       # minor tick size in points
-                            'ytick.major.width':4,     # major tick size in points
-                            'ytick.minor.width':2,       # minor tick size in points
-                            'axes.linewidth': 2,     # edge line width
-                            'legend.title_fontsize':32,
-                            'figure.dpi':200,   
-                    		'axes.axisbelow':True,
-                    		'figure.autolayout':False,
-                            'figure.constrained_layout.use':False
-                            })
-                
-    elif style == "PP2_4by3":
+        bigfont = 36
+        mediumfont = 32
         plt.rcParams.update({
                     'axes.formatter.use_mathtext':True,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
                     'font.family': 'Arial',
-            		'font.size': 36,
-            		'figure.figsize':[4*4,3*4],
-            		'xtick.labelsize':32,
-                    'ytick.labelsize':32,
-                    'legend.fontsize':32,
+                    'font.size': bigfont,
+                    'axes.grid': False,
+                    'xtick.minor.visible':True,
+                    'ytick.minor.visible':True,
+                    'figure.figsize':[16,9/1.5],
+                    'xtick.labelsize':mediumfont,
+                    'ytick.labelsize':mediumfont,
+                    'legend.fontsize':mediumfont,
                     'lines.linewidth':4,
-                    'xtick.major.size':12,     # major tick size in points
-                    'xtick.minor.size':8,       # minor tick size in points
+                    'xtick.major.size':8,     # major tick size in points
+                    'xtick.minor.size':5,       # minor tick size in points
                     'xtick.major.width':4,     # major tick size in points
                     'xtick.minor.width':2,       # minor tick size in points
-                    'ytick.major.size':12,     # major tick size in points
-                    'ytick.minor.size':6,       # minor tick size in points
+                    'xtick.major.pad':  2.5,     # distance to major tick label in points
+                    'xtick.minor.pad':  2.4,     # distance to the minor tick label in points
+                    'ytick.major.size':8,     # major tick size in points
+                    'ytick.minor.size':5,       # minor tick size in points
                     'ytick.major.width':4,     # major tick size in points
                     'ytick.minor.width':2,       # minor tick size in points
+                    'ytick.major.pad': 2.5,     # distance to major tick label in points
+                    'ytick.minor.pad': 2.4,     # distance to the minor tick label in points
                     'axes.linewidth': 2,     # edge line width
-                    'legend.title_fontsize':32,
+                    'legend.title_fontsize':mediumfont,
+                    'figure.dpi':200,   
+                    'axes.axisbelow':True,
+                    'figure.autolayout':False,
+                    'figure.constrained_layout.use':False
+                    })
+                
+    elif style == "PP2_4by3":
+        bigfont = 40
+        mediumfont = 36
+        plt.rcParams.update({
+                    'axes.formatter.use_mathtext':True,
+                    'text.usetex': False,
+                    #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
+                    'font.family': 'Arial',
+            		'font.size': bigfont,
+            		'figure.figsize':[4*4,3*4],
+            		'xtick.labelsize':mediumfont,
+                    'ytick.labelsize':mediumfont,
+                    'legend.fontsize':mediumfont,
+                    'lines.linewidth':4,
+                    'xtick.major.size':8,     # major tick size in points
+                    'xtick.minor.size':5,       # minor tick size in points
+                    'xtick.major.width':4,     # major tick size in points
+                    'xtick.minor.width':2,       # minor tick size in points
+                    'xtick.major.pad':  2.5,     # distance to major tick label in points
+                    'xtick.minor.pad':  2.4,     # distance to the minor tick label in points
+                    'ytick.major.size':8,     # major tick size in points
+                    'ytick.minor.size':5,       # minor tick size in points
+                    'ytick.major.width':4,     # major tick size in points
+                    'ytick.minor.width':2,       # minor tick size in points
+                    'ytick.major.pad': 2.5,     # distance to major tick label in points
+                    'ytick.minor.pad': 2.4,     # distance to the minor tick label in points
+                    'axes.linewidth': 2,     # edge line width
+                    'legend.title_fontsize':mediumfont,
                     'figure.dpi':200,   
             		'axes.grid':False,
             		'axes.axisbelow':True,
