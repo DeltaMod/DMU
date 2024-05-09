@@ -130,8 +130,8 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whol
             ticks = np.arange(round(padlim[0]/tickdiff)*tickdiff,round(padlim[1]/tickdiff)*tickdiff,tickdiff)
             
         elif respect_zero == True:
-            ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)) ,  np.arange(0,padlim[1],tickdiff)])
-        ticks = np.unique(ticks)
+            ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)[:-1]) ,  np.arange(0,padlim[1],tickdiff)])
+        print(ticks) 
         
         if whole_numbers_only == True:
             
