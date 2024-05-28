@@ -66,7 +66,9 @@ def AbsPowIntegrator(Data,x,y,z,WL):
 #%%
 
 def bias_plotter(data,FIG,**kwargs): 
-    rcLinewidth = plt.rcParams['lines.linewidth']
+    rcLinewidth   = plt.rcParams['lines.linewidth']
+    rcM_edgeW = plt.rcParams['lines.markeredgewidth']
+    rcM_size = plt.rcParams['lines.markersize']
     
     FIG.hold_on = False
     IFIG = False
@@ -147,7 +149,7 @@ def bias_plotter(data,FIG,**kwargs):
                 IFIG = ezplot()
                 
                 IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=rcLinewidth,color=tab20(1),label='ideality='+"{0:.5g}".format(IDF['n']))
-                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=rcLinewidth*0.75,c=tab20(5),label='IV data')
+                IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'x',c=tab20(5),label='IV data')
     
     
                 IFIG.ax[0].legend()
@@ -211,9 +213,10 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG = ezplot()
                             Vneg = IDF['V'][np.where(IDF['I']<0)]
                             Ineg = np.abs(IDF['I'][np.where(IDF['I']<0)])
-                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=rcLinewidth,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
-                            IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'.',linewidth=rcLinewidth,c=tab20(1),label='IV data')
-                            IFIG.ax[0].semilogy(Vneg,Ineg,'.',linewidth=rcLinewidth,c=tab20(9),label='abs(IV data)')
+                            
+                            IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=rcLinewidth*1.5,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
+                            IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'o',c=tab20(1),markersize=rcM_size*0.75,markeredgecolor="none",label='IV data')
+                            IFIG.ax[0].semilogy(Vneg,Ineg,'x',linewidth=rcLinewidth,c=tab20(9),linestyle="",label='abs(IV data)')
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
                             IFIG.ax[0].legend()

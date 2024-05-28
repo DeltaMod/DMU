@@ -102,7 +102,7 @@ def get_combined_legend(FIG):
 
 # Automatically adjust tick locations to intervals that do not require two decimal places
 #%%
-def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whole_numbers_only=False):
+def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whole_numbers_only=False,powerlimits=(-2,3)):
     """
     Input: 
         ax: axis that we want to adjust ticks for, this should be done AFTER the axlims have been set.
@@ -149,8 +149,8 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whol
         return(ticks*10**oom,[f"{val:.1e}" for val in ticks],oom)
         
     
-    xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits((-2,3))
-    yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits((-2,3))
+    xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits(powerlimits)
+    yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits(powerlimits)
     
     
     if which == "both" or which == "xticks":
