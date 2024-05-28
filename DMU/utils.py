@@ -424,7 +424,7 @@ def bias_plotter(data,FIG,**kwargs):
                             if ax != 0:
 
                                 for j, tickobj in enumerate(FIG.ax[ax].get_yticklabels()):
-
+                                                                        
                                     ticktext   = tickobj.get_text()
                                     if ticktext == "":
                                         ticktext = "-1"

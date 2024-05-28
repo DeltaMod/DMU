@@ -107,8 +107,8 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whol
     Input: 
         ax: axis that we want to adjust ticks for, this should be done AFTER the axlims have been set.
         which: which ticks to adjust any of - ["both","xticks","yticks"]
-        Nx: number of xticks, default = 7 (can be included even if which="yticks") 
-        Ny: number of yticks, default = 7 (can be included even if which="xticks")
+        Nx: number of xticks, default = 4 (can be included even if which="yticks") 
+        Ny: number of yticks, default = 4 (can be included even if which="xticks")
         xpad: symmetric overlap of extra xticks (so, if your range is [-0.5,0,0.5] then it will add [-1,0.5,0,0.5,1])
         ypad: symmetric overlap of extra yticks (so, if your range is [-0.5,0,0.5] then it will add [-1,0.5,0,0.5,1])        
         respect_zero: Forces the zero tick to be included
@@ -130,8 +130,8 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whol
             ticks = np.arange(round(padlim[0]/tickdiff)*tickdiff,round(padlim[1]/tickdiff)*tickdiff,tickdiff)
             
         elif respect_zero == True:
-            ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)[:-1]) ,  np.arange(0,padlim[1],tickdiff)])
-        print(ticks) 
+            ticks = np.concatenate([np.flip(np.arange(0,padlim[0],-tickdiff)[1:]) ,  np.arange(0,padlim[1],tickdiff)])
+        
         
         if whole_numbers_only == True:
             
@@ -382,3 +382,22 @@ def segment_sweep(L,indices):
     return(swdat)
 
 
+def get_tab20bc():
+    t20b = plt.get_cmap("tab20b")
+    t20c = plt.get_cmap("tab20c")
+
+    ###CMAP!####
+    cmap20bc = []
+    for i in [0,1,2,3]:
+        for j in [0,2]:
+             cmap20bc.append(t20c(4*i + j))
+
+    for i in [4,3,0,1,2]:
+        for j in [0,2]:
+             cmap20bc.append(t20b(4*i + j))
+             
+    for i in [4]:
+        for j in [0,2]:
+             cmap20bc.append(t20c(4*i + j))
+    
+    return(cmap20bc)
