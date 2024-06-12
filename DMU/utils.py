@@ -31,6 +31,7 @@ import natsort
 import csv
 import xlrd
 
+
 #%% Importing and executing logging
 import logging
 from . custom_logger import get_custom_logger
@@ -199,8 +200,9 @@ def bias_plotter(data,FIG,**kwargs):
                     
                 ax.set_xlabel(xkey[0])
                 ax.set_ylabel(ykey[0])
+                for nax in FIG.ax:
+                    adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                 ax.legend()
-                ax.set_title(kw.title)
                 
                 if kw.ideality == True:
                     IFIG = False
@@ -219,6 +221,8 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG.ax[0].semilogy(Vneg,Ineg,'x',linewidth=rcLinewidth,c=tab20(9),linestyle="",label='abs(IV data)')
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
+                            for nax in IFIG.ax:
+                                adjust_ticks(IFIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                             IFIG.ax[0].legend()
                         
                     except:
@@ -308,7 +312,8 @@ def bias_plotter(data,FIG,**kwargs):
                         handles2,labels = ax_top_r.get_legend_handles_labels()
                         fig.legend(handles=handles1+handles2,labels=['$I_{NW}$','$V_{NW}$'])
              
-                        FIG.ax[0].set_title(kw.title)
+                        for nax in FIG.ax:
+                            adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                         
                     if kw.altplot==True:
 
@@ -487,6 +492,8 @@ def bias_plotter(data,FIG,**kwargs):
                     FIG.ax[0].semilogy(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
                     FIG.ax[0].set_xlabel("$V_{Emitter}$ [V]")
                     FIG.ax[0].set_ylabel("$I_{Detector}$ [A]")
+                    for nax in FIG.ax:
+                        adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                     FIG.ax[0].legend()
                     FIG.iteration+=1
         if type(IFIG) != bool:
@@ -2546,10 +2553,12 @@ def Keithley_xls_read(directory,**kwargs):
                             flat_data[run_key]["Device"] = 'Unlabelled'
                         if type(flat_data[run_key]["Device"]) != str:
                             flat_data[run_key]["Device"] ="Unlabelled"
+                        flat_data[run_key]["LOG Directory"] = file
             file_data = flat_data
-            
+        
         data[filename] = file_data
-            
+        
+    
     data_files = [file for file in files if "LOG" not in file ]    
 # Loop over each file and each sheet within the file
     for file in data_files:
@@ -2653,6 +2662,7 @@ def Keithley_xls_read(directory,**kwargs):
                 # Read data column by column into a dictionary with the first item in each column as the key
                 cols = {}
                 cols["col headers"] = []
+                cols["Data directory"] = file
                 for col_index in range(sheet.ncols):
                     col_data = [x for x in sheet.col_values(col_index) if x != '']
                     key = col_data.pop(0)
