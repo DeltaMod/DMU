@@ -198,8 +198,8 @@ def bias_plotter(data,FIG,**kwargs):
                 
                     
                     
-                ax.set_xlabel(xkey[0])
-                ax.set_ylabel(ykey[0])
+                ax.set_xlabel("Voltage [V]")
+                ax.set_ylabel("Current [A]")
                 for nax in FIG.ax:
                     adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                 ax.legend()
@@ -221,8 +221,7 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG.ax[0].semilogy(Vneg,Ineg,'x',linewidth=rcLinewidth,c=tab20(9),linestyle="",label='abs(IV data)')
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
-                            for nax in IFIG.ax:
-                                adjust_ticks(IFIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
+                            
                             IFIG.ax[0].legend()
                         
                     except:

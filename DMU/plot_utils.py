@@ -148,10 +148,10 @@ def adjust_ticks(ax,which="both",Nx=4,Ny=4,xpad=1,ypad=1,respect_zero =True,whol
 
         return(ticks*10**oom,[f"{val:.1e}" for val in ticks],oom)
         
-    
+   
     xfmt = ScalarFormatterForceFormat(); xfmt.set_powerlimits(powerlimits)
     yfmt = ScalarFormatterForceFormat(); yfmt.set_powerlimits(powerlimits)
-    
+
     
     if which == "both" or which == "xticks":
         xlim = ax.get_xlim()
@@ -215,6 +215,69 @@ def DefaultGrid(ax):
     ax.grid(which='major', color='darkgrey', linestyle='--')
     ax.grid(which='minor', color='#CCCCCC', linestyle=':')  
 
+def Extract_Keithley_Labels(ddict):
+    # === NW Labels === #
+    
+    if len(ddict["Settings"]["Operation Mode"]) == 2:
+        SMUlist = ddict["Settings"]["SMU"]
+        for key in ["pos1","pos2","pos3","pos4"]:
+            if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
+                NWID = "NW = " + ddict["LOG"][key]["NW"]
+                break
+    if len(ddict["Settings"]["Operation Mode"]) == 4:
+        NWID = "Emitter: "+ddict["emitter"]["NWID"] + "  $\\rightarrow$  Receiver: "+ddict["detector"]["NWID"]
+    
+    # === Operation Label === #
+    baseop = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
+    if "_" in ddict["Settings"]["Test Name"]:
+        OpLabel = ddict["Settings"]["Test Name"].split("_")[1].split("#")[0] 
+    else:
+        if len(ddict["Settings"]["Operation Mode"]) == 2:
+            OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if "common" not in label.lower()][0]
+        
+        elif len(ddict["Settings"]["Operation Mode"]) == 4:
+            OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
+    OpLabel = "Operation: "+ OpLabel 
+    return({"OpLabel":OpLabel,"NWID":NWID,"baseOP":baseop})
+    
+def Keithley_Plot_Tagger(ezfig, ddict):
+    ax = ezfig.ax[0]
+    #Line 0 File info
+    line0 = "File Location: " +  ddict["Data directory"].split("Lab Data\\")[1]
+    
+    #Line1: Device Info: Device Name (DFR1-GG-BR1) || NW ID (NW1//NW2) || Attempt to show Date of Data Plotted (2024-01-01)
+    try:
+        line1a = "Device: " + ddict["LOG"]["Device"]
+    except: 
+        line1a = "Device: " + "see filename"
+    KeithDL = Extract_Keithley_Labels(ddict)
+    line1b = KeithDL["NWID"]
+    datestring = ddict["Data directory"].split("\\")[-2].replace("_","-").split("-")
+    datestring = [sstr for sstr in datestring if all(ss.isnumeric() for ss in sstr)]
+    line1c = "-".join(datestring)
+    
+    line1 = line1a+"    " + line1b + "    " + line1c
+    #########
+    #########
+    #Line2: Type of Plot: Ideality // Voltage Sweep // Pulse Sweep // Pulse Ladder || Light Condition: Light on//Light Off
+    line2a = KeithDL["OpLabel"]
+    try:
+        IDF = ezfig.IDF
+        if type(ezfig.IDF) != None:
+            line2a = "Operation: Ideality Fit"
+    except:
+        None
+    line2b = "Light: " + str(bool(ddict["LOG"]["Light Microscope"]))
+    
+    
+    line2 = line2a+"    " + line2b
+
+    
+    #Annotating the Figure
+    ax.annotate(line0, (0.5,0.98), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    ax.annotate(line1, (0.5,0.95), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    ax.annotate(line2, (0.5,0.92), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    return(KeithDL)
 
 #%%
 class cmap_seq(object):
