@@ -162,8 +162,8 @@ def bias_plotter(data,FIG,**kwargs):
                 IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'.-',linewidth=rcLinewidth,color=tab20(1),label='ideality='+"{0:.5g}".format(IDF['n']))
                 IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'x',c=tab20(5),label='IV data')
                 
-                if IDF["shockley"]:
-                    IFIG.ax[0].annotate("Likely Shockley", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.75)
+                if IDF["shottky"]:
+                    IFIG.ax[0].annotate("Likely shottky", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.75)
     
                 IFIG.ax[0].legend()
             
@@ -222,7 +222,7 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         tab20 = mpl.colormaps["tab20c"]
                         
-                        IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=100,p0=None)
+                        IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=500,p0=None)
                         if kw.plot == True and IDF !=False:
                             IFIG = ezplot()
                             Vneg = IDF['V'][np.where(IDF['I']<0)]
@@ -234,8 +234,8 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
                             
-                            if IDF["shockley"]:
-                                IFIG.ax[0].annotate("Likely Shockley", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+                            if IDF["shottky"]:
+                                IFIG.ax[0].annotate("Likely shottky", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
                                 
                             IFIG.ax[0].legend()
                         else:
@@ -1723,6 +1723,7 @@ def json_savedata(data, filename, overwrite=False):
     else:
         with open(filename, "w") as f:
             json.dump(convert_to_json_serializable(data), f, indent=2)
+ 
             
 
 #%%            
@@ -3016,7 +3017,7 @@ def Ideality_Factor(I,V,**kwargs):
                   'N':'N','pts':'N',
                   "p0":"p0",'guess':"p0"}
     
-    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,p0=None,data_range=None,use_sigma = True, sigma_range=[0,2],sigma_type="exponential",repeat_sigma=0.2)
+    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,p0=None,data_range=None,use_sigma = True, sigma_range=[0,2],sigma_type="exponential",repeat_sigma=0.3)
    
     q = constants.e
     k = constants.Boltzmann
@@ -3037,6 +3038,13 @@ def Ideality_Factor(I,V,**kwargs):
         V = np.flip(V)
         I = np.flip(I)
     
+    if V[int(len(V)/4)]<0:
+        V = np.flip(V)
+        
+        V = np.multiply(-1,V)
+
+        
+
     
     #The old code relied on calculating the order of magnitude range, we will not do this and will instead stick to 
     #V of first point of strictly increasing series -> 1.5 V this means the fit range based on oom is no longer relevant
@@ -3052,21 +3060,25 @@ def Ideality_Factor(I,V,**kwargs):
     
     if type(kw.fit_range) in [float,int]:
         kw.fit_range = [0,kw.fit_range]
-        
+    
+    
+    
     #Note: Strictly Increasing returns the indices of all {"sublists":sublists,"longest":longest_list,"noise":noise_indices} 
     #We will pick the longest sequential series
-    try:
-        incr = strictly_increasing(I)
-        if len(incr["longest"])<5:
-            print("dataset not long enough to fit ideality from")
-            return(False)
-    except:
-        print("dataset contains no strictly increasing value ranges")
+
+
+    incr = strictly_increasing(I)
+    if not incr:
+        print("dataset not long enough to fit ideality from")
         return(False)
+    # except:
+    #         print("dataset contains no strictly increasing value ranges")
+    #         return(False)
     
     Vseq   = V[incr["longest"]]
     Iseq   = I[incr["longest"]]
     
+
     Inoise = I[incr["noise"]] 
     Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
     meanNoise = np.mean(Inoise)
@@ -3129,7 +3141,6 @@ def Ideality_Factor(I,V,**kwargs):
             if i/len(sigmalist)<kw.repeat_sigma:
                 
                 sigmalist[i] = sigmalist[0]
-        print(sigmalist)
         popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0,sigma=sigmalist)
     if not kw.use_sigma:
         popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)
@@ -3138,11 +3149,11 @@ def Ideality_Factor(I,V,**kwargs):
     
     V_new = V_new[np.where(I_new<=np.max(I))]
     I_new = I_new[np.where(I_new<=np.max(I))]
-    shockley = False
+    shottky = False
     if V_fit[0]<0.15:
-        shockley = True
+        shottky = True
 
-    return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shockley":shockley})
+    return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
 
 def align_axis_zeros(axes):
 

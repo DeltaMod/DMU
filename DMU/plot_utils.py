@@ -251,7 +251,8 @@ def Extract_Keithley_Labels(ddict):
         elif len(ddict["Settings"]["Operation Mode"]) == 4:
             OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
     OpLabel = "Operation: "+ OpLabel 
-    return({"OpLabel":OpLabel,"NWID":NWID,"baseOP":baseop})
+    Run     = ddict["LOG"]["RUN No."]
+    return({"OpLabel":OpLabel,"NWID":NWID,"baseOP":baseop,"Run":Run})
     
 def Keithley_Plot_Tagger(ezfig, ddict):
     ax = ezfig.ax[0]
@@ -282,8 +283,9 @@ def Keithley_Plot_Tagger(ezfig, ddict):
         None
     line2b = "Light: " + str(bool(ddict["LOG"]["Light Microscope"]))
     
+    line2c = "Run: "+ str(KeithDL["Run"])
     
-    line2 = line2a+"    " + line2b
+    line2 = line2a+"    " + line2b +"    " + line2c
 
     
     #Annotating the Figure
@@ -400,8 +402,18 @@ def strictly_increasing(items,returns="all"):
         if diff<0:
             sublists.append([])
             lid += 1
+    
     lengths = np.array([len(L) for L in sublists])
-    longest_list = sublists[int(np.where(lengths == np.max(lengths))[0])]
+    maxlen = np.max(lengths)
+        
+    if maxlen<4:
+        return(False)
+    
+    Longlocs =  np.where(lengths == np.max(lengths))[0]
+    longest_list = sublists[int(Longlocs[0])]
+
+    if longest_list[-1]<=len(diffs):
+        longest_list = longest_list + list(np.arange(longest_list[-1]+1,len(diffs)+1))
     noise_indices = [i for i,a in enumerate(items) if i not in longest_list ]
     
     return({"sublists":sublists,"longest":longest_list,"noise":noise_indices})

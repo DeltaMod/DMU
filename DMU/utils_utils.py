@@ -169,6 +169,40 @@ def cprint(String,**kwargs):
             print(''.join(PRINTSTR))
         else:
             return(''.join(PRINTSTR))
+            
+def find_deepest_folders(root_directory,must_include=None):
+    deepest_folders = []
+
+    for root, dirs, files in os.walk(root_directory):
+        if not dirs:  # If the current directory has no subdirectories
+            if must_include == None or must_include in root:    
+                deepest_folders.append(os.path.abspath(root))
+
+    return deepest_folders
+
+def find_folders_containing_filetype(root_directory,must_include=None,filetype=None):
+    """
+    Example use: Measurement_Folders = find_folders_containing_filetype(MDIR,must_include="DFR1-GG",filetype=".json")
+    """
+    contains_filetype = []
+    
+    for root, dirs, files in os.walk(root_directory):
+        if must_include in root:
+            if not files: #Skip if a folder contains no files
+                continue
+            if filetype != None:
+                if any(file.lower().endswith(filetype) for file in files):
+                    contains_filetype.append(root)
+              
+            elif filetype == None:
+                if files:
+                    contains_filetype.append(root)
+                
+    return contains_filetype
+
+
+    
+
 def KwargEval(fkwargs,kwargdict,**kwargs):
     """
     A short function that handles kwarg assignment and definition using the same kwargdict as before. To preassign values in the kw.class, you use the kwargs at the end
