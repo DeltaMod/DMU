@@ -11,7 +11,6 @@ import os
 import sys
 import time
 import h5py
-import hdf5storage
 import matplotlib
 import matplotlib as mpl
 import tkinter as tk
@@ -30,6 +29,7 @@ from collections import Counter
 import natsort
 import csv
 import xlrd
+import mat73
 
 
 #%% Importing and executing logging
@@ -284,9 +284,9 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs)
+                        ax_top.plot(data["Time"],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs)
                         ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
-                        ax_top.set_ylabel('$I_{Detector}$ [A]',color=cols["ID"][0])
+                        ax_top.set_ylabel('$I_{Receiver}$ [A]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
                         ax_bottom.plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs)
@@ -322,12 +322,12 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Detector}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
+                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
                         p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth)
                         p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5)
                         
                         FIG.ax[0].set_xlabel("Time [s]")
-                        FIG.ax[0].set_ylabel("$I_{Detector}$ [A]" ,color=cols["ID"][0])
+                        FIG.ax[0].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["ID"][0])
                         FIG.ax[1].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
                         FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
@@ -490,7 +490,8 @@ def bias_plotter(data,FIG,**kwargs):
                     Det_Vmean = np.mean(Det_V)
                     FIG.ax[0].semilogy(Em_V,Det_I,color=cols[FIG.iteration],label="$V_{Det}=$"+f'{Det_Vmean:.3f}')
                     FIG.ax[0].set_xlabel("$V_{Emitter}$ [V]")
-                    FIG.ax[0].set_ylabel("$I_{Detector}$ [A]")
+
+                    FIG.ax[0].set_ylabel("$I_{Receiver}$ [A]")
                     for nax in FIG.ax:
                         adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                     FIG.ax[0].legend()
@@ -1944,40 +1945,40 @@ def MatLoader(file,**kwargs):
     
     #Mat File Loading
     FIELDDICT = {}
-    f = h5py.File(file,'r')
+    data = mat73.loadmat(file)
    
-    for k, v in f.items():
-        FIELDDICT[k] = np.array(v)
+    # for k, v in f.items():
+    #     FIELDDICT[k] = np.array(v)
 
-    # FILEDICT used once to get the keys then unused
-    FIELDLIST = list(FIELDDICT.keys()) 
+    # # FILEDICT used once to get the keys then unused
+    # FIELDLIST = list(FIELDDICT.keys()) 
     
-    data = {}
-    dfields = []
-    if '#refs#' in FIELDLIST: 
-        FIELDLIST.remove('#refs#')
-        cprint(["Scanning fields:"]+FIELDLIST,fg='c',ts='b')
+    # data = {}
+    # dfields = []
+    # if '#refs#' in FIELDLIST: 
+    #     FIELDLIST.remove('#refs#')
+    #     cprint(["Scanning fields:"]+FIELDLIST,fg='c',ts='b')
     
-    for i in range(len(FIELDLIST)):
-        try:
-            dfields.append(list(f[FIELDLIST[i]].keys()))
-            twokeys = True
-        except:
-            dfields.append(FIELDLIST)
-            twokeys = False
-        for field in dfields[i]:
-            if twokeys == True:
-                data[field] = np.array(f[FIELDLIST[i]][field])
-            elif twokeys == False:
-                data[field] = np.array(f[field])
-            # perform a special check against Lumerical's complex notation
-            if data[field].dtype == np.dtype([('real', '<f8'), ('imag', '<f8')]) :
-                data[field] = data[field].view(complex)
+    # for i in range(len(FIELDLIST)):
+    #     try:
+    #         dfields.append(list(f[FIELDLIST[i]].keys()))
+    #         twokeys = True
+    #     except:
+    #         dfields.append(FIELDLIST)
+    #         twokeys = False
+    #     for field in dfields[i]:
+    #         if twokeys == True:
+    #             data[field] = np.array(f[FIELDLIST[i]][field])
+    #         elif twokeys == False:
+    #             data[field] = np.array(f[field])
+    #         # perform a special check against Lumerical's complex notation
+    #         if data[field].dtype == np.dtype([('real', '<f8'), ('imag', '<f8')]) :
+    #             data[field] = data[field].view(complex)
                 
-            if len(data[field].shape) == 2 and data[field].shape[0] == 1:
-                oldshape    = data[field].shape
-                data[field] = data[field][0]
-                cprint(['corrected','data['+str(field)+'].shape','from',str(oldshape),'to',str(data[field].shape)],mt=['note','status','note','wrn','note','status'])
+    #         if len(data[field].shape) == 2 and data[field].shape[0] == 1:
+    #             oldshape    = data[field].shape
+    #             data[field] = data[field][0]
+    #             cprint(['corrected','data['+str(field)+'].shape','from',str(oldshape),'to',str(data[field].shape)],mt=['note','status','note','wrn','note','status'])
     mname = file.split(S_ESC)[-1]
     data['matfilepath'] = file
     data['matname'] = mname
@@ -2080,15 +2081,15 @@ def MatLoader(file,**kwargs):
     tranconf = 0
     powconf  = 0 
     
-    if 'trans' in FIELDLIST[0].lower():
+    if 'trans' in [dit.lower() for dit in data.keys()]:
         cprint('Best guess is that you just loaded the data from a Transfer Box analysis group!', mt = 'curio')
         tranconf = 1
-    if any(substring in FIELDLIST[0].lower() for substring in ['pow','pabs']):
+    if any(substring in [dit.lower() for dit in data.keys()] for substring in ['pow','pabs']):
         cprint('Best guess is that you just loaded the data from a power absorption analysis group!',mt = 'curio')
         powconf = 1
     if [tranconf,powconf] == [1,1]:
         cprint('Naming convention might be strange - you should know better what type of file you loaded...',fg='o')    
-    return(data,dfields) 
+    return(data,data.keys()) 
 
 
 #%%
