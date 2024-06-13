@@ -2687,7 +2687,9 @@ def Keithley_xls_read(directory,**kwargs):
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
                 
                 stats    = file_data["Settings"][sheet_name]
-                
+                if type(stats['Npts']) == int:
+                    for key in stats.keys():
+                        stats[key] = [stats[key]]
                 main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
 
                 cols["Time"] = np.linspace(0,stats["Npts"][main_col]*stats["Hold Time"],stats["Npts"][main_col])
@@ -2720,6 +2722,14 @@ def Keithley_xls_read(directory,**kwargs):
                     For any list sweep:
                         constant bias => Detector
                 """
+                if len(stats["Operation Mode"]) == 1:
+                    if "Voltage List Sweep" in stats["Operation Mode"]:
+                        em_key = "Voltage List Sweep"
+                    elif "Voltage Linear Sweep" in stats["Operation Mode"]:
+                        em_key = "Voltage Linear Sweep"
+                    detector_ID = None
+                    emitter_OP = em_key; detector_OP = None
+                    
                 if len(stats["Operation Mode"]) == 2:
                     if "Voltage List Sweep" in stats["Operation Mode"]:
                         em_key = "Voltage List Sweep"

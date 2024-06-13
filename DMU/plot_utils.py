@@ -232,6 +232,9 @@ def Extract_Keithley_Labels(ddict):
     if "_" in ddict["Settings"]["Test Name"]:
         OpLabel = ddict["Settings"]["Test Name"].split("_")[1].split("#")[0] 
     else:
+        if len(ddict["Settings"]["Operation Mode"]) == 1:
+            OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if "common" not in label.lower()][0]
+            NWID = "NW = Unknown"
         if len(ddict["Settings"]["Operation Mode"]) == 2:
             OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if "common" not in label.lower()][0]
         
