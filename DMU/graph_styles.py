@@ -173,4 +173,50 @@ def graph_style(*var):
             		'figure.autolayout':False,
                     'figure.constrained_layout.use':False
                     })
+    elif style == "PP3_4by4":
+            bigfont = 44
+            mediumfont = 40
+            plt.rcParams.update({
+                        'axes.formatter.use_mathtext':True,
+                        'text.usetex': False,
+                        #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
+                        'font.family': 'Arial',
+                		'font.size': bigfont,
+                        'figure.dpi':200,   
+                		'figure.figsize':[4*4,4*4],
+                        'figure.titlesize':mediumfont-4,
+                		'xtick.labelsize':mediumfont,
+                        'ytick.labelsize':mediumfont,
+                        'legend.fontsize':mediumfont,
+                        'lines.linewidth':4,
+                        'lines.markeredgewidth':4,
+                        'lines.markersize':13,
+                        'xtick.major.size':8,     # major tick size in points
+                        'xtick.minor.size':5,       # minor tick size in points
+                        'xtick.major.width':4,     # major tick size in points
+                        'xtick.minor.width':2,       # minor tick size in points
+                        'xtick.major.pad':  2.5,     # distance to major tick label in points
+                        'xtick.minor.pad':  2.4,     # distance to the minor tick label in points
+                        'xtick.minor.visible':True,
+                        'ytick.major.size':8,     # major tick size in points
+                        'ytick.minor.size':5,       # minor tick size in points
+                        'ytick.major.width':4,     # major tick size in points
+                        'ytick.minor.width':2,       # minor tick size in points
+                        'ytick.major.pad': 2.5,     # distance to major tick label in points
+                        'ytick.minor.pad': 2.4,     # distance to the minor tick label in points
+                        'ytick.minor.visible':True,
+                        'axes.linewidth': 2,     # edge line width
+                        'legend.title_fontsize':mediumfont,
+                        'legend.borderpad' :0.4, #0.4
+                        'legend.labelspacing' : 0.4, #0.4
+                        'legend.handlelength' : 1.25, #1.0
+                        'legend.handleheight' : 0.7, #0.7
+                        'legend.handletextpad':0.5 , #0.8
+                        'legend.borderaxespad':0.5 , #0.5
+                        'legend.columnspacing':1.0, #2.0 
+                		'axes.grid':False,
+                		'axes.axisbelow':True,
+                		'figure.autolayout':False,
+                        'figure.constrained_layout.use':False
+                        })
         
