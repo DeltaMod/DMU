@@ -2491,7 +2491,7 @@ def Keithley_xls_read(directory,**kwargs):
     for file in logfiles:
         filename = os.path.splitext(file.split('\\')[-1])[0]
         
-        xls = xlrd.open_workbook(file)  
+        xls = xlrd.open_workbook(file,logfile=open(os.devnull, "w"))  
         file_data = {}
         """
         Logbook Handling
@@ -2582,7 +2582,7 @@ def Keithley_xls_read(directory,**kwargs):
     for file in data_files:
         file_data = {}
         filename = os.path.splitext(file.split('\\')[-1])[0]
-        xls = xlrd.open_workbook(file)
+        xls = xlrd.open_workbook(file,logfile=open(os.devnull, "w"))
         
         #First we need to find and import the settings:
         settings_sheet = [sheet for sheet in xls.sheet_names() if "settings" in sheet.lower()]
@@ -3153,7 +3153,7 @@ def Ideality_Factor(I,V,**kwargs):
     if V_fit[0]<0.15:
         shottky = True
 
-    return({"n":popt[1],"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
+    return({"n":popt[1],"par":popt,"covar":pcov,"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
 
 def align_axis_zeros(axes):
 
