@@ -2780,6 +2780,7 @@ def Keithley_xls_read(directory,**kwargs):
                     
                     
                 if detector_ID != None: 
+                    
                     try:
                         cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
                         cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
@@ -2828,6 +2829,19 @@ def Keithley_xls_read(directory,**kwargs):
                 data[rkey][runID]['Settings'] = data[rkey]["Settings"][runID]
                 continue
         del(data[rkey]["Settings"])
+    #Now we correct NWID information, since the information is inaccurate for single sweeps:
+    for fkey in data.keys():
+        for rkey in data[fkey].keys():
+            ddict = data[fkey][rkey]
+            
+            if len(ddict["Settings"]["Operation Mode"]) == 2:
+                SMUlist = ddict["Settings"]["SMU"]
+                for key in ["pos1","pos2","pos3","pos4"]:
+                    if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
+                        NWID = ddict["LOG"][key]["NW"]
+                        ddict["emitter"]["NWID"] = NWID.strip()
+                        break     
+            data[fkey][rkey] = ddict
     return(data)
 
 def Nanonis_dat_read(file,**kwargs):
@@ -3017,7 +3031,7 @@ def Ideality_Factor(I,V,**kwargs):
                   'N':'N','pts':'N',
                   "p0":"p0",'guess':"p0"}
     
-    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,p0=None,data_range=None,use_sigma = True, sigma_range=[0,2],sigma_type="exponential",repeat_sigma=0.3)
+    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
    
     q = constants.e
     k = constants.Boltzmann
@@ -3038,14 +3052,7 @@ def Ideality_Factor(I,V,**kwargs):
         V = np.flip(V)
         I = np.flip(I)
     
-    if V[int(len(V)/4)]<0:
-        V = np.flip(V)
-        
-        V = np.multiply(-1,V)
 
-        
-
-    
     #The old code relied on calculating the order of magnitude range, we will not do this and will instead stick to 
     #V of first point of strictly increasing series -> 1.5 V this means the fit range based on oom is no longer relevant
     #New fit_range is [Vmin,Vmax] now
@@ -3100,6 +3107,8 @@ def Ideality_Factor(I,V,**kwargs):
     V_fit = V_adjfit
     I_fit = I_adjfit
     
+    if len(V_fit) < 3:
+        return(False)
     
     if kw.plot_range == "all":
         kw.plot_range = [min(V),max(V)]
