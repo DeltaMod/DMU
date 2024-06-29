@@ -2858,8 +2858,8 @@ def Keithley_xls_read(directory,**kwargs):
             except:
                 print(file + fkey + key +": Missing LOG DATA")        
 
-                        
-            baseop = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
+                                    
+            baseop = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in label.lower() for substr in ["common","bias"])][0]
             
             data[fkey][rkey]["Operation"] = baseop
             data[fkey][rkey] = ddict
