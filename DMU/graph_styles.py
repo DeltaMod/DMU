@@ -1,6 +1,38 @@
 
 from matplotlib import pyplot as plt
 ## for Palatino and other serif fonts use:
+def DEF_BBOX(style="default",bboxstyle="default"):
+    
+    stylelist = ["default","WideNarrow","TwoWide","PP1_Wide","PP2_4by3","PP3_4by4"]  
+    
+    bblist= ["symmetric","wide symmetric","right asymmetric","left asymmetric","default"]
+    #single (0.165,0.835,0.125,0.875),
+    #NOTE: asymmetric plots have yet to be implemented
+    bbdict = {"PP1_Wide":{"symmetric"        : (0.13,0.87,0.18,0.875),
+                          "wide symmetric"   : (0.18,0.82,0.18,0.875),
+                          "right asymmetric" : (0.15,0.75,0.18,0.875),
+                          "left asymmetric"  : (0.25,0.85,0.18,0.875),
+                          "default"          : (0.05,0.95,0.05,0.875)},
+              "PP2_4by3":{"symmetric"        : (0.165,0.835,0.125,0.875),
+                          "wide symmetric"   : (0.25,0.75,0.125,0.875),
+                          "right asymmetric" : (0.15,0.75,0.125,0.875),
+                          "left asymmetric"  : (0.15,0.75,0.125,0.875),
+                          "default"          : (0.05,0.95,0.05,0.95)},
+              "default":{"symmetric"         : (0.05,0.95,0.05,0.95),
+                         "wide symmetric"    : (0.18,0.82,0.18,0.9),
+                         "right asymmetric"  : (0.15,0.75,0.125,0.875),
+                         "left asymmetric"   : (0.15,0.75,0.125,0.875),
+                         "default"           : (0.05,0.95,0.05,0.95)}
+              }
+    if style not in stylelist:
+        style = "default"
+        print("No style matching that entry")
+    if bboxstyle not in bblist:
+        bboxstyle = "default"
+        print("No bbox style matching that entry")
+    return(bbdict[style][bboxstyle])
+    
+
 def graph_style(*var):
     """
     *var = str allows you to choose a preset style for your plots:
@@ -78,7 +110,7 @@ def graph_style(*var):
                             'figure.autolayout':True 
                             })
                 
-    elif style == "PP1_Wide":
+    elif style == "PP1_Wide": 
         bigfont = 36
         mediumfont = 32
         plt.rcParams.update({

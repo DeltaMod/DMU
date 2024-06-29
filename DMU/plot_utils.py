@@ -229,11 +229,8 @@ def Extract_Keithley_Labels(ddict):
     # === NW Labels === #
     
     if len(ddict["Settings"]["Operation Mode"]) == 2:
-        SMUlist = ddict["Settings"]["SMU"]
-        for key in ["pos1","pos2","pos3","pos4"]:
-            if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
-                NWID = "NW = " + ddict["LOG"][key]["NW"]
-                break
+        NWID = "NW = " + ddict["emitter"]["NWID"]
+        
     if len(ddict["Settings"]["Operation Mode"]) == 4:
         NWID = "Emitter: "+ddict["emitter"]["NWID"] + "  $\\rightarrow$  Receiver: "+ddict["detector"]["NWID"]
     
@@ -251,7 +248,11 @@ def Extract_Keithley_Labels(ddict):
         elif len(ddict["Settings"]["Operation Mode"]) == 4:
             OpLabel = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
     OpLabel = "Operation: "+ OpLabel 
-    Run     = ddict["LOG"]["RUN No."]
+    try:
+        Run     = ddict["LOG"]["RUN No."]
+    except:
+        Run     = "NoLog" 
+        
     return({"OpLabel":OpLabel,"NWID":NWID,"baseOP":baseop,"Run":Run})
     
 def Keithley_Plot_Tagger(ezfig, ddict):
@@ -281,17 +282,19 @@ def Keithley_Plot_Tagger(ezfig, ddict):
             line2a = "Operation: Ideality Fit"
     except:
         None
-    line2b = "Light: " + str(bool(ddict["LOG"]["Light Microscope"]))
-    
+    try:
+        line2b = "Light: " + str(bool(ddict["LOG"]["Light Microscope"]))
+    except:
+        line2b = "Light: " + "Unknown"
     line2c = "Run: "+ str(KeithDL["Run"])
     
     line2 = line2a+"    " + line2b +"    " + line2c
 
     
     #Annotating the Figure
-    ax.annotate(line0, (0.5,0.98), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
-    ax.annotate(line1, (0.5,0.95), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
-    ax.annotate(line2, (0.5,0.92), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    ax.annotate(line0, (0.5,0.97), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    ax.annotate(line1, (0.5,0.94), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
+    ax.annotate(line2, (0.5,0.91), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
     return(KeithDL)
 
 #%%

@@ -96,7 +96,9 @@ def bias_plotter(data,FIG,**kwargs):
                  'ncols':'ncols',
                  'bounds_padding':'bounds_padding',
                  "legend_loc":"legend_loc",
-                 "legend_off":"legend_off"}
+                 "legend_off":"legend_off",
+                 "idict":"idict",
+                 "plot_fit_points":"plot_fit_points"}
     
     kuniq = np.unique(list(kwargdict.keys()))
     Pkwargs = {}
@@ -105,7 +107,8 @@ def bias_plotter(data,FIG,**kwargs):
         if key not in kuniq:
             kwargdict[key] = key
     #Collecting kwargs
-    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best",legend_off=(0,0,0,0))
+    kw = KwargEval(kwargs, kwargdict,fwd = True, rev = True, title=None,tool="Nanonis",exp='2IV',cols=None,ideality=False,plot=True,altplot=False,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best",legend_off=(0,0,0,0),
+                   idict={},plot_fit_points=False)
     xkey = []; ykey = []; fwdbwd = []
     if kw.plot == True:
         ax = FIG.ax[0]
@@ -150,11 +153,16 @@ def bias_plotter(data,FIG,**kwargs):
             ax.set_title(kw.title)
         
         if kw.ideality == True:
-        
-            tab20 = mpl.colormaps["tab20c"]
-
-            IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]])
             
+            tab20 = mpl.colormaps["tab20c"]
+            try:
+                if data["LOG"]["Light Microscope"] == 0:
+                    IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]],**kw.idict)
+
+            except:
+                print("Light Log is missing, attempting fit anyways")
+                IDF = Ideality_Factor(data[ykey[0]],data[xkey[0]],**kw.idict)
+                
             if kw.plot == True:
                 IFIG = True
                 IFIG = ezplot()
@@ -184,6 +192,7 @@ def bias_plotter(data,FIG,**kwargs):
                 xkey.append(k)
             elif "current" in k.lower():
                 ykey.append(k)
+
         
         xkey.sort(); ykey.sort()
         if kw.plot == True:
@@ -222,7 +231,7 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         tab20 = mpl.colormaps["tab20c"]
                         
-                        IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],T=273,plot_range =None,fit_range = None,N=500,p0=None)
+                        IDF = Ideality_Factor(data[ykey[0]][0],data[xkey[0]][0],**kw.idict)
                         if kw.plot == True and IDF !=False:
                             IFIG = ezplot()
                             Vneg = IDF['V'][np.where(IDF['I']<0)]
@@ -231,18 +240,21 @@ def bias_plotter(data,FIG,**kwargs):
                             IFIG.ax[0].semilogy(IDF['V_new'],IDF['I_new'],'--',linewidth=rcLinewidth*1.5,color=tab20(5),label='ideality='+"{0:.5g}".format(IDF['n']),zorder=5)
                             IFIG.ax[0].semilogy(IDF['V'],IDF['I'],'o',c=tab20(1),markersize=rcM_size*0.75,markeredgecolor="none",label='IV data')
                             IFIG.ax[0].semilogy(Vneg,Ineg,'x',linewidth=rcLinewidth,c=tab20(9),linestyle="",label='abs(IV data)')
+                            
                             IFIG.ax[0].set_xlabel("Voltage [V]")
                             IFIG.ax[0].set_ylabel("Current [A]")
-                            
+                            if kw.plot_fit_points:
+                                IFIG.ax[0].semilogy(IDF['V_fit'],IDF['I_fit'],'o',markersize=rcM_size*0.6,markeredgecolor="none",color=tab20(14),label='fit points',zorder=10)
                             if IDF["shottky"]:
                                 IFIG.ax[0].annotate("Likely shottky", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
                                 
                             IFIG.ax[0].legend()
                         else:
                             IFIG = False
-                    except:
-                        raise
-                        None
+                    except RuntimeError:
+                        logging.warning("RuntimeError: Failed fitting")
+                        IFIG=False
+                        
                     
             elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
                 if kw.cols == None:
@@ -301,8 +313,8 @@ def bias_plotter(data,FIG,**kwargs):
                         axxy  = [ax_top_r,ax_bottom_r]
                     
                         
-                        ax_top.plot(data["Time"],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs)
-                        ax_top_r.plot(data["Time"],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
+                        ax_top.plot(data["Time"][0:len(Det_I)],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs)
+                        ax_top_r.plot(data["Time"][0:len(Det_I)],Em_V,label='$V_{Emitter}$ [V]',color=cols["VE"][1]**plotkwargs)
                         ax_top.set_ylabel('$I_{Receiver}$ [A]',color=cols["ID"][0])
                         ax_top_r.set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
@@ -339,9 +351,9 @@ def bias_plotter(data,FIG,**kwargs):
                         FIG.ax[2] = FIG.ax[0].twinx()
                         
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
-                        p2, = FIG.ax[1].plot(data["Time"],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth)
-                        p3, = FIG.ax[2].plot(data["Time"],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5)
+                        p1, = FIG.ax[0].plot(data["Time"][0:len(Det_I)],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
+                        p2, = FIG.ax[1].plot(data["Time"][0:len(Det_I)],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth)
+                        p3, = FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5)
                         
                         FIG.ax[0].set_xlabel("Time [s]")
                         FIG.ax[0].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["ID"][0])
@@ -2710,16 +2722,17 @@ def Keithley_xls_read(directory,**kwargs):
                     for key in stats.keys():
                         stats[key] = [stats[key]]
                 main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
-
-                cols["Time"] = np.linspace(0,stats["Npts"][main_col]*stats["Hold Time"],stats["Npts"][main_col])
-              
+                
+                
+                cols["Time"] = np.linspace(0,stats["Npts"][main_col]*(stats["Hold Time"] + stats["Sweep Delay"]),stats["Npts"][main_col])
+                                
                 
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
                     sweep_indices = [0,max(num_only(stats["Npts"]))]
                     
-                print(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] )    
+                print("\\".join(file.split("\\")[-3:])+" - "+sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] )    
                 
                 if  "Voltage Linear Sweep" in file_data["Settings"][sheet_name]["Operation Mode"]:
                     
@@ -2830,18 +2843,28 @@ def Keithley_xls_read(directory,**kwargs):
                 continue
         del(data[rkey]["Settings"])
     #Now we correct NWID information, since the information is inaccurate for single sweeps:
+    
     for fkey in data.keys():
         for rkey in data[fkey].keys():
             ddict = data[fkey][rkey]
+            try:
+                if len(ddict["Settings"]["Operation Mode"]) == 2:
+                    SMUlist = ddict["Settings"]["SMU"]
+                    for key in ["pos1","pos2","pos3","pos4"]:
+                        if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
+                            NWID = ddict["LOG"][key]["NW"]
+                            ddict["emitter"]["NWID"] = NWID.strip()
+                            break     
+            except:
+                print(file + fkey + key +": Missing LOG DATA")        
+
+                        
+            baseop = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in [label.lower()] for substr in ["common","bias"])][0]
             
-            if len(ddict["Settings"]["Operation Mode"]) == 2:
-                SMUlist = ddict["Settings"]["SMU"]
-                for key in ["pos1","pos2","pos3","pos4"]:
-                    if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
-                        NWID = ddict["LOG"][key]["NW"]
-                        ddict["emitter"]["NWID"] = NWID.strip()
-                        break     
+            data[fkey][rkey]["Operation"] = baseop
             data[fkey][rkey] = ddict
+    
+        
     return(data)
 
 def Nanonis_dat_read(file,**kwargs):
@@ -3031,7 +3054,7 @@ def Ideality_Factor(I,V,**kwargs):
                   'N':'N','pts':'N',
                   "p0":"p0",'guess':"p0"}
     
-    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
+    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,I0=None,n0=None,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
    
     q = constants.e
     k = constants.Boltzmann
@@ -3061,20 +3084,21 @@ def Ideality_Factor(I,V,**kwargs):
         V = np.array(V)
     if type(I) == list:
         I = np.array(I)
-    
+
     if kw.fit_range == None:
         kw.fit_range = [0,1] # Voltage range
     
     if type(kw.fit_range) in [float,int]:
         kw.fit_range = [0,kw.fit_range]
-    
+        
     
     
     #Note: Strictly Increasing returns the indices of all {"sublists":sublists,"longest":longest_list,"noise":noise_indices} 
     #We will pick the longest sequential series
 
-
+    
     incr = strictly_increasing(I)
+
     if not incr:
         print("dataset not long enough to fit ideality from")
         return(False)
@@ -3084,7 +3108,6 @@ def Ideality_Factor(I,V,**kwargs):
     
     Vseq   = V[incr["longest"]]
     Iseq   = I[incr["longest"]]
-    
 
     Inoise = I[incr["noise"]] 
     Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
@@ -3109,7 +3132,7 @@ def Ideality_Factor(I,V,**kwargs):
     
     if len(V_fit) < 3:
         return(False)
-    
+
     if kw.plot_range == "all":
         kw.plot_range = [min(V),max(V)]
     
@@ -3134,12 +3157,19 @@ def Ideality_Factor(I,V,**kwargs):
         I_data = I
 
 
+    if kw.p0 == None and kw.n0 == None and kw.I0 == None:
+        kw.n0 = 2
+        kw.I0 = Ibase
+        kw.p0 = [kw.I0,kw.n0]
+    
+    if kw.n0 == None:
+        kw.n0 = 2
+    if kw.I0 == None:
+        kw.I0 = Ibase
+        
     if kw.p0 == None:
-        
-        n = 2
-
-        
-        kw.p0 = [Ibase,n] 
+        kw.p0 = [kw.I0,kw.n0]
+    
     if kw.use_sigma:
         if kw.sigma_type == "linear":
             sigmalist = np.linspace(kw.sigma_range[0],kw.sigma_range[1],len(V_fit))
