@@ -3052,7 +3052,8 @@ def Ideality_Factor(I,V,**kwargs):
                   'plot_range':'plot_range','pr':'plot_range',
                   "data_range":"data_range","dr":"data_range",
                   'N':'N','pts':'N',
-                  "p0":"p0",'guess':"p0"}
+                  "p0":"p0",'guess':"p0",
+                  "n0":"n0","I0":"I0"}
     
     kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,I0=None,n0=None,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
    
