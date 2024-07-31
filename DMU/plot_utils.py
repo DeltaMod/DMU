@@ -258,7 +258,7 @@ def Extract_Keithley_Labels(ddict):
 def Keithley_Plot_Tagger(ezfig, ddict):
     ax = ezfig.ax[0]
     #Line 0 File info
-    line0 = "File Location: " +  ddict["Data directory"].split("Lab Data\\")[1]
+    line0 = "File Location: " + "Device Data\\" + ddict["Data directory"].split("Device Data\\")[1]
     
     #Line1: Device Info: Device Name (DFR1-GG-BR1) || NW ID (NW1//NW2) || Attempt to show Date of Data Plotted (2024-01-01)
     try:
