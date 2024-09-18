@@ -18,43 +18,40 @@ import base64
 from io import BytesIO
 import numpy as np 
 import os 
-with tifffile.TiffFile(r'C:\Users\vidar\Box\PhD\Lab Data\Device Data\SEM-images\DFR1_EH_InGaP_NWs\DFR1_EH_BL_x1810_02.tif') as tif:
-    print(tif.sem_metadata['ap_pixel_size'])
-    
     
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True):
-"""
-Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
-Example svg_output = 'output.svg'
-If svg_output is set to "Auto" then the name image_path+anno.svg is used
-
-scalebar_style and txt_style refer to the possible parameters we pass in a dict. Below are two examples that contain something in EVERY field possible currently.
-
-scalebar_style = {"frame":True,
-                  "framepad":[30,2],
-                  "stroke_width":4,
-                  "stroke_style":"line",
-                  "bar_color":"white",
-                  "frame_color":"black",
-                  "frame_opacity":0.6,
-                  "location":"lower right",
-                  "location_padding":[0.03,0.05],
-                  "bar_ratio":[1/6,1/40]}
-
-txt_style={"font":"Arial",
-           "fontsize":"Auto",
-           "font_weight":"normal",
-           "font_style":"normal",
-           "text_decoration":"none",
-           "color":"white"}
-
-Example use 1:
-dwg = SEM_Scalebar_Generator(image_path, svg_output, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
-
-Example use 2:
-    for file in [f for f in os.listdir() if f.endswith(".tif")]:
-    dwg = SEM_Scalebar_Generator(image_path, "Auto", scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
-"""
+    """
+    Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
+    Example svg_output = 'output.svg'
+    If svg_output is set to "Auto" then the name image_path+anno.svg is used
+    
+    scalebar_style and txt_style refer to the possible parameters we pass in a dict. Below are two examples that contain something in EVERY field possible currently.
+    
+    scalebar_style = {"frame":True,
+                      "framepad":[30,2],
+                      "stroke_width":4,
+                      "stroke_style":"line",
+                      "bar_color":"white",
+                      "frame_color":"black",
+                      "frame_opacity":0.6,
+                      "location":"lower right",
+                      "location_padding":[0.03,0.05],
+                      "bar_ratio":[1/6,1/40]}
+    
+    txt_style={"font":"Arial",
+               "fontsize":"Auto",
+               "font_weight":"normal",
+               "font_style":"normal",
+               "text_decoration":"none",
+               "color":"white"}
+    
+    Example use 1:
+    dwg = SEM_Scalebar_Generator(image_path, svg_output, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
+    
+    Example use 2:
+        for file in [f for f in os.listdir() if f.endswith(".tif")]:
+        dwg = SEM_Scalebar_Generator(image_path, "Auto", scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
+    """
     if svg_output == "Auto":
         svg_output = image_path+"_anno.svg"
         
