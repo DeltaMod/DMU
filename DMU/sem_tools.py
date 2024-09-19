@@ -20,6 +20,8 @@ import numpy as np
 import os 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import subprocess
+
 
 def SEM_Annotation_Finder(image_path):
     """
@@ -389,3 +391,27 @@ txt_style={"font":"Arial",
            "text_decoration":"none",
            "color":"white"}
 """
+
+def export_svg_to_png(inkscape_path, svg_file, output_png, width=None, height=None, dpi=None):
+    """
+    Export SVG to PNG using Inkscape command-line interface (CLI).
+    
+    Parameters:
+    - inkscape_path: Path to the Inkscape executable
+    - svg_file: Path to the input SVG file
+    - output_png: Path to the output PNG file
+    - width: Optional, desired width of the PNG
+    - height: Optional, desired height of the PNG
+    - dpi: Optional, desired DPI of the PNG
+    """
+    cmd = [inkscape_path, svg_file, '--export-type=png', '--export-filename=' + output_png]
+
+    if width:
+        cmd += ['--export-width=' + str(width)]
+    if height:
+        cmd += ['--export-height=' + str(height)]
+    if dpi:
+        cmd += ['--export-dpi=' + str(dpi)]
+
+    subprocess.run(cmd)
+
