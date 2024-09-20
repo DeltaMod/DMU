@@ -66,7 +66,8 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
         cropr = crop-cropl
     return(cropl+offset,length-cropr+offset)
 
-def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None,resampling="nearest",force_aspect=False,delta_offset=[0,0]):
+def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
+                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True):
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
     Example svg_output = 'output.svg'
@@ -127,23 +128,42 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     with Image.open(image_path) as im:
         buffer = BytesIO()
         imformat = im.format            
-        if imcrop == "Auto":
-            imcrop = SEM_Annotation_Finder(image_path)        
         
-        im = im.crop((imcrop[0],imcrop[1],im.width-imcrop[2],im.height-imcrop[3]))
+        if remove_annotation == True:
+            annocrop= SEM_Annotation_Finder(image_path)        
+            im = im.crop((annocrop[0],annocrop[1],im.width-annocrop[2],im.height-annocrop[3]))
+            
         
-
+        
+        og_w,og_h = (im.width, im.height)
+        
+        if force_aspect!=False:
+            og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
+        
+        if imcrop != [0,0,0,0]:
+            im = im.crop((imcrop[0],imcrop[0],im.width-imcrop[1],im.height-imcrop[1]))
+            
+        if rotation != 0:
+            im = im.rotate(rotation, expand=True)
+            
+            
         if force_aspect != False:
             xd,yd = find_nearest_aspect_dim(im.width,im.height,force_aspect)
             xcrop = split_crop_bounds_evenly(im.width, xd,offset=delta_offset[0])
             ycrop = split_crop_bounds_evenly(im.height, yd,offset=delta_offset[1])
             im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
+
+            
+        if crop_rescale == True:
+            im = im.resize((og_w,og_h),resample=resampling)
+        
             
         if resize != None:
             rszm = resize
             im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
         else:
             rszm = 1
+        
         im.format = imformat
 
         im.save(buffer, format=im.format)
