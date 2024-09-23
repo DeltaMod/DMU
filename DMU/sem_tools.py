@@ -141,7 +141,10 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
         
         if imcrop != [0,0,0,0]:
-            im = im.crop((imcrop[0],imcrop[0],im.width-imcrop[1],im.height-imcrop[1]))
+            print(im.width)
+            im = im.crop((imcrop[0],imcrop[1],im.width-imcrop[2],im.height-imcrop[3]))
+            print(im.width)
+            
             
         if rotation != 0:
             im = im.rotate(rotation, expand=True)
@@ -155,14 +158,19 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
 
             
         if crop_rescale == True:
+            pix_rescale = np.mean([og_w/im.width,og_h/im.height])
             im = im.resize((og_w,og_h),resample=resampling)
+        else:
+            pix_rescale = 1
         
             
         if resize != None:
             rszm = resize
             im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
+            pix_rescale *=rszm
         else:
             rszm = 1
+            
         
         im.format = imformat
 
@@ -179,7 +187,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3}
     #Find the scale parameters from the image in question: 
     with tifffile.TiffFile(image_path) as tif:
-        pix_size = tif.sem_metadata['ap_pixel_size'][1] * OOM[tif.sem_metadata['ap_pixel_size'][2]]*rszm 
+        pix_size = tif.sem_metadata['ap_pixel_size'][1] * OOM[tif.sem_metadata['ap_pixel_size'][2]]*pix_rescale 
     
     #Define bar length and height. Note that setting the height to zero removes it
 
