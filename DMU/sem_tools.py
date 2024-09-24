@@ -13,7 +13,7 @@ logger = get_custom_logger("DMU_UTILSUTILS")
 
 import tifffile
 import svgwrite
-from PIL import Image
+from PIL import Image,ImageEnhance
 import base64
 from io import BytesIO
 import numpy as np 
@@ -22,6 +22,30 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import subprocess
 
+def ANY_Image_Enhance(PIL_im,brightness=None,contrast=None,sharpness=None,expand_range=True):
+    PIL_im = PIL_im.convert("L")
+    
+    if expand_range:
+        pixvals = np.array(PIL_im)
+        
+        
+        pixvals = ((pixvals - pixvals.min()) / (pixvals.max()-pixvals.min())) * 255
+        PIL_im = Image.fromarray(pixvals.astype(np.uint8))
+    
+    if brightness:
+        enhancer = ImageEnhance.Brightness(PIL_im)
+        PIL_im = enhancer.enhance(brightness)
+        
+    if contrast:
+        enhancer = ImageEnhance.Contrast(PIL_im)
+        PIL_im = enhancer.enhance(contrast)
+        
+    if sharpness:
+        enhancer = ImageEnhance.Sharpness(PIL_im)
+        PIL_im = enhancer.enhance(sharpness)
+    
+    
+    return(PIL_im)
 
 def SEM_Annotation_Finder(image_path):
     """
@@ -67,7 +91,7 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
     return(cropl+offset,length-cropr+offset)
 
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
-                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True):
+                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,filterdict={}):
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
     Example svg_output = 'output.svg'
@@ -141,10 +165,8 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
         
         if imcrop != [0,0,0,0]:
-            print(im.width)
             im = im.crop((imcrop[0],imcrop[1],im.width-imcrop[2],im.height-imcrop[3]))
-            print(im.width)
-            
+           
             
         if rotation != 0:
             im = im.rotate(rotation, expand=True)
@@ -155,22 +177,23 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             xcrop = split_crop_bounds_evenly(im.width, xd,offset=delta_offset[0])
             ycrop = split_crop_bounds_evenly(im.height, yd,offset=delta_offset[1])
             im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
-
-            
+ 
         if crop_rescale == True:
-            pix_rescale = np.mean([og_w/im.width,og_h/im.height])
             im = im.resize((og_w,og_h),resample=resampling)
+            pix_rescale = 1/(og_w/im.width)
         else:
             pix_rescale = 1
         
             
         if resize != None:
-            rszm = resize
+            rszm = 1/resize
             im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
             pix_rescale *=rszm
         else:
             rszm = 1
             
+        if len(filterdict.keys())!=0:
+            im = ANY_Image_Enhance(im,**filterdict)
         
         im.format = imformat
 
@@ -215,8 +238,12 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         
         nearest_power_of_ten = powers_array[nearest_index]
         
-        len_string = str(nearest_scale_bar/nearest_power_of_ten) + scale_dict["{:.0e}".format(nearest_power_of_ten)]
-
+        len_string = str(np.round(nearest_scale_bar/nearest_power_of_ten,1))
+        if len_string.endswith(".0"):
+            len_string = len_string.replace(".0","")
+            
+        len_string +=scale_dict["{:.0e}".format(nearest_power_of_ten)]
+        print(len_string)
         return(nearest_scale_bar, nearest_power_of_ten, len_string)
     
     
@@ -253,7 +280,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         bar_start = tuple(location)
         bar_end   = tuple([draw_dir[0] * bar_length + location[0],location[1]] )
         
-        textloc = tuple([bar_middle_x,bar_start[1] + int(sbar["bar_height"]*1.1) * draw_dir[1]])
+        textloc = tuple([bar_middle_x,bar_start[1] + int(sbar["bar_height"]*1.2) * draw_dir[1]])
         
         # Create an SVG drawing with svgwrite
         dwg = svgwrite.Drawing(svg_output, profile='tiny', size=(im.width, im.height))
@@ -307,7 +334,7 @@ def find_nearest_aspect_dim(width, height, ratio):
 
 
 
-def SEM_Create_Insert(image_overview,inserts, filename="Auto", scalebar_style = {},txt_style={},force_aspect=4/3):
+def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style = {},txt_style={},force_aspect=4/3,filterdict={}):
     """
     This function wraps the SEM_Scalebar_Generator and creates inserts based on the provided information in the dicts. 
     The list of dicts must contain {"path":path\to\image,"size":1/N,"framecolor":CMAPformat, "framing":[x,y,w,h],"location":[1,1],"loc_type":"grid"}
@@ -332,8 +359,8 @@ def SEM_Create_Insert(image_overview,inserts, filename="Auto", scalebar_style = 
     None.
 
     """
-    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop="Auto"):
-        return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect})
+    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop="Auto",filterdict={}):
+        return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict})
     
     inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
 
@@ -342,7 +369,7 @@ def SEM_Create_Insert(image_overview,inserts, filename="Auto", scalebar_style = 
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
     else:
         image_overview_name = filename
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto",force_aspect=force_aspect,delta_offset=[0,0],resize=resize)
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto",force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict)
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
@@ -370,7 +397,7 @@ def SEM_Create_Insert(image_overview,inserts, filename="Auto", scalebar_style = 
         insert_name = insert_path.split("\\")[-1].split(".")[0]+"insert.svg"
         
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_name, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
-                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize)
+                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"])
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
