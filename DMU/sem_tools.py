@@ -118,11 +118,11 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
                "color":"white"}
     
     Example use 1:
-    dwg = SEM_Scalebar_Generator(image_path, svg_output, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
+    dwg = SEM_Scalebar_Generator(image_path, svg_output, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=[0,0,0,0])
     
     Example use 2:
         for file in [f for f in os.listdir() if f.endswith(".tif")]:
-        dwg = SEM_Scalebar_Generator(image_path, "Auto", scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto")
+        dwg = SEM_Scalebar_Generator(image_path, "Auto", scalebar_style=scalebar_style,txt_style=txt_style, imcrop=[0,0,0,0])
     """
     
     """
@@ -169,6 +169,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
            
             
         if rotation != 0:
+            
             im = im.rotate(rotation, expand=True)
             
             
@@ -179,16 +180,16 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
  
         if crop_rescale == True:
-            im = im.resize((og_w,og_h),resample=resampling)
             pix_rescale = 1/(og_w/im.width)
+            im = im.resize((og_w,og_h),resample=resampling)
         else:
             pix_rescale = 1
         
             
         if resize != None:
-            rszm = 1/resize
+            rszm = resize
             im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
-            pix_rescale *=rszm
+            pix_rescale *=1/rszm
         else:
             rszm = 1
             
@@ -209,13 +210,24 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     
     OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3}
     #Find the scale parameters from the image in question: 
+    
+   
     with tifffile.TiffFile(image_path) as tif:
         pix_size = tif.sem_metadata['ap_pixel_size'][1] * OOM[tif.sem_metadata['ap_pixel_size'][2]]*pix_rescale 
-    
+        rtilt = np.radians(tif.sem_metadata['ap_stage_at_t'][1])
+        rrot = np.radians(rotation)
+
+        if abs(tif.sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
+
+            L = pix_size/np.sin(rtilt)
+            pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
+            #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
+
     #Define bar length and height. Note that setting the height to zero removes it
 
     sbar["bar_length_target"] = int(im.width*sbar["bar_ratio"][0]) * pix_size 
     sbar["bar_height"] = int(im.height*sbar["bar_ratio"][1]) 
+    
     def find_nearest_scale_bar(target_length):
         """
         We list all multipliers, powers of 10 we will consider, and calculate allowed values.
@@ -243,15 +255,15 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             len_string = len_string.replace(".0","")
             
         len_string +=scale_dict["{:.0e}".format(nearest_power_of_ten)]
-        print(len_string)
+
         return(nearest_scale_bar, nearest_power_of_ten, len_string)
     
     
     
-    def scalebar_generation(svg_output,im,scalebar_style,txt_style):
+    def scalebar_generation(svg_output,im,scalebar_style,txt_style,pix_size):
         #Draw direction and location determination
         sbar = scalebar_style; txt = txt_style
-        
+
         best_scale, best_oom, len_string = find_nearest_scale_bar(sbar["bar_length_target"])
         
         bar_length = best_scale/pix_size
@@ -319,7 +331,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         # Save the SVG
     
         return(dwg)
-    dwg = scalebar_generation(svg_output,im,sbar,txt)
+    dwg = scalebar_generation(svg_output,im,sbar,txt,pix_size)
     if savefile == True:
         dwg.save()
     return({"svg":dwg,"im":im,"sbar":sbar_orig,"txt":txt_orig})
@@ -334,7 +346,7 @@ def find_nearest_aspect_dim(width, height, ratio):
 
 
 
-def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style = {},txt_style={},force_aspect=4/3,filterdict={}):
+def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style = {},txt_style={},force_aspect=4/3,filterdict={},imcrop=[0,0,0,0]):
     """
     This function wraps the SEM_Scalebar_Generator and creates inserts based on the provided information in the dicts. 
     The list of dicts must contain {"path":path\to\image,"size":1/N,"framecolor":CMAPformat, "framing":[x,y,w,h],"location":[1,1],"loc_type":"grid"}
@@ -359,7 +371,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
     None.
 
     """
-    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop="Auto",filterdict={}):
+    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop=[0,0,0,0],filterdict={}):
         return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict})
     
     inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
@@ -369,7 +381,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
     else:
         image_overview_name = filename
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop="Auto",force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict)
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict)
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
