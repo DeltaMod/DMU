@@ -380,7 +380,8 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
     else:
-        image_overview_name = filename
+        image_overview_name = filename.split(".png")[0] + ".svg"
+    
     dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict)
     
     scalebar_style = dwg["sbar"]
@@ -406,13 +407,15 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
         if itxt["fontsize"] == "Auto":
             itxt["fontsize"] = int(dwg["im"].height/10)
         insert_path = insert["path"]
-        insert_name = insert_path.split("\\")[-1].split(".")[0]+"insert.svg"
+        
+        insert_name = "\\".join(image_overview.split("\\")[:-1])+"\\"+insert_path.split("\\")[-1].split(".")[0]+"insert.svg"
         
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_name, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
                                                            force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"])
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
+        
         dwg["svg"].add(dwg["svg"].image(href=insert_name, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height)))
         
         #Now we draw the framing around the insert and the location indicated by the "framing" parameter
@@ -433,6 +436,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
                             stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
                             stroke_width=insert["stroke_width"]
                         ))
+    
     dwg["svg"].save()
     
     
