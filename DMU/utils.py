@@ -248,7 +248,7 @@ def bias_plotter(data,FIG,**kwargs):
                             if IDF["shottky"]:
                                 IFIG.ax[0].annotate("Likely shottky", (0.8,0.3), xytext=None, xycoords='figure fraction', textcoords=None, arrowprops=None, annotation_clip=None, ha="center",fontsize=plt.rcParams["figure.titlesize"]*0.5)
                                 
-                            IFIG.ax[0].legend()
+                            IFIG.ax[0].legend(frameon=False)
                         else:
                             IFIG = False
                     except RuntimeError:
@@ -349,19 +349,26 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         FIG.ax[1] = FIG.ax[0].twinx()
                         FIG.ax[2] = FIG.ax[0].twinx()
+                        FIG.ax[0].patch.set_alpha(0)  # Set the background behind everything
+                        FIG.ax[1].patch.set_zorder(0)
+                        FIG.ax[2].patch.set_zorder(0)
                         
+                        FIG.ax[0].set_zorder(2)
+                        FIG.ax[1].set_zorder(1)
                         #TIME = data[]
-                        p1, = FIG.ax[0].plot(data["Time"][0:len(Det_I)],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth)
-                        p2, = FIG.ax[1].plot(data["Time"][0:len(Det_I)],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth)
-                        p3, = FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5)
+                        p1, = FIG.ax[1].plot(data["Time"][0:len(Det_I)],Det_I,label='$I_{Receiver}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth,zorder=5)
+                        p2, = FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth,zorder=4)
+                        p3, = FIG.ax[0].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5,zorder=6)
+                        
+                        
                         
                         FIG.ax[0].set_xlabel("Time [s]")
-                        FIG.ax[0].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["ID"][0])
-                        FIG.ax[1].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
-                        FIG.ax[2].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
+                        FIG.ax[1].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["ID"][0])
+                        FIG.ax[2].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
+                        FIG.ax[0].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
                         
    
-                        # Get the right spine of ax[1] 
+                        # Get the right spine of ax[2] 
                         bboxes = {}
                         for ax in FIG.ax:
                             bbox = FIG.ax[ax].get_position()
@@ -383,7 +390,7 @@ def bias_plotter(data,FIG,**kwargs):
                         
                         Vlim,Vpad = rpad(Em_V,0.925)
                         
-                        FIG.ax[2].set_ylim(Vlim)
+                        FIG.ax[0].set_ylim(Vlim)
                         
                                                     
                         #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
@@ -407,12 +414,12 @@ def bias_plotter(data,FIG,**kwargs):
                         DetIMod = 1.4*mod_mod(RM1[1])
                         EmIMod  = 1.2*mod_mod(RM1[1])
                         
-                        FIG.ax[0].set_ylim(np.max(np.abs(Det_I))*minmod*DetIMod, 
+                        FIG.ax[1].set_ylim(np.max(np.abs(Det_I))*minmod*DetIMod, 
                                            np.max(np.abs(Det_I))*maxmod*DetIMod)  
-                        FIG.ax[1].set_ylim(np.max(np.abs(Em_I))*minmod*EmIMod,
+                        FIG.ax[2].set_ylim(np.max(np.abs(Em_I))*minmod*EmIMod,
                                            np.max(np.abs(Em_I))*maxmod*EmIMod)  
                         
-                        align_axis_zeros([FIG.ax[0],FIG.ax[1],FIG.ax[2]])
+                        align_axis_zeros([FIG.ax[1],FIG.ax[2],FIG.ax[0]])
                         
                         for nax in FIG.ax:
                             adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
@@ -422,25 +429,28 @@ def bias_plotter(data,FIG,**kwargs):
                         #We will get the width of a single "-" in figure coordinates too.
                         minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
                         
-                        FIG.ax[2].spines.right.set_position(("outward",FIG.fig.dpi*4*ticklabelwidth))
+                        spine_move = FIG.fig.dpi*4.01*ticklabelwidth
+                        spine_move_fig = FIG.ax[2].transAxes.inverted().transform((spine_move, 0))
                         
+                        FIG.ax[2].spines.right.set_position(("outward",spine_move))
+
                         
                         #Setting Spine colours and tickparameters
-                        FIG.ax[0].yaxis.label.set_color(cols["ID"][0])
-                        FIG.ax[1].yaxis.label.set_color(cols["IE"][0])
-                        FIG.ax[2].yaxis.label.set_color(cols["VE"][0])
+                        FIG.ax[1].yaxis.label.set_color(cols["ID"][0])
+                        FIG.ax[2].yaxis.label.set_color(cols["IE"][0])
+                        FIG.ax[0].yaxis.label.set_color(cols["VE"][0])
                         
                         
-                        FIG.ax[0].tick_params(which="both", axis='y', colors=cols["ID"][0])
+                        FIG.ax[0].tick_params(which="both", axis='y', colors=cols["VE"][0])
+                        FIG.ax[1].tick_params(which="both", axis='y', colors=cols["ID"][0])
+                        FIG.ax[2].tick_params(which="both",axis='y', colors=cols["IE"][0])
                         
-                        FIG.ax[1].tick_params(which="both",axis='y', colors=cols["IE"][0])
-                        FIG.ax[1].spines["right"].set_color(cols["IE"][0])
+                        FIG.ax[0].spines["left"].set_color(cols["VE"][0])
+                        FIG.ax[1].spines["right"].set_color(cols["ID"][0])
+                        FIG.ax[2].spines["right"].set_color(cols["IE"][0])
                         
-                        
-                        FIG.ax[2].tick_params(which="both",axis='y', colors=cols["VE"][0])
-                        FIG.ax[2].spines["right"].set_color(cols["VE"][0])
-                        FIG.ax[0].tick_params(axis='x')
-                        legend = FIG.ax[0].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False,columnspacing=0.8,handlelength=1.5) 
+                        FIG.ax[1].tick_params(axis='x')
+                        legend = FIG.ax[1].legend(ncol=kw.ncols,handles=[p1, p2, p3],loc=kw.legend_loc,frameon=False,columnspacing=0.8,handlelength=1.5) 
                         # Get the font size for the legend text
                        
                         if kw.legend_loc == "upper center":
@@ -448,33 +458,51 @@ def bias_plotter(data,FIG,**kwargs):
                             for t in legend.get_texts(): t.set_va('bottom')
                             legend.set_bbox_to_anchor([sum(x) for x in zip((0, 0.6*legendheight, 1, 1),kw.legend_off)])
      
-                        t1 = FIG.ax[0].yaxis.get_offset_text().get_position()
-                        t2 = FIG.ax[1].yaxis.get_offset_text().get_position()
-                        FIG.ax[0].yaxis.get_offset_text().set_position((t1[0] - 0.125,t1[1] + 0.125))
-                        FIG.ax[1].yaxis.get_offset_text().set_position((t2[0] + 0.125,t2[1] + 0.125))
+     
+                        t1 = FIG.ax[1].yaxis.get_offset_text().get_position()
+                        t2 = FIG.ax[2].yaxis.get_offset_text().get_position()
+               
+                        FIG.ax[1].yaxis.get_offset_text().set_position((t1[0] + 0.125,t1[1] + 0.125))
+                        FIG.ax[2].yaxis.get_offset_text().set_position((t2[0] + -spine_move_fig[0]+0.04,t2[1] + 0.125))
 
                         for ax in FIG.ax:
-                            FIG.ax[ax].spines["left"].set_color(cols["ID"][0])
+                            FIG.ax[ax].spines["left"].set_color(cols["VE"][0])
                         
+                     
+
                         for ax in FIG.ax:
                             if ax != 0:
-
-                                for j, tickobj in enumerate(FIG.ax[ax].get_yticklabels()):
-                                                                        
-                                    ticktext   = tickobj.get_text()
-                                    if ticktext == "":
-                                        ticktext = "-1"
+                                move_ax = False
+                                
+                                y_min, y_max = FIG.ax[ax].get_ylim()
+                                
+                                # Get the y-tick positions
+                                yticks = FIG.ax[ax].get_yticks()
+                                
+                                # Filter tick labels based on whether they are within the y-axis limits
+                                in_bounds_labels = [tick for tick in yticks if y_min <= tick <= y_max]
+                                
+                                if np.min(in_bounds_labels)<0:
+                                    move_ax = True
+                                            
+                                if move_ax:
+                                    for j, tickobj in enumerate(FIG.ax[ax].get_yticklabels()):
+                                                                            
+                                        ticktext   = tickobj.get_text()
+                                        if ticktext == "":
+                                            ticktext = "-1"
+                                            
+                                        if float(ticktext.replace("$\\mathdefault{","").replace("}$","").replace("−","-"))>=0:
+                                            tick_position = tickobj.get_position()
+    
+                                            # Create a new position with the x-axis translation
+                                            new_position = (tick_position[0] + 0.8*minuslabelwidth, tick_position[1])
+                             
+                                            # Set the new position for the tick label
+                                            tickobj.set_position(new_position)
+                                            #ticktrans = mpl.transforms.Affine2D().translate(minuslabelwidth*FIG.fig.dpi,0) 
+                                            #tickobj.set_transform(tickobj.get_transform() + ticktrans)
                                         
-                                    if float(ticktext.replace("$\\mathdefault{","").replace("}$","").replace("−","-"))>=0:
-                                        tick_position = tickobj.get_position()
-
-                                        # Create a new position with the x-axis translation
-                                        new_position = (tick_position[0] + 0.8*minuslabelwidth, tick_position[1])
-                         
-                                        # Set the new position for the tick label
-                                        tickobj.set_position(new_position)
-                                        #ticktrans = mpl.transforms.Affine2D().translate(minuslabelwidth*FIG.fig.dpi,0) 
-                                        #tickobj.set_transform(tickobj.get_transform() + ticktrans)
             elif "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" in data["Settings"]["Test Name"]:
                 FIG.hold_on = True
                 

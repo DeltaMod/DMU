@@ -213,7 +213,12 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     
    
     with tifffile.TiffFile(image_path) as tif:
-        pix_size = tif.sem_metadata['ap_pixel_size'][1] * OOM[tif.sem_metadata['ap_pixel_size'][2]]*pix_rescale 
+        if "Gemini" in tif.sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
+        else:
+            pix_size_string = "ap_pixel_size"
+            
+        pix_size = tif.sem_metadata[pix_size_string][1] * OOM[tif.sem_metadata[pix_size_string][2]]*pix_rescale 
         rtilt = np.radians(tif.sem_metadata['ap_stage_at_t'][1])
         rrot = np.radians(rotation)
 
@@ -346,7 +351,7 @@ def find_nearest_aspect_dim(width, height, ratio):
 
 
 
-def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style = {},txt_style={},force_aspect=4/3,filterdict={},imcrop=[0,0,0,0]):
+def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar_style = {},txt_style={},force_aspect=4/3,filterdict={},imcrop=[0,0,0,0],rotation=0):
     """
     This function wraps the SEM_Scalebar_Generator and creates inserts based on the provided information in the dicts. 
     The list of dicts must contain {"path":path\to\image,"size":1/N,"framecolor":CMAPformat, "framing":[x,y,w,h],"location":[1,1],"loc_type":"grid"}
@@ -371,18 +376,21 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
     None.
 
     """
-    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop=[0,0,0,0],filterdict={}):
-        return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict})
+    def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop=[0,0,0,0],filterdict={},rotation=0):
+        return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict,"rotation":rotation})
     
     inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
 
     resize = 1/np.min([insert["size"] for insert in inserts])
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
+        image_overview_path = ""
     else:
-        image_overview_name = filename.split(".png")[0] + ".svg"
+        image_overview_name = filename.split(".")[0] + ".svg"
+        image_overview_path = path+image_overview_name
     
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_name, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict)
+    
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict,rotation=rotation)
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
@@ -399,7 +407,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
         isbs = scalebar_style
         
         isbs["framepad"]         = [scalebar_style["framepad"][0],scalebar_style["framepad"][1]] 
-        isbs["stroke_width"]     = int(scalebar_style["stroke_width"]*s_factor)
+        isbs["stroke_width"]     = int(scalebar_style["stroke_width"])
         isbs["bar_ratio"]        = [scalebar_style["bar_ratio"][0]*s_factor,scalebar_style["bar_ratio"][1]*s_factor]
         isbs["location_padding"] = [scalebar_style["location_padding"][0]*s_factor,scalebar_style["location_padding"][1]*s_factor] 
         
@@ -408,21 +416,38 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto", scalebar_style =
             itxt["fontsize"] = int(dwg["im"].height/10)
         insert_path = insert["path"]
         
-        insert_name = "\\".join(image_overview.split("\\")[:-1])+"\\"+insert_path.split("\\")[-1].split(".")[0]+"insert.svg"
-        
-        insert_svg  = SEM_Scalebar_Generator(insert_path, insert_name, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
-                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"])
+        insert_name = filename.split(".")[0]+"_"+insert_path.split("\\")[-1].split(".")[0]+"_insert.svg"
+        insert_newpath = path+insert_name
+        insert_svg  = SEM_Scalebar_Generator(insert_path, insert_newpath, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
+                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"],rotation=insert["rotation"])
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
+        print(dwg["im"].width/2)
+        if img_loc[0] >= dwg["im"].width/2:
+            ilx=-isbs["stroke_width"]
+        elif img_loc[0] < dwg["im"].width/2:
+            ilx=isbs["stroke_width"]
+        else:
+            ilx = 0
+            
+        if img_loc[1] >= dwg["im"].height/2:
+            ily=-isbs["stroke_width"]
+        elif img_loc[1] < dwg["im"].height/2:
+            ily=isbs["stroke_width"]
+        else:
+            ily = 0
+            
+        img_loc = (img_loc[0] + ilx, img_loc[1]+ily)
         
-        dwg["svg"].add(dwg["svg"].image(href=insert_name, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height)))
+        href = 'file:///' + insert_newpath.replace('\\', '/')
+        dwg["svg"].add(dwg["svg"].image(href=href, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height)))
         
         #Now we draw the framing around the insert and the location indicated by the "framing" parameter
         
         if insert["framing"] != None:
             dwg["svg"].add(dwg["svg"].rect(
-                            insert=img_loc,  # Bottom-left corner of the rectangle
+                            insert=(img_loc[0],img_loc[1]),  # Bottom-left corner of the rectangle
                             size=(insert_svg["im"].width,insert_svg["im"].height),  # Width and height of the rectangle
                             fill="none",  # Fill color of the background (you can choose any color)
                             stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
