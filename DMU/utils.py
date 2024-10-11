@@ -2584,6 +2584,7 @@ def Keithley_xls_read(directory,**kwargs):
                         if type(flat_data[run_key]["Device"]) != str:
                             flat_data[run_key]["Device"] ="Unlabelled"
                         flat_data[run_key]["LOG Directory"] = file
+                    print(flat_data)
             file_data = flat_data
         
         data[filename] = file_data
