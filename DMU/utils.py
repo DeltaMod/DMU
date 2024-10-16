@@ -178,6 +178,8 @@ def bias_plotter(data,FIG,**kwargs):
                 
     elif kw.tool == "Keithley":
         keys = data['col headers']
+        #Test if they colheader keys are the actual data keys!
+
         plotkwargs = {}
         
         for i,ll in enumerate(xkey):
@@ -193,8 +195,9 @@ def bias_plotter(data,FIG,**kwargs):
             elif "current" in k.lower():
                 ykey.append(k)
 
-        
+    
         xkey.sort(); ykey.sort()
+        
         if kw.plot == True:
             if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]:
 
@@ -266,19 +269,11 @@ def bias_plotter(data,FIG,**kwargs):
                     detector = data['detector']
                         
                     #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
-                    for key in data.keys():
-                        if emitter['NWID'] in key:
-                            if "voltage" in key:
-                                Em_V_key = key
-                            if "current" in key:
-                                Em_I_key = key
-                        
-                        if detector['NWID'] in key:
-                            if "voltage" in key:
-                                Det_V_key = key
-                            if "current" in key:
-                                Det_I_key = key
-                                
+                    Em_V_key = data["emitter"]["colname"]
+                    Em_I_key = data["emitter"]["colname"].replace("voltage","current")
+                    
+                    Det_V_key = data["detector"]["colname"]
+                    Det_I_key = data["detector"]["colname"].replace("voltage","current")
                     
                     Em_V      =   data[Em_V_key]
                     Em_I      =   data[Em_I_key]
@@ -518,6 +513,7 @@ def bias_plotter(data,FIG,**kwargs):
                         
                     #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
                     for key in data.keys():
+                        
                         if emitter['NWID'] in key:
                             if "voltage" in key:
                                 Em_V_key = key
@@ -2612,7 +2608,6 @@ def Keithley_xls_read(directory,**kwargs):
                         if type(flat_data[run_key]["Device"]) != str:
                             flat_data[run_key]["Device"] ="Unlabelled"
                         flat_data[run_key]["LOG Directory"] = file
-                    print(flat_data)
             file_data = flat_data
         
         data[filename] = file_data
@@ -2674,12 +2669,12 @@ def Keithley_xls_read(directory,**kwargs):
             #             "VStart" : file_data["Settings"][sheet_name]["Start/Bias"],
             #             "VStop"  : file_data["Settings"][sheet_name]["Stop"],
             #             "Operation Mode" : file_data["Settings"][sheet_name]["Operation Mode"],
-            #             "NWID"   : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
+            #             "Colname"   : file_data["Settings"][sheet_name]["Name"].strip("[]").replace('\'','').split(', '),
             #             "SMU"    : file_data["Settings"][sheet_name]["Instrument"].strip("[]").replace('\'','').split(', '),
             #             "FBSweep": file_data["Settings"][sheet_name]["Dual Sweep"].strip("[]").replace('\'','').split(', ')}
             
             newdef = {"N/A":None,"Enabled":True,"Disabled":False,"OFF":False,"ON":True}
-            keydef = {"Number of Points":"Npts","Step":"VStep","Start/Bias":"VStart","Stop":"VStop","Name":"NWID","Instrument":"SMU","Dual Sweep":"FBSweep"}
+            keydef = {"Number of Points":"Npts","Step":"VStep","Start/Bias":"VStart","Stop":"VStop","Name":"Colname","Instrument":"SMU","Dual Sweep":"FBSweep"}
             
             for key in settings_data_new.keys():
                 settings_data_new[key] = Convert_to_type(settings_data_new[key])
@@ -2747,6 +2742,8 @@ def Keithley_xls_read(directory,**kwargs):
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
                 
                 stats    = file_data["Settings"][sheet_name]
+                # smu_data = file_data["LOG"][sheet_name]
+                stats["NWID"] = ["NW1","NW1","NW2","NW2"]
                 if type(stats['Npts']) == int:
                     for key in stats.keys():
                         stats[key] = [stats[key]]
@@ -2813,24 +2810,20 @@ def Keithley_xls_read(directory,**kwargs):
                     
                     elif "Voltage Bias" in stats["Operation Mode"] and "Voltage Linear Sweep" in stats["Operation Mode"]:
                         #Determine which nanowire is the emitter, and which is the detector:
-    
                         emitter_ID = stats["Operation Mode"].index('Voltage Linear Sweep')
                         detector_ID = stats["Operation Mode"].index('Voltage Bias')
-                        emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"
-                    
-                
-                    
+                        emitter_OP = "Voltage Linear Sweep"; detector_OP = "Voltage Bias"                
                     
                 if detector_ID != None: 
                     
                     try:
-                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
-                        cols["detector"] = {"SMU":stats["SMU"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
+                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],"colname":stats["Colname"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
+                        cols["detector"] = {"SMU":stats["SMU"][detector_ID],"colname":stats["Colname"][detector_ID],'NWID':stats["NWID"][detector_ID].split(' ')[0],"Operation Mode":detector_OP}
                     except:
                         logging.warning(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] + " - FAILED to set Emitter!" )    
                 elif detector_ID == None:
                     try:
-                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"Operation Mode":emitter_OP}
+                        cols["emitter"] = {"SMU":stats["SMU"][emitter_ID],'NWID':stats["NWID"][emitter_ID].split(' ')[0],"colname":stats["Colname"][emitter_ID],"Operation Mode":emitter_OP}
                         cols["detector"] = {"SMU":None,'NWID':None,"Operation Mode":detector_OP}
                     except:
                         logging.warning(sheet_name+": "+file_data["Settings"][sheet_name]["Operation Mode"][main_col] + " - FAILED to set Emitter!" )    
@@ -2871,22 +2864,42 @@ def Keithley_xls_read(directory,**kwargs):
                 data[rkey][runID]['Settings'] = data[rkey]["Settings"][runID]
                 continue
         del(data[rkey]["Settings"])
-    #Now we correct NWID information, since the information is inaccurate for single sweeps:
+    #Now we correct NWID information, since it needs the position and how it correlates to the positions
     
     for fkey in data.keys():
         for rkey in data[fkey].keys():
             ddict = data[fkey][rkey]
+            
+            try:
+                for opi,opmode in enumerate(ddict["Settings"]["Operation Mode"]):
+                    #Find which NW we are looking at
+                    
+                    SMU = ddict["Settings"]["SMU"][opi]
+                    for key in ["pos1","pos2","pos3","pos4"]:
+                        if SMU in [ddict["LOG"][key]["SMU"]]:
+                            NWID = ddict["LOG"][key]["NW"]
+                        
+                    if opmode in ["Voltage List Sweep"]:
+                        ddict["emitter"]["NWID"] = NWID.strip()
+                        
+                    elif opmode in ["Voltage Bias"]:
+                        ddict["detector"]["NWID"] = NWID.strip()
+            except:
+                print(file +" "+ fkey + " " + rkey +": Missing LOG DATA")  
+            
             try:
                 if len(ddict["Settings"]["Operation Mode"]) == 2:
                     SMUlist = ddict["Settings"]["SMU"]
+                    
                     for key in ["pos1","pos2","pos3","pos4"]:
                         if SMUlist[0] in [ddict["LOG"][key]["SMU"]]:
                             NWID = ddict["LOG"][key]["NW"]
+                         
                             ddict["emitter"]["NWID"] = NWID.strip()
                             break     
             except:
-                print(file + fkey + key +": Missing LOG DATA")        
-
+                print(file +" "+ fkey + " " + rkey +": Missing LOG DATA")       
+                     
                                     
             baseop = [label for label in ddict["Settings"]["Operation Mode"] if not any(substr in label.lower() for substr in ["common","bias"])][0]
             

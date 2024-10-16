@@ -287,7 +287,6 @@ def Keithley_Plot_Tagger(ezfig, ddict):
     except:
         line2b = "Light: " + "Unknown"
     line2c = "Run: "+ str(KeithDL["Run"])
-    print(KeithDL["Run"])
     line2 = line2a+"    " + line2b +"    " + line2c
 
     
