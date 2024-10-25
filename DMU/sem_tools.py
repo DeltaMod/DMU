@@ -208,21 +208,35 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     txt_orig = txt.copy()
     sbar_orig = sbar.copy()
     
-    OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3}
+    OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3,"m":1e+0}
     #Find the scale parameters from the image in question: 
     
    
     with tifffile.TiffFile(image_path) as tif:
-        if "Gemini" in tif.sem_metadata['sv_serial_number'][1]:
+        sem_metadata = tif.sem_metadata
+        if sem_metadata == None:
+            
+            try:
+                if tif.fei_metadata["System"]["SystemType"] == 'Nova NanoLab':                
+                    sem_metadata = tif.fei_metadata["EScan"]
+                    sem_metadata["sv_serial_number"] = ["Serial Code",tif.fei_metadata["System"]["SystemType"]]
+                    sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
+                    pix_size_string = "ap_image_pixel_size"
+                    sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
+            except:
+                print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
+                
+        elif "Gemini" in sem_metadata['sv_serial_number'][1]:
             pix_size_string = "ap_image_pixel_size"
+        
         else:
             pix_size_string = "ap_pixel_size"
             
-        pix_size = tif.sem_metadata[pix_size_string][1] * OOM[tif.sem_metadata[pix_size_string][2]]*pix_rescale 
-        rtilt = np.radians(tif.sem_metadata['ap_stage_at_t'][1])
+        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale 
+        rtilt = np.radians(sem_metadata['ap_stage_at_t'][1])
         rrot = np.radians(rotation)
 
-        if abs(tif.sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
+        if abs(sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
 
             L = pix_size/np.sin(rtilt)
             pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
