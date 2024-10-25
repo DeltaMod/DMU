@@ -259,7 +259,7 @@ def bias_plotter(data,FIG,**kwargs):
                         IFIG=False
                         
                     
-            elif "Voltage List Sweep" in data["Settings"]["Operation Mode"]:
+            elif "Voltage List Sweep" in data["Settings"]["Operation Mode"] and data["detector"]["SMU"]!=None:
                 if kw.cols == None:
                     cols = {"IE":[cmaps["tab20c"](0),cmaps["tab20c"](1)],
                             "VE":[cmaps["tab20c"](4),cmaps["tab20c"](5)],
