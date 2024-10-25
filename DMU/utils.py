@@ -199,27 +199,62 @@ def bias_plotter(data,FIG,**kwargs):
         xkey.sort(); ykey.sort()
         
         if kw.plot == True:
-            if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]:
-
-                if len(xkey) == 1 and len(ykey) == 1:
-                    for m,data_x in enumerate(data[xkey[0]]): 
-                        ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
-                
-                elif len(xkey) > 1 and len(ykey)>1:
-                    for n,key in enumerate(xkey):
+            if ("Voltage Linear Sweep" in data["Settings"]["Operation Mode"] and "5_emitter_sweep" not in data["Settings"]["Test Name"]) or ("Voltage List Sweep" in data["Settings"]["Operation Mode"] and "curing" in data["Settings"]["Test Name"].lower()):
+                if "Voltage Linear Sweep" in data["Settings"]["Operation Mode"]:     
+                    if len(xkey) == 1 and len(ykey) == 1:
                         for m,data_x in enumerate(data[xkey[0]]): 
-                            ax.plot(data[xkey[n]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
-                        
-                elif len(xkey) == 1 and len(ykey)>1:
-                    for n,key in enumerate(ykey):
-                        for m,data_x in enumerate(data[xkey[0]]):
-                            ax.plot(data[xkey[0]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
-                        
-                elif len(xkey) > 1 and len(ykey)==1:
-                    for n,key in enumerate(xkey):
-                        for m,data_x in enumerate(data[xkey[0]]):
-                            ax.plot(data[xkey[n]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs) 
+                            ax.plot(data[xkey[0]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
+                    
+                    elif len(xkey) > 1 and len(ykey)>1:
+                        for n,key in enumerate(xkey):
+                            for m,data_x in enumerate(data[xkey[0]]): 
+                                ax.plot(data[xkey[n]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
+                            
+                    elif len(xkey) == 1 and len(ykey)>1:
+                        for n,key in enumerate(ykey):
+                            for m,data_x in enumerate(data[xkey[0]]):
+                                ax.plot(data[xkey[0]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
+                            
+                    elif len(xkey) > 1 and len(ykey)==1:
+                        for n,key in enumerate(xkey):
+                            for m,data_x in enumerate(data[xkey[0]]):
+                                ax.plot(data[xkey[n]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs) 
                 
+                if "Voltage List Sweep" in data["Settings"]["Operation Mode"]:    
+                    if len(xkey) == 1 and len(ykey) == 1:
+                        cmap_L = int(np.ceil(len(data[xkey[0]])/2))
+                        
+                        # Create a new colormap with just these 5 colors
+                        fwdcmap = [plt.get_cmap("summer")(i / cmap_L) for i in range(cmap_L+1)]
+                        bwdcmap = [plt.get_cmap("winter")(i / (cmap_L-1)) for i in range(cmap_L)]
+                        print(bwdcmap)
+                        fwd = 0
+                        bwd = 0
+                                
+                        for m,data_x in enumerate(data[xkey[0]]): 
+                            if m%2 == 0:
+                                selcol = fwdcmap[fwd]
+                                fwd+=1
+                            if m%2 != 0: 
+                                selcol = bwdcmap[bwd]
+                                bwd+=1
+                            ax.plot(data[xkey[0]][m],data[ykey[0]][m],color=selcol,**plotkwargs)
+                    
+                    elif len(xkey) > 1 and len(ykey)>1:
+                                
+                            for m,data_x in enumerate(data[xkey[0]]): 
+                                
+                                ax.plot(data[xkey[n]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
+                            
+                    elif len(xkey) == 1 and len(ykey)>1:
+                        for n,key in enumerate(ykey):
+                            for m,data_x in enumerate(data[xkey[0]]):
+                                ax.plot(data[xkey[0]][m],data[ykey[n]][m],label=ykey[n],**plotkwargs)
+                            
+                    elif len(xkey) > 1 and len(ykey)==1:
+                        for n,key in enumerate(xkey):
+                            for m,data_x in enumerate(data[xkey[0]]):
+                                ax.plot(data[xkey[n]][m],data[ykey[0]][m],label=ykey[0],**plotkwargs)
                     
                     
                 ax.set_xlabel("Voltage [V]")
@@ -228,7 +263,7 @@ def bias_plotter(data,FIG,**kwargs):
                     adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
                 ax.legend()
                 
-                if kw.ideality == True:
+                if kw.ideality == True and "curing" not in data["Settings"]["Test Name"]:
                     IFIG = False
                     try:
                         
@@ -2368,6 +2403,17 @@ def is_not_discrete(data):
     return False
 
 #%%Finds all indices where the data set changes direction
+def turning_points(A):
+    turning_indices = []
+    
+    # Loop through the list, starting from the second element and going to the second-to-last element
+    for i in range(1, len(A) - 1):
+        # Check if the current element is a turning point
+        if (A[i] > A[i-1] and A[i] > A[i+1]) or (A[i] < A[i-1] and A[i] < A[i+1]):
+            turning_indices.append(i)
+    
+    return turning_indices
+
 def find_turning_points(data):
     
     turning_points = [0]
@@ -2765,11 +2811,17 @@ def Keithley_xls_read(directory,**kwargs):
                     list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
                     for key in list_keys:
                         cols[key]  = segment_sweep(cols[key],sweep_indices)
+                
+                if "Voltage List Sweep" in file_data["Settings"][sheet_name]["Operation Mode"] and "curing" in file_data["Settings"][sheet_name]["Test Name"].lower():
+                        list_keys = [key for key, value in cols.items() if isinstance(value, list) and "headers" not in key]
+                        tps = turning_points(cols["voltage"])
+                        
+                        for key in list_keys:
+                            cols[key]  = segment_sweep(cols[key],tps)
                         
                         
-                        
-                    # Store the data in the dictionary
-                    file_data[sheet_name] = cols
+                # Store the data in the dictionary
+                file_data[sheet_name] = cols
                 """
                 Determining which, if any, nanowire is the emitter or detector. The rule for this is as follows:
                     For any linear sweep:
