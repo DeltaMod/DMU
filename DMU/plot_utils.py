@@ -225,6 +225,8 @@ def DefaultGrid(ax):
     ax.grid(which='major', color='darkgrey', linestyle='--')
     ax.grid(which='minor', color='#CCCCCC', linestyle=':')  
 
+
+
 def Extract_Keithley_Labels(ddict):
     # === NW Labels === #
     
@@ -255,7 +257,12 @@ def Extract_Keithley_Labels(ddict):
         
     return({"OpLabel":OpLabel,"NWID":NWID,"baseOP":baseop,"Run":Run})
     
-def Keithley_Plot_Tagger(ezfig, ddict):
+def Keithley_Plot_Tagger(ezfig, ddict,double=False):
+    
+    if double:
+        mats = list(ddict.keys())
+        ddict = ddict[mats[0]][list(ddict[mats[0]].keys())[0]]
+        
     ax = ezfig.ax[0]
     #Line 0 File info
     line0 = "File Location: " + "Device Data\\" + ddict["Data directory"].split("Device Data\\")[1]

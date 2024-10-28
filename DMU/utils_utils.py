@@ -180,16 +180,23 @@ def find_deepest_folders(root_directory,must_include=None):
 
     return deepest_folders
 
-def find_folders_containing_filetype(root_directory,must_include=None,filetype=None):
+def find_folders_containing_filetype(root_directory,must_include=None,filetype=None,skip_if_name =None,return_progress=False):
     """
     Example use: Measurement_Folders = find_folders_containing_filetype(MDIR,must_include="DFR1-GG",filetype=".json")
     """
     contains_filetype = []
     
     for root, dirs, files in os.walk(root_directory):
+        
         if must_include in root:
             if not files: #Skip if a folder contains no files
                 continue
+                
+            if skip_if_name in root.split("\\")[-1]: #Skip if a specific folder is stepped into.
+                continue
+            
+            if return_progress:
+                print("searching " + root)
             if filetype != None:
                 if any(file.lower().endswith(filetype) for file in files):
                     contains_filetype.append(root)

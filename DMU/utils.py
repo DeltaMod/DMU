@@ -75,7 +75,277 @@ def AbsPowIntegrator(Data,x,y,z,WL):
     return(P_tot)
   
 #%%
+def communication_comparison_plotter(matdict,FIG,**kwargs):
+    #ONLY FOR USE WITH OUR KEITHLEY DATA
+    rcLinewidth   = plt.rcParams['lines.linewidth']
+    rcM_edgeW = plt.rcParams['lines.markeredgewidth']
+    rcM_size = plt.rcParams['lines.markersize']
+    kwargdict = {'title':'title','tit':'title',
+                 'cols':'cols',
+                 'ncols':'ncols',
+                 'bounds_padding':'bounds_padding',
+                 "legend_loc":"legend_loc",
+                 "legend_off":"legend_off"}
+    
+    kuniq = np.unique(list(kwargdict.keys()))
+    Pkwargs = {}
+    #Filtering out the function kwargs from the plot kwargs
+    for key in kwargs.keys():
+        if key not in kuniq:
+            kwargdict[key] = key
+    #Collecting kwargs
+    kw = KwargEval(kwargs, kwargdict,title=None,cols=None,ncols=1,bounds_padding=[0.15,0.85,0.125,0.95],legend_loc="best",legend_off=(0,0,0,0))
+    
+    xkey = []; ykey = []; fwdbwd = []
+    
+    ax = FIG.ax[0]
+        
+    #Separating plot kwargs into a different dict
+    for key,val in kwargs.items():
+        if key not in kuniq:
+            Pkwargs[key] = val
+    figsetup = False
+    alldata = []
+    voltrange = [[],[]]
+    IErange   = [[],[]]
+    IDrange   = [[],[]]
+    
+    for mat,matdata in matdict.items():
+        ind = 0
+        MaxV    = [np.max(run[run["emitter"]["colname"]]) for runID,run in matdata.items()]
+        MaxDI   = [np.max(run[run["detector"]["colname"].replace("voltage","current")]) for runID,run in matdata.items()]
+        MaxEI   = [np.max(run[run["emitter"]["colname"].replace("voltage","current")]) for runID,run in matdata.items()]
+        MinV    = [np.min(run[run["emitter"]["colname"]]) for runID,run in matdata.items()]
+        MinDI   = [np.min(run[run["detector"]["colname"].replace("voltage","current")]) for runID,run in matdata.items()]
+        MinEI   = [np.min(run[run["emitter"]["colname"].replace("voltage","current")]) for runID,run in matdata.items()]
+        
+        voltrange[0].append(np.min(MinV));  voltrange[1].append(np.max(MaxV))
+        IErange[0].append(np.min(MinEI));  IErange[1].append(np.max(MaxEI))
+        IDrange[0].append(np.min(MinDI));  IDrange[1].append(np.max(MaxDI))
+        
+        runind = MaxDI.index(np.max(MaxDI))
+        alldata.append(matdata[list(matdata.keys())[runind]])
 
+    for i,data in enumerate(alldata):  
+        mat = list(matdict.keys())[i]
+        keys = data['col headers']
+        #Test if they colheader keys are the actual data keys!
+    
+        plotkwargs = {}
+        
+        for i,ll in enumerate(xkey):
+            for k,v in Pkwargs.items():
+                try: 
+                    plotkwargs[k] = v[i]
+                except:
+                    plotkwargs[k] = v
+                    
+        for k in keys:
+            if "voltage" in k.lower():
+                xkey.append(k)
+            elif "current" in k.lower():
+                ykey.append(k)
+    
+    
+        xkey.sort(); ykey.sort()
+        
+        if kw.cols == None:
+            cols = {"IE":[cmaps["tab20c"](ind),cmaps["tab20c"](ind+1)],
+                    "VE":[cmaps["tab20c"](ind+4),cmaps["tab20c"](ind+5)],
+                    "ID":[cmaps["tab20c"](ind+8),cmaps["tab20c"](ind+9)]}
+    
+        emitter  = data['emitter']
+        detector = data['detector']
+            
+        #We want to show: emitter voltage on both top and bottom plots, and only detector current on the top plot. 
+        Em_V_key = data["emitter"]["colname"]
+        Em_I_key = data["emitter"]["colname"].replace("voltage","current")
+        
+        Det_V_key = data["detector"]["colname"]
+        Det_I_key = data["detector"]["colname"].replace("voltage","current")
+        
+        Em_V      =   data[Em_V_key]
+        Em_I      =   data[Em_I_key]
+        Det_V     =  data[Det_V_key]
+        Det_I     =  data[Det_I_key]
+        
+        #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)
+        
+        if abs(np.max(Det_I)) < abs(np.min(Det_I)):
+            Det_I = -np.array(Det_I)
+        
+        if abs(np.max(Em_I)) < abs(np.min(Em_I)):
+            if Em_V[Em_I.index(np.min(Em_I))] < 0:
+                Em_V = -np.array(Em_V)
+                
+            Em_I = -np.array(Em_I)
+        
+        if not figsetup:
+            FIG.fig,FIG.ax[0] = plt.subplots()
+            
+            FIG.ax[1] = FIG.ax[0].twinx()
+            FIG.ax[2] = FIG.ax[0].twinx()
+            FIG.ax[0].patch.set_alpha(0)  # Set the background behind everything
+            FIG.ax[1].patch.set_zorder(0)
+            FIG.ax[2].patch.set_zorder(0)
+            
+            FIG.ax[0].set_zorder(2)
+            FIG.ax[1].set_zorder(1)
+            
+            FIG.ax[0].set_xlabel("Time [s]")
+            FIG.ax[1].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["ID"][0])
+            FIG.ax[2].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
+            FIG.ax[0].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
+            y_range = None
+            pn = []
+        pn.append(FIG.ax[1].plot(data["Time"][0:len(Det_I)],Det_I,label = '$I_{R,'+mat+'}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth,zorder=5)[0])
+        pn.append(FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_I,label = '$I_{E,'+mat+'}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth,zorder=4)[0])
+        pn.append(FIG.ax[0].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label = '$V_{E,'+mat+'}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5,zorder=6)[0])
+      
+        figsetup = True
+        ind += 1
+        
+        
+        
+
+    # Get the right spine of ax[2] 
+    bboxes = {}
+    for ax in FIG.ax:
+        bbox = FIG.ax[ax].get_position()
+        
+        bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
+        bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3]; 
+        FIG.ax[ax].set_position(bbox)
+        bboxes[ax] = bbox
+
+    
+    
+    #We want to set axis limits so that Voltage = 90% of the ylim
+    def rpad(data,ratio):
+        drange = np.max(data)-np.min(data)
+        dpad   = (drange*(1/ratio) - drange)/2
+        return([np.min(data)-dpad,np.max(data)+dpad],dpad)
+
+    V_range = 0.925
+    
+    Vlim,Vpad = rpad(voltrange,0.925)
+    
+    FIG.ax[0].set_ylim(Vlim)
+    
+                                
+    #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
+    
+    try: 
+        RM1 = np.array([(np.min(voltrange[0]) - Vpad)/(Vlim[1] - Vlim[0]) ,(np.max(voltrange[1]) + Vpad)/(Vlim[1] - Vlim[0])])  
+        RM2 = np.array([(np.min(IErange[0]))/(np.max(IErange[1]) - np.min(IErange[0])) ,(np.max(IErange[1]))/(np.max(IErange[1]) - np.min(IErange[0]))])  
+    except:
+        None
+    #NOTE: 0.5 RATIO MOD means that 0.5 of the TOTAL RANGE should fit.
+        
+    maxmod = 1 - np.abs(RM1[1] - RM2[1])
+    minmod = -(1-np.max(np.abs(RM1)))
+    #%%
+    def mod_mod(val):
+        #0.5 = 2, 1 = 1
+        mod = 1/val
+        return(mod)
+    #%%
+
+    DetIMod = 1.4*mod_mod(RM1[1])
+    EmIMod  = 1.2*mod_mod(RM1[1])
+    
+    FIG.ax[1].set_ylim(np.max(np.abs(IDrange))*minmod*DetIMod, 
+                       np.max(np.abs(IDrange))*maxmod*DetIMod)  
+    FIG.ax[2].set_ylim(np.max(np.abs(IErange))*minmod*EmIMod,
+                       np.max(np.abs(IErange))*maxmod*EmIMod)  
+    
+    align_axis_zeros([FIG.ax[1],FIG.ax[2],FIG.ax[0]])
+    
+    for nax in FIG.ax:
+        adjust_ticks(FIG.ax[nax],which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
+
+
+    ticklabelwidth = dummy_text_params("−0.00",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
+    #We will get the width of a single "-" in figure coordinates too.
+    minuslabelwidth = dummy_text_params("−",FIG,fontsize=plt.rcParams["ytick.labelsize"],usetex=plt.rcParams["text.usetex"])["width"] # Get the width of the bounding box in figure coordinates
+    
+    spine_move = FIG.fig.dpi*4.01*ticklabelwidth
+    spine_move_fig = FIG.ax[2].transAxes.inverted().transform((spine_move, 0))
+    
+    FIG.ax[2].spines.right.set_position(("outward",spine_move))
+
+    
+    #Setting Spine colours and tickparameters
+    FIG.ax[1].yaxis.label.set_color(cols["ID"][0])
+    FIG.ax[2].yaxis.label.set_color(cols["IE"][0])
+    FIG.ax[0].yaxis.label.set_color(cols["VE"][0])
+    
+    
+    FIG.ax[0].tick_params(which="both", axis='y', colors=cols["VE"][0])
+    FIG.ax[1].tick_params(which="both", axis='y', colors=cols["ID"][0])
+    FIG.ax[2].tick_params(which="both",axis='y', colors=cols["IE"][0])
+    
+    FIG.ax[0].spines["left"].set_color(cols["VE"][0])
+    FIG.ax[1].spines["right"].set_color(cols["ID"][0])
+    FIG.ax[2].spines["right"].set_color(cols["IE"][0])
+    
+    FIG.ax[1].tick_params(axis='x')
+    legend = FIG.ax[1].legend(ncol=kw.ncols,handles=[*pn],loc=kw.legend_loc,frameon=False) 
+    # Get the font size for the legend text
+   
+    if kw.legend_loc == "upper center":
+        legendheight = dummy_text_params("DUMMY",FIG,fontsize=plt.rcParams["legend.fontsize"])["height"] # Get the width of the bounding box in figure coordinates
+        for t in legend.get_texts(): t.set_va('bottom')
+        legend.set_bbox_to_anchor([sum(x) for x in zip((0, 0.6*legendheight, 1, 1),kw.legend_off)])
+
+
+    t1 = FIG.ax[1].yaxis.get_offset_text().get_position()
+    t2 = FIG.ax[2].yaxis.get_offset_text().get_position()
+   
+    FIG.ax[1].yaxis.get_offset_text().set_position((t1[0] + 0.125,t1[1] + 0.125))
+    FIG.ax[2].yaxis.get_offset_text().set_position((t2[0] + -spine_move_fig[0]+0.04,t2[1] + 0.125))
+
+    for ax in FIG.ax:
+        FIG.ax[ax].spines["left"].set_color(cols["VE"][0])
+    
+ 
+
+    for ax in FIG.ax:
+        if ax != 0:
+            move_ax = False
+            
+            y_min, y_max = FIG.ax[ax].get_ylim()
+            
+            # Get the y-tick positions
+            yticks = FIG.ax[ax].get_yticks()
+            
+            # Filter tick labels based on whether they are within the y-axis limits
+            in_bounds_labels = [tick for tick in yticks if y_min <= tick <= y_max]
+            
+            if np.min(in_bounds_labels)<0:
+                move_ax = True
+                        
+            if move_ax:
+                for j, tickobj in enumerate(FIG.ax[ax].get_yticklabels()):
+                                                        
+                    ticktext   = tickobj.get_text()
+                    if ticktext == "":
+                        ticktext = "-1"
+                        
+                    if float(ticktext.replace("$\\mathdefault{","").replace("}$","").replace("−","-"))>=0:
+                        tick_position = tickobj.get_position()
+
+                        # Create a new position with the x-axis translation
+                        new_position = (tick_position[0] + 0.8*minuslabelwidth, tick_position[1])
+         
+                        # Set the new position for the tick label
+                        tickobj.set_position(new_position)
+
+      
+                
+                
+                
+                
 def bias_plotter(data,FIG,**kwargs): 
     rcLinewidth   = plt.rcParams['lines.linewidth']
     rcM_edgeW = plt.rcParams['lines.markeredgewidth']

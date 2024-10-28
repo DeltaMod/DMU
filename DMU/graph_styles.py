@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 ## for Palatino and other serif fonts use:
 def DEF_BBOX(style="default",bboxstyle="default"):
     
-    stylelist = ["default","WideNarrow","TwoWide","PP1_Wide","PP2_4by3","PP3_4by4"]  
+    stylelist = ["default","WideNarrow","TwoWide","PP1_Wide","PP2_4by3","PP3_4by4","PP4_WideTall"]  
     
     bblist= ["symmetric","wide symmetric","right asymmetric","left asymmetric","default"]
     #single (0.165,0.835,0.125,0.875),
@@ -13,6 +13,11 @@ def DEF_BBOX(style="default",bboxstyle="default"):
                           "right asymmetric" : (0.15,0.75,0.18,0.875),
                           "left asymmetric"  : (0.25,0.85,0.18,0.875),
                           "default"          : (0.05,0.95,0.05,0.875)},
+              "PP4_WideTall":{"symmetric"        : (0.13,0.87,0.18,0.875),
+                              "wide symmetric"   : (0.2,0.8,0.15,0.8),
+                              "right asymmetric" : (0.1,0.7,0.23,0.9),
+                              "left asymmetric"  : (0.25,0.85,0.18,0.875),
+                              "default"          : (0.05,0.95,0.05,0.875)},
               "PP2_4by3":{"symmetric"        : (0.165,0.835,0.125,0.875),
                           "wide symmetric"   : (0.25,0.75,0.125,0.875),
                           "right asymmetric" : (0.15,0.75,0.125,0.875),
@@ -251,4 +256,52 @@ def graph_style(*var):
                 		'figure.autolayout':False,
                         'figure.constrained_layout.use':False
                         })
+    elif style == "PP4_WideTall": 
+        bigfont = 36
+        mediumfont = 32
+        plt.rcParams.update({
+                    'axes.formatter.use_mathtext':True,
+                    'text.usetex': False,
+                    #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
+                    'font.family': 'Arial',
+                    'font.size': bigfont,
+                    'xtick.minor.visible':True,
+                    'ytick.minor.visible':True,
+                    'figure.dpi':200,   
+                    'figure.figsize':[16,9],
+                    'figure.titlesize':mediumfont-4,
+                    'xtick.labelsize':mediumfont,
+                    'ytick.labelsize':mediumfont,
+                    'legend.fontsize':mediumfont,
+                    'lines.linewidth':4,
+                    'lines.markeredgewidth':4,
+                    'lines.markersize':13,
+                    'xtick.major.size':8,     # major tick size in points
+                    'xtick.minor.size':5,       # minor tick size in points
+                    'xtick.major.width':4,     # major tick size in points
+                    'xtick.minor.width':2,       # minor tick size in points
+                    'xtick.major.pad':  2.5,     # distance to major tick label in points
+                    'xtick.minor.pad':  2.4,     # distance to the minor tick label in points
+                    'xtick.minor.visible':True,
+                    'ytick.major.size':8,     # major tick size in points
+                    'ytick.minor.size':5,       # minor tick size in points
+                    'ytick.major.width':4,     # major tick size in points
+                    'ytick.minor.width':2,       # minor tick size in points
+                    'ytick.major.pad': 2.5,     # distance to major tick label in points
+                    'ytick.minor.pad': 2.4,     # distance to the minor tick label in points
+                    'ytick.minor.visible':True,
+                    'axes.linewidth': 2,     # edge line width
+                    'legend.title_fontsize':mediumfont,
+                    'legend.borderpad' :0.3, #0.4
+                    'legend.labelspacing' : 0.3, #0.4
+                    'legend.handlelength' : 0.4, #1.0
+                    'legend.handleheight' : 0.7, #0.7
+                    'legend.handletextpad':0.4 , #0.8
+                    'legend.borderaxespad':0.4 , #0.5
+                    'legend.columnspacing':0.3, #2.0
+                    'axes.grid' : False,
+                    'axes.axisbelow':True,
+                    'figure.autolayout':False,
+                    'figure.constrained_layout.use':False
+                    })
         
