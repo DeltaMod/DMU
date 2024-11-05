@@ -73,10 +73,18 @@ def AbsPowIntegrator(Data,x,y,z,WL):
         P_tot.append(np.sum(BivarSpline))
     
     return(P_tot)
-  
+#%%
+def return_nonzero_current(voltage,current):
+    nzI = current[np.where(voltage>np.max(voltage)/2)[0]]
+    nzV = voltage[np.where(voltage>np.max(voltage)/2)[0]]
+    
 #%%
 def communication_comparison_plotter(matdict,FIG,**kwargs):
+    #Dict we return with material information
+    comms = {}
+    
     #ONLY FOR USE WITH OUR KEITHLEY DATA
+    
     rcLinewidth   = plt.rcParams['lines.linewidth']
     rcM_edgeW = plt.rcParams['lines.markeredgewidth']
     rcM_size = plt.rcParams['lines.markersize']
@@ -123,7 +131,7 @@ def communication_comparison_plotter(matdict,FIG,**kwargs):
         IErange[0].append(np.min(MinEI));  IErange[1].append(np.max(MaxEI))
         IDrange[0].append(np.min(MinDI));  IDrange[1].append(np.max(MaxDI))
         
-        runind = MaxDI.index(np.max(MaxDI))
+        runind = list(np.abs(MaxDI)).index(np.max(np.abs(MaxDI)))
         alldata.append(matdata[list(matdata.keys())[runind]])
 
     for i,data in enumerate(alldata):  
@@ -201,7 +209,8 @@ def communication_comparison_plotter(matdict,FIG,**kwargs):
         pn.append(FIG.ax[1].plot(data["Time"][0:len(Det_I)],Det_I,label = '$I_{R,'+mat+'}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth,zorder=5)[0])
         pn.append(FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_I,label = '$I_{E,'+mat+'}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth,zorder=4)[0])
         pn.append(FIG.ax[0].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label = '$V_{E,'+mat+'}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5,zorder=6)[0])
-      
+        comms[mat] = {}
+        comms[mat]["Time"]
         figsetup = True
         ind += 1
         
@@ -340,8 +349,8 @@ def communication_comparison_plotter(matdict,FIG,**kwargs):
          
                         # Set the new position for the tick label
                         tickobj.set_position(new_position)
-
-      
+    
+    return(comms)
                 
                 
                 
