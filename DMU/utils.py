@@ -74,10 +74,15 @@ def AbsPowIntegrator(Data,x,y,z,WL):
     
     return(P_tot)
 #%%
-def return_nonzero_current(voltage,current):
-    nzI = current[np.where(voltage>np.max(voltage)/2)[0]]
-    nzV = voltage[np.where(voltage>np.max(voltage)/2)[0]]
-    
+def return_forward_bias_matched_data(voltage,**kwargs):
+    #This is assuming that the current has already been swapped around to match when the emitter is in forward bias.
+    fwd_ind = np.where(voltage>np.max(voltage)/2)[0]
+    data = {}
+    data["voltage"] = np.array(voltage)[fwd_ind]
+    for key in kwargs.keys():
+        data[key] = np.array(kwargs[key])[fwd_ind]
+    return(data)
+
 #%%
 def communication_comparison_plotter(matdict,FIG,**kwargs):
     #Dict we return with material information
@@ -209,8 +214,7 @@ def communication_comparison_plotter(matdict,FIG,**kwargs):
         pn.append(FIG.ax[1].plot(data["Time"][0:len(Det_I)],Det_I,label = '$I_{R,'+mat+'}$ [A]',color=cols["ID"][1],**plotkwargs,linewidth=rcLinewidth,zorder=5)[0])
         pn.append(FIG.ax[2].plot(data["Time"][0:len(Det_I)],Em_I,label = '$I_{E,'+mat+'}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=rcLinewidth,zorder=4)[0])
         pn.append(FIG.ax[0].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label = '$V_{E,'+mat+'}$ [V]',color=cols["VE"][1],linewidth = rcLinewidth*0.5,zorder=6)[0])
-        comms[mat] = {}
-        comms[mat]["Time"]
+        comms[mat] = return_forward_bias_matched_data(Em_V,Time=data["Time"],Em_I=Em_I,Det_I=Det_I)
         figsetup = True
         ind += 1
         
@@ -297,9 +301,20 @@ def communication_comparison_plotter(matdict,FIG,**kwargs):
     FIG.ax[0].spines["left"].set_color(cols["VE"][0])
     FIG.ax[1].spines["right"].set_color(cols["ID"][0])
     FIG.ax[2].spines["right"].set_color(cols["IE"][0])
+    def reorder_legend(handles,ncol):
+        rep = int(np.ceil(len(handles)/ncol))
+        matrix = np.array(handles).reshape(ncol, rep, order='F')  # 'F' for Fortran-like (column-wise)
+        # Convert the matrix back to a row-wise list
+        rowwise_list = matrix.flatten(order='C')  # 'C' for C-like (row-wise)
+        return(rowwise_list)
     
     FIG.ax[1].tick_params(axis='x')
-    legend = FIG.ax[1].legend(ncol=kw.ncols,handles=[*pn],loc=kw.legend_loc,frameon=False) 
+    legend_entries = reorder_legend([*pn],kw.ncols)
+    #Uncomment rows below to remove (first) waveguided material. Useful for iterative testing.
+    #for i in [3,4,5]:
+    #    pn[i].remove()
+    
+    legend = FIG.ax[1].legend(ncols=kw.ncols,handles=[*legend_entries],loc=kw.legend_loc,frameon=False) 
     # Get the font size for the legend text
    
     if kw.legend_loc == "upper center":

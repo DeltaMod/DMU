@@ -140,9 +140,11 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
                     sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
                     pix_size_string = "ap_image_pixel_size"
                     sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
+                
             except:
                 print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
-                
+        elif "SUPRA 35-29-41" in sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
         elif "Gemini" in sem_metadata['sv_serial_number'][1]:
             pix_size_string = "ap_image_pixel_size"
         
@@ -403,6 +405,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
     inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
 
     resize = 1/np.min([insert["size"] for insert in inserts])
+    
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
         image_overview_path = ""
@@ -411,7 +414,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         image_overview_path = path+image_overview_name
     
     
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict,rotation=rotation)
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize*2,filterdict=filterdict,rotation=rotation)
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
@@ -441,7 +444,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         insert_newpath = path+insert_name
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_newpath, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
                                                            force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"],rotation=insert["rotation"])
-        print(insert["delta_offset"])
+
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
