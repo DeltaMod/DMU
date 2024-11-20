@@ -414,7 +414,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         image_overview_path = path+image_overview_name
     
     
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize*2,filterdict=filterdict,rotation=rotation)
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict,rotation=rotation)
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
