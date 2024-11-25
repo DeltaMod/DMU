@@ -3426,9 +3426,10 @@ def Ideality_Factor(I,V,**kwargs):
                   "data_range":"data_range","dr":"data_range",
                   'N':'N','pts':'N',
                   "p0":"p0",'guess':"p0",
-                  "n0":"n0","I0":"I0"}
+                  "n0":"n0","I0":"I0",
+                  "incr_pad":"incrpad"}
     
-    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,I0=None,n0=None,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
+    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,I0=None,n0=None,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25,incrpad=[0,0])
    
     q = constants.e
     k = constants.Boltzmann
@@ -3472,6 +3473,20 @@ def Ideality_Factor(I,V,**kwargs):
 
     
     incr = strictly_increasing(I)
+    try:
+        ilow = np.min(incr["longest"])
+        ihigh = np.max(incr["longest"])
+        if kw.incrpad[0]>0:
+            for i in range(ilow-1,ilow-kw.incrpad[0]-1,-1):
+                if i >=0:
+                    incr["longest"].insert(0,i)
+        if kw.incrpad[1]>0:
+            for i in range(ihigh+1,ihigh+1+kw.incrpad[1]):
+                if i <=len(V):
+                    incr["longest"].append(i)
+    except:
+        None
+
 
     if not incr:
         print("dataset not long enough to fit ideality from")
