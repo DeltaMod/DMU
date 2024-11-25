@@ -91,7 +91,7 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
     return(cropl+offset,length-cropr+offset)
 
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
-                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,filterdict={}):
+                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={}):
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
     Example svg_output = 'output.svg'
@@ -129,6 +129,28 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     Defining the default scalebar and text settings
     """
     
+    with tifffile.TiffFile(image_path) as tif:
+        sem_metadata = tif.sem_metadata
+        if sem_metadata == None:
+            
+            try:
+                if tif.fei_metadata["System"]["SystemType"] == 'Nova NanoLab':                
+                    sem_metadata = tif.fei_metadata["EScan"]
+                    sem_metadata["sv_serial_number"] = ["Serial Code",tif.fei_metadata["System"]["SystemType"]]
+                    sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
+                    pix_size_string = "ap_image_pixel_size"
+                    sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
+                
+            except:
+                print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
+        elif "SUPRA 35-29-41" in sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
+        elif "Gemini" in sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
+        
+        else:
+            pix_size_string = "ap_pixel_size"
+            
     
     def scalebar_style_dictgen(frame=None,framepad=[2,2],stroke_width=4,stroke_style="line",
                                  bar_color="white",frame_color="black",frame_opacity=1.0,
@@ -158,8 +180,11 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             im = im.crop((annocrop[0],annocrop[1],im.width-annocrop[2],im.height-annocrop[3]))
             
         
-        
         og_w,og_h = (im.width, im.height)
+        
+        if tweak_aspect != [1,1]:
+            im = im.resize((int(im.width*tweak_aspect[0]),int(im.height*tweak_aspect[1])),resample=resampling)    
+            og_w,og_h = (im.width, im.height)
         
         if force_aspect!=False:
             og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
@@ -172,24 +197,28 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             
             im = im.rotate(rotation, expand=True)
             
+        
             
         if force_aspect != False:
             xd,yd = find_nearest_aspect_dim(im.width,im.height,force_aspect)
             xcrop = split_crop_bounds_evenly(im.width, xd,offset=delta_offset[0])
             ycrop = split_crop_bounds_evenly(im.height, yd,offset=delta_offset[1])
             im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
- 
+        
+        
+            
         if crop_rescale == True:
             pix_rescale = 1/(og_w/im.width)
             im = im.resize((og_w,og_h),resample=resampling)
         else:
             pix_rescale = 1
         
+
             
         if resize != None:
             rszm = resize
             im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
-            pix_rescale *=1/rszm
+            pix_rescale *=1/(rszm)
         else:
             rszm = 1
             
@@ -211,36 +240,16 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3,"m":1e+0}
     #Find the scale parameters from the image in question: 
     
-   
-    with tifffile.TiffFile(image_path) as tif:
-        sem_metadata = tif.sem_metadata
-        if sem_metadata == None:
             
-            try:
-                if tif.fei_metadata["System"]["SystemType"] == 'Nova NanoLab':                
-                    sem_metadata = tif.fei_metadata["EScan"]
-                    sem_metadata["sv_serial_number"] = ["Serial Code",tif.fei_metadata["System"]["SystemType"]]
-                    sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
-                    pix_size_string = "ap_image_pixel_size"
-                    sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
-            except:
-                print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
-                
-        elif "Gemini" in sem_metadata['sv_serial_number'][1]:
-            pix_size_string = "ap_image_pixel_size"
-        
-        else:
-            pix_size_string = "ap_pixel_size"
-            
-        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale 
-        rtilt = np.radians(sem_metadata['ap_stage_at_t'][1])
-        rrot = np.radians(rotation)
+    pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale 
+    rtilt = np.radians(sem_metadata['ap_stage_at_t'][1])
+    rrot = np.radians(rotation)
 
-        if abs(sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
+    if abs(sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
 
-            L = pix_size/np.sin(rtilt)
-            pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
-            #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
+        L = pix_size/np.sin(rtilt)
+        pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
+        #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
 
     #Define bar length and height. Note that setting the height to zero removes it
 
@@ -392,10 +401,11 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
     """
     def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop=[0,0,0,0],filterdict={},rotation=0):
         return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict,"rotation":rotation})
-    
+    print(inserts)
     inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
 
     resize = 1/np.min([insert["size"] for insert in inserts])
+    
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
         image_overview_path = ""
@@ -434,6 +444,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         insert_newpath = path+insert_name
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_newpath, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
                                                            force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"],rotation=insert["rotation"])
+
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
