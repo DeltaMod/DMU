@@ -3080,8 +3080,10 @@ def Keithley_xls_read(directory,**kwargs):
                             
                     cols["col headers"].append(key)
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
-                
+            
                 stats    = file_data["Settings"][sheet_name]
+
+
                 # smu_data = file_data["LOG"][sheet_name]
                 stats["NWID"] = ["NW1","NW1","NW2","NW2"]
                 if type(stats['Npts']) == int:
@@ -3452,6 +3454,155 @@ def Ideality_Factor(I,V,**kwargs):
     #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
     
     def Diode_EQ(V,I_0,n):
+        return(I_0 * (np.exp((q*V)/(n*k*kw.T)) - 1)) 
+    
+    
+    #We need to turn the data the right way round (forward bias is positive voltages for positive currents)
+    if max(I) < np.abs(min(I)):
+        I = np.multiply(-1,I)
+        V = np.multiply(-1,V)
+
+    if V[-1]<V[0]:
+        V = np.flip(V)
+        I = np.flip(I)
+    
+
+    #The old code relied on calculating the order of magnitude range, we will not do this and will instead stick to 
+    #V of first point of strictly increasing series -> 1.5 V this means the fit range based on oom is no longer relevant
+    #New fit_range is [Vmin,Vmax] now
+    
+    if type(V) == list:
+        V = np.array(V)
+    if type(I) == list:
+        I = np.array(I)
+
+    if kw.fit_range == None:
+        kw.fit_range = [0,1] # Voltage range
+    
+    if type(kw.fit_range) in [float,int]:
+        kw.fit_range = [0,kw.fit_range]
+        
+    
+    
+    #Note: Strictly Increasing returns the indices of all {"sublists":sublists,"longest":longest_list,"noise":noise_indices} 
+    #We will pick the longest sequential series
+
+    
+    incr = strictly_increasing(I)
+
+    if not incr:
+        print("dataset not long enough to fit ideality from")
+        return(False)
+    # except:
+    #         print("dataset contains no strictly increasing value ranges")
+    #         return(False)
+    
+    Vseq   = V[incr["longest"]]
+    Iseq   = I[incr["longest"]]
+
+    Inoise = I[incr["noise"]] 
+    Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
+    meanNoise = np.mean(Inoise)
+    
+    #Now we need to find the baseline, this will be done by taking the median of the noise points for a minimum!
+
+    Imax    = np.max(Iseq) #Save this to set the plot range
+    try:
+        Ibase   = Iseq[1]
+    except:
+        Ibase = Iseq[0]
+    
+    indrange = np.where(Vseq<kw.fit_range[1])[0]
+    if len(indrange)<3:
+        return(False)
+    I_adjfit = Iseq[np.where(Iseq<Iseq[indrange[-1]])]
+    V_adjfit = Vseq[np.where(Iseq<Iseq[indrange[-1]])]
+    
+    V_fit = V_adjfit
+    I_fit = I_adjfit
+    
+    if len(V_fit) < 3:
+        return(False)
+
+    if kw.plot_range == "all":
+        kw.plot_range = [min(V),max(V)]
+    
+    elif kw.plot_range == "positive":
+        kw.plot_range = [0,max(V)]
+        
+    elif kw.plot_range == None:
+        kw.plot_range = [abs(V_fit[0])/2,max(V)]
+        
+    if type(kw.data_range) == list:
+        v_id =  next((i for i, x in enumerate(V) if x > kw.data_range[0]), -1)
+        v_fd =  next((i for i, x in enumerate(V) if x > kw.data_range[1]), -1)
+        
+    if kw.data_range == "positive":
+        v_id =  next((i for i, x in enumerate(V) if x > 0), -1)
+        v_fd =  next((i for i, x in enumerate(V) if x > max(V)), -1)
+        
+        V_data = V[v_id:v_fd]
+        I_data = I[v_id:v_fd]
+    else:
+        V_data = V
+        I_data = I
+
+
+    if kw.p0 == None and kw.n0 == None and kw.I0 == None:
+        kw.n0 = 2
+        kw.I0 = Ibase
+        kw.p0 = [kw.I0,kw.n0]
+    
+    if kw.n0 == None:
+        kw.n0 = 2
+    if kw.I0 == None:
+        kw.I0 = Ibase
+        
+    if kw.p0 == None:
+        kw.p0 = [kw.I0,kw.n0]
+    
+    if kw.use_sigma:
+        if kw.sigma_type == "linear":
+            sigmalist = np.linspace(kw.sigma_range[0],kw.sigma_range[1],len(V_fit))
+        elif kw.sigma_type == "exponential":
+            sigmalist = np.logspace(kw.sigma_range[0],kw.sigma_range[1],len(V_fit))
+            sigmalist = sigmalist/np.max(sigmalist)
+        for i, item in enumerate(sigmalist):
+            if i/len(sigmalist)<kw.repeat_sigma:
+                
+                sigmalist[i] = sigmalist[0]
+        popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0,sigma=sigmalist)
+    if not kw.use_sigma:
+        popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)
+    V_new  = np.linspace(kw.plot_range[0],kw.plot_range[1],kw.N)
+    I_new  = Diode_EQ(V_new, *popt)
+    
+    V_new = V_new[np.where(I_new<=np.max(I))]
+    I_new = I_new[np.where(I_new<=np.max(I))]
+    shottky = False
+    if V_fit[0]<0.15:
+        shottky = True
+
+    return({"n":popt[1],"par":popt,"covar":pcov,"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
+
+def Ideality_Factor_SeriesResistance(I,V,**kwargs):
+    kwargdict = {'T':'T','temp':'T','temperature':'T',
+                  'fit_range':'fit_range','fr':'fit_range',
+                  'plot_range':'plot_range','pr':'plot_range',
+                  "data_range":"data_range","dr":"data_range",
+                  'N':'N','pts':'N',
+                  "p0":"p0",'guess':"p0",
+                  "n0":"n0","I0":"I0"}
+    
+    kw = KwargEval(kwargs, kwargdict,T=273,fit_range=[0,1],plot_range=None,N=200,I0=None,n0=None,p0=None,data_range=None,use_sigma = True, sigma_range=[0.001,100],sigma_type="linear",repeat_sigma=0.25)
+   
+    q = constants.e
+    k = constants.Boltzmann
+    
+    #def Diode_EQ(V,I_0,n):
+    #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
+    
+    def Diode_EQ(V,I_0,n,Rs):
         return(I_0 * (np.exp((q*V)/(n*k*kw.T)) - 1)) 
     
     
