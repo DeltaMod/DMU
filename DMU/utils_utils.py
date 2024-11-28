@@ -191,6 +191,7 @@ def find_folders_containing_filetype(root_directory,must_include=None,filetype=N
         if must_include in root:
             if not files: #Skip if a folder contains no files
                 continue
+
             if skip_if_name:   #Checks if skip_if_name is not None or False
                 if skip_if_name in root.split("\\")[-1]: #Skip if a specific folder is stepped into.
                     continue
