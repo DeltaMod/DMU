@@ -3435,7 +3435,22 @@ def txtparse(**kwargs):
                     
                     
     return(out_dict)
+def Correct_Forward_Voltage(I,V):
+    #We need to turn the data the right way round (forward bias is positive voltages for positive currents)
+    if max(I) < np.abs(min(I)):
+        I = np.multiply(-1,I)
+        V = np.multiply(-1,V)
 
+    if V[-1]<V[0]:
+        V = np.flip(V)
+        I = np.flip(I)
+
+    if type(V) == list:
+        V = np.array(V)
+    if type(I) == list:
+        I = np.array(I)
+    return(I,V)
+    
 def Ideality_Factor(I,V,**kwargs):
     kwargdict = {'T':'T','temp':'T','temperature':'T',
                   'fit_range':'fit_range','fr':'fit_range',
@@ -3451,6 +3466,7 @@ def Ideality_Factor(I,V,**kwargs):
     q = constants.e
     k = constants.Boltzmann
     
+    I,V = Correct_Foward
     #def Diode_EQ(V,I_0,n):
     #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
     
