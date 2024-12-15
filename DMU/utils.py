@@ -84,6 +84,15 @@ def return_forward_bias_matched_data(voltage,**kwargs):
     return(data)
 
 #%%
+def reorder_legend(ax,ncol=1):
+    handles = ax.get_legend_handles_labels()
+    handles = [*handles[0]]
+    rep = int(np.ceil(len(handles)/ncol))
+    matrix = np.array(handles).reshape(ncol, rep, order='F')  # 'F' for Fortran-like (column-wise)
+    # Convert the matrix back to a row-wise list
+    rowwise_list = matrix.flatten(order='C')  # 'C' for C-like (row-wise)
+    return(rowwise_list)
+#%%
 def communication_comparison_plotter(matdict,FIG,**kwargs):
     #Dict we return with material information
     comms = {}
@@ -1860,6 +1869,20 @@ class ezplot(object):
             kw.ax_id = 0
         return(kw.ax_id)
     
+    def apply_bbox(self,ax=0,bbox=[0,0,0,0]):
+        if ax=="all":
+            for ax in self.ax.keys():
+                cbbox = self.ax[ax].get_position()
+                cbbox.x0 = bbox[0];  cbbox.x1 = bbox[1];
+                cbbox.y0 = bbox[2]; cbbox.y1 = bbox[3];
+                self.ax[ax].set_position(cbbox)
+        else:
+            cbbox = self.ax[ax].get_position()
+            cbbox.x0 = bbox[0];  cbbox.x1 = bbox[1];
+            cbbox.y0 = bbox[2]; cbbox.y1 = bbox[3];
+            self.ax[ax].set_position(cbbox)
+            
+    
     def fquiver(self,data,**kwargs):
         """        
         This function makes a quiver plot in the selected AXIS! (so self.ax[int].quiver(data=[x],[y],**kwargs)
@@ -3466,7 +3489,7 @@ def Ideality_Factor(I,V,**kwargs):
     q = constants.e
     k = constants.Boltzmann
     
-    I,V = Correct_Foward
+
     #def Diode_EQ(V,I_0,n):
     #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
     
