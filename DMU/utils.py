@@ -3466,32 +3466,13 @@ def Ideality_Factor(I,V,**kwargs):
     q = constants.e
     k = constants.Boltzmann
     
-    I,V = Correct_Foward
+    I,V = Correct_Forward_Voltage(I,V)
     #def Diode_EQ(V,I_0,n):
     #    return(I_0 * np.exp((q*V)/(n*k*kw.T)))    
     
     def Diode_EQ(V,I_0,n):
         return(I_0 * (np.exp((q*V)/(n*k*kw.T)) - 1)) 
     
-    
-    #We need to turn the data the right way round (forward bias is positive voltages for positive currents)
-    if max(I) < np.abs(min(I)):
-        I = np.multiply(-1,I)
-        V = np.multiply(-1,V)
-
-    if V[-1]<V[0]:
-        V = np.flip(V)
-        I = np.flip(I)
-    
-
-    #The old code relied on calculating the order of magnitude range, we will not do this and will instead stick to 
-    #V of first point of strictly increasing series -> 1.5 V this means the fit range based on oom is no longer relevant
-    #New fit_range is [Vmin,Vmax] now
-    
-    if type(V) == list:
-        V = np.array(V)
-    if type(I) == list:
-        I = np.array(I)
 
     if kw.fit_range == None:
         kw.fit_range = [0,1] # Voltage range
