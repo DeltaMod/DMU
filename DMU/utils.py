@@ -2113,7 +2113,7 @@ def json_savedata(data, filename, overwrite=False):
         with open(filename, "w") as f:
             json.dump(convert_to_json_serializable(data), f, indent=2)
 
-def pickle_dict(data, filename, overwrite=False):
+def pickle_data(data, filename, overwrite=False):
     directory = os.getcwd()
     files = [f for f in os.listdir(directory) if f.endswith('.json')]
     
