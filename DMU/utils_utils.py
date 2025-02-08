@@ -170,7 +170,7 @@ def cprint(String,**kwargs):
         else:
             return(''.join(PRINTSTR))
             
-def find_deepest_folders(root_directory,must_include=None):
+def find_deepest_folders(root_directory,must_include=""):
     deepest_folders = []
 
     for root, dirs, files in os.walk(root_directory):
@@ -180,7 +180,7 @@ def find_deepest_folders(root_directory,must_include=None):
 
     return deepest_folders
 
-def find_folders_containing_filetype(root_directory,must_include=None,filetype=None,skip_if_name =None,return_progress=False):
+def find_folders_containing_filetype(root_directory,must_include="",filetype=None,skip_if_name =None,return_progress=False):
     """
     Example use: Measurement_Folders = find_folders_containing_filetype(MDIR,must_include="DFR1-GG",filetype=".json")
     """
