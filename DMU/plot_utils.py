@@ -427,6 +427,34 @@ def strictly_increasing(items,returns="all"):
     
     return({"sublists":sublists,"longest":longest_list,"noise":noise_indices})
 
+def strictly_positive(items,returns="all"):
+    sublists = [[]]
+    lid      = 0
+    diffs = items
+    
+        
+    for i,diff in enumerate(diffs):
+        if diff>= 0:
+            sublists[lid].append(i)
+        if diff<0:
+            sublists.append([])
+            lid += 1
+    
+    lengths = np.array([len(L) for L in sublists])
+    maxlen = np.max(lengths)
+        
+    if maxlen<4:
+        return(False)
+    
+    Longlocs =  np.where(lengths == np.max(lengths))[0]
+    longest_list = sublists[int(Longlocs[0])]
+
+    if longest_list[-1]<=len(diffs):
+        longest_list = longest_list + list(np.arange(longest_list[-1],len(diffs)))
+    noise_indices = [i for i,a in enumerate(items) if i not in longest_list ]
+    
+    return({"sublists":sublists,"longest":longest_list,"noise":noise_indices})
+
 def find_turning_points(data):
     
     turning_points = [0]

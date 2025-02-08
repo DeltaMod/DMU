@@ -30,6 +30,7 @@ import natsort
 import csv
 import xlrd
 import mat73
+import pickle
 
 
 #%% Importing and executing logging
@@ -2111,7 +2112,19 @@ def json_savedata(data, filename, overwrite=False):
     else:
         with open(filename, "w") as f:
             json.dump(convert_to_json_serializable(data), f, indent=2)
- 
+
+def pickle_dict(data, filename, overwrite=False):
+    directory = os.getcwd()
+    files = [f for f in os.listdir(directory) if f.endswith('.json')]
+    
+    if filename in files and not overwrite:
+        print("RENAME YOUR FILE OR RUN DELETE IN NEXT CELL")
+    else:
+        pickle.dump(data, open( filename+".p", "wb" ) )
+   
+def unpickle_data(filename):
+    return(pickle.load( open( filename, "rb" ) ))
+            
             
 
 #%%            
@@ -3515,7 +3528,8 @@ def Ideality_Factor(I,V,**kwargs):
         V = np.array(V)
     if type(I) == list:
         I = np.array(I)
-
+    
+    
     if kw.fit_range == None:
         kw.fit_range = [0,1] # Voltage range
     
@@ -3526,9 +3540,9 @@ def Ideality_Factor(I,V,**kwargs):
     
     #Note: Strictly Increasing returns the indices of all {"sublists":sublists,"longest":longest_list,"noise":noise_indices} 
     #We will pick the longest sequential series
-
+    #incr = strictly_increasing(I)
+    incr = strictly_positive(I)
     
-    incr = strictly_increasing(I)
     try:
         ilow = np.min(incr["longest"])
         ihigh = np.max(incr["longest"])
@@ -3540,9 +3554,12 @@ def Ideality_Factor(I,V,**kwargs):
             for i in range(ihigh+1,ihigh+1+kw.incrpad[1]):
                 if i <=len(V):
                     incr["longest"].append(i)
+        
     except:
+        
         None
-
+    
+    
 
     if not incr:
         print("dataset not long enough to fit ideality from")
@@ -3551,13 +3568,16 @@ def Ideality_Factor(I,V,**kwargs):
     #         print("dataset contains no strictly increasing value ranges")
     #         return(False)
     
-    Vseq   = V[incr["longest"]]
-    Iseq   = I[incr["longest"]]
-
-    Inoise = I[incr["noise"]] 
-    Inoise = [item for item in Inoise if item <= np.mean(Inoise)*1e+2]
-    meanNoise = np.mean(Inoise)
+    Vseq   = V[incr["longest"][2:]]
+    Iseq   = I[incr["longest"][2:]]
     
+    
+    Inoise = I[incr["noise"]] 
+
+    Inoise = [item for item in Inoise if np.abs(item) <= np.abs(np.mean(Inoise))*1e+1]
+    
+    meanNoise = np.mean(Inoise)
+ 
     #Now we need to find the baseline, this will be done by taking the median of the noise points for a minimum!
 
     Imax    = np.max(Iseq) #Save this to set the plot range
@@ -3566,11 +3586,13 @@ def Ideality_Factor(I,V,**kwargs):
     except:
         Ibase = Iseq[0]
     
-    indrange = np.where(Vseq<kw.fit_range[1])[0]
+    indrange = np.where((Vseq>=kw.fit_range[0]) & (Vseq<=kw.fit_range[1]))[0]
+    
     if len(indrange)<3:
+        print("Dataset is poor, or fit range is too small")
         return(False)
-    I_adjfit = Iseq[np.where(Iseq<Iseq[indrange[-1]])]
-    V_adjfit = Vseq[np.where(Iseq<Iseq[indrange[-1]])]
+    I_adjfit = Iseq[indrange]
+    V_adjfit = Vseq[indrange]
     
     V_fit = V_adjfit
     I_fit = I_adjfit
@@ -3630,11 +3652,12 @@ def Ideality_Factor(I,V,**kwargs):
         popt, pcov = scipy.optimize.curve_fit(Diode_EQ, V_fit, I_fit,p0=kw.p0)
     V_new  = np.linspace(kw.plot_range[0],kw.plot_range[1],kw.N)
     I_new  = Diode_EQ(V_new, *popt)
+   
     
     V_new = V_new[np.where(I_new<=np.max(I))]
     I_new = I_new[np.where(I_new<=np.max(I))]
     shottky = False
-    if V_fit[0]<0.15:
+    if popt[1]<=1.2:
         shottky = True
 
     return({"n":popt[1],"par":popt,"covar":pcov,"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
@@ -3780,8 +3803,8 @@ def Ideality_Factor_SeriesResistance(I,V,**kwargs):
     V_new  = np.linspace(kw.plot_range[0],kw.plot_range[1],kw.N)
     I_new  = Diode_EQ(V_new, *popt)
     
-    V_new = V_new[np.where(I_new<=np.max(I))]
-    I_new = I_new[np.where(I_new<=np.max(I))]
+    #V_new = V_new[np.where(I_new<=np.max(I))]
+    #I_new = I_new[np.where(I_new<=np.max(I))]
     shottky = False
     if V_fit[0]<0.15:
         shottky = True
