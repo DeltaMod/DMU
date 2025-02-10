@@ -1,7 +1,7 @@
 # ATTENTION
 This is just a code-storage repository for small functions I use normally. 
  
-# LDI
+# DeltaModUtilities
 
  """ 
     General Help:
@@ -10,7 +10,7 @@ This is just a code-storage repository for small functions I use normally.
     DMU
 
     DESCRIPTION
-    Dunno Why I named it DMU, but it's catchy
+    Dunno Why I named it DMU beyond its self referentiality, but it's catchy and easy to remember
     Created on Thurs Aug 04 17:00:00 2022
     @author: Vidar Flodgren
     Github: https://github.com/DeltaMod
