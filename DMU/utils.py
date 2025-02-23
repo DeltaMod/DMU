@@ -2337,7 +2337,16 @@ def Rel_Checker(path):
         cprint(['One of the required ',DIS,' or ',Ddir,' files are missing! Consider running ','Init_LDI()',' again before continuing!'],mt=['wrn','err','wrn','err','wrn','curio','wrn'])
 
              
-#%%          
+#%%
+def collapse_dict(d):
+    #Collapses dicts to never contain lists of only a single dictionary - Useful now that we are saving data in structs in lumerical
+    if isinstance(d, dict):
+        return {k: collapse_dict(v) for k, v in d.items()}
+    elif isinstance(d, list) and len(d) == 1 and isinstance(d[0], dict):
+        return collapse_dict(d[0])
+    else:
+        return d
+          
 def MatLoader(file,**kwargs):
     """
 
@@ -2359,8 +2368,9 @@ def MatLoader(file,**kwargs):
                  'json':'json','jsonfile':'json',
                  'dir':'path','directory':'path','path':'path','p':'path',
                  'tf':'tf','txtfile':'tf',
-                 'esc':'esc','escape_character':'esc','e':'esc','esc_char':'esc'}
-    kw = KwargEval(kwargs, kwargdict,json=False,txt  = False, path = 'same', tf  = None, esc  = None)
+                 'esc':'esc','escape_character':'esc','e':'esc','esc_char':'esc',"collapse_dict":"collapse_dict"}
+    kw = KwargEval(kwargs, kwargdict,json=False,txt  = False, path = 'same', tf  = None, esc  = None,collapse_dict=True)
+    #NOTE, OLD CODE DID NOT DEFAULT TO USING COLLAPSE DICT - so we have to change it if the code fails to run
     
     #Mat File Loading
     FIELDDICT = {}
@@ -2508,6 +2518,9 @@ def MatLoader(file,**kwargs):
         powconf = 1
     if [tranconf,powconf] == [1,1]:
         cprint('Naming convention might be strange - you should know better what type of file you loaded...',fg='o')    
+    if kw.collapse_dict == True:
+        data = collapse_dict(data)
+        
     return(data,data.keys()) 
 
 
