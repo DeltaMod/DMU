@@ -2886,7 +2886,25 @@ def Convert_to_type(DATA):
     
     return(DATA)
         
+
+#%% Get time 
+def get_sec(time_str,divs=4):
+    """Get seconds from time."""
+    if divs == 1:
+        return(int(time_str))  
+    if divs == 2:
+        m, s = time_str.split(':')
+        return int(m) * 60 + int(s)  
     
+    if divs == 3:
+        h,m, s = time_str.split(':')
+        return int(h) * 3600 + int(m) * 60 + int(s)    
+    
+    if divs == 4:
+        d,h,m, s = time_str.split(':')
+        return int(d)*24*int(h) * 3600 + int(m) * 60 + int(s)  
+    
+      
     
 #%%
 def check_number(number):
@@ -3132,7 +3150,7 @@ def Keithley_xls_read(directory,**kwargs):
             
                 stats    = file_data["Settings"][sheet_name]
 
-
+                stats["Hold Time"] = get_sec(stats["Execution Time"])/max(num_only(stats['Npts']))
                 # smu_data = file_data["LOG"][sheet_name]
                 stats["NWID"] = ["NW1","NW1","NW2","NW2"]
                 if type(stats['Npts']) == int:
