@@ -65,7 +65,7 @@ def visit_ImportFrom(node):
 def module_filter(modules):
     mod2 = list(modules)
     for module in mod2:
-         if module in ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","custom_logger","plot_utils","utils_utils"]:
+         if module in ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","custom_logger","plot_utils","utils_utils","pickle"]:
              modules.remove(module)
 
     return(list(modules))
@@ -90,7 +90,7 @@ installREQ = [[item for item in installREQ[0] if item not in ["logging"]]]
 
 setup(
     name="DMU",
-    version="0.3.7",
+    version="0.3.8",
     packages=find_packages(),
     scripts=[TrgtScr],
 
