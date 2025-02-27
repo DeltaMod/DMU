@@ -3149,8 +3149,9 @@ def Keithley_xls_read(directory,**kwargs):
                 #Load in the settings sheet to allow for quick reference to settings used during the run.
             
                 stats    = file_data["Settings"][sheet_name]
-
-                stats["Hold Time"] = get_sec(stats["Execution Time"])/max(num_only(stats['Npts']))
+                
+                stats["Time Per Point"] = get_sec(stats["Execution Time"])/max(num_only(stats['Npts']))
+             
                 # smu_data = file_data["LOG"][sheet_name]
                 stats["NWID"] = ["NW1","NW1","NW2","NW2"]
                 if type(stats['Npts']) == int:
@@ -3159,7 +3160,7 @@ def Keithley_xls_read(directory,**kwargs):
                 main_col = stats['Npts'].index(max(num_only(stats['Npts'])))
                 
                 
-                cols["Time"] = np.linspace(0,stats["Npts"][main_col]*(stats["Hold Time"] + stats["Sweep Delay"]),stats["Npts"][main_col])
+                cols["Time"] = np.linspace(0,stats["Npts"][main_col]*stats["Time Per Point"],stats["Npts"][main_col])
                                 
                 
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
