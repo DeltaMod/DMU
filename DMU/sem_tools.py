@@ -2,18 +2,28 @@ import os
 #%% Importing and executing logging
 import logging
 
+#%% Importing and executing logging
+import logging
+import logging
 try:
     from . custom_logger import get_custom_logger
+    logger = get_custom_logger("DMU_SEMUTILS")
+    # Importing plot tools 
+    from . utils_utils import *
+    from . plot_utils import *
     
 except:
     from custom_logger import get_custom_logger
-    print("Loading utils-utils packages locally, since root folder is the package folder")
-    
-logger = get_custom_logger("DMU_UTILSUTILS")
+    logger = get_custom_logger("DMU_SEMUTILS")
+    # Importing plot tools 
+    from utils_utils import *
+    from plot_utils import *
+    print("Loading plot_utils packages locally, since root folder is the package folder")
 
+    
 import tifffile
 import svgwrite
-from PIL import Image,ImageEnhance
+from PIL import Image,ImageEnhance,ImageOps
 import base64
 from io import BytesIO
 import numpy as np 
@@ -91,7 +101,7 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
     return(cropl+offset,length-cropr+offset)
 
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
-                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={}):
+                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True):
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
     Example svg_output = 'output.svg'
@@ -101,7 +111,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     
     scalebar_style = {"frame":True,
                       "framepad":[30,2],
-                      "stroke_width":4,
+                      "stroke_width":4, %this should be calculated from a percentage of the image width
                       "stroke_style":"line",
                       "bar_color":"white",
                       "frame_color":"black",
@@ -147,15 +157,18 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             pix_size_string = "ap_image_pixel_size"
         elif "Gemini" in sem_metadata['sv_serial_number'][1]:
             pix_size_string = "ap_image_pixel_size"
-        
+        elif "1560-95-96" in sem_metadata["sv_serial_number"][1]:
+            pix_size_string = "ap_width"
         else:
             pix_size_string = "ap_pixel_size"
+            
             
     
     def scalebar_style_dictgen(frame=None,framepad=[2,2],stroke_width=4,stroke_style="line",
                                  bar_color="white",frame_color="black",frame_opacity=1.0,
                                  location="lower left",location_padding=[0.03,0.05],
                                  bar_ratio=[1/6,1/40]):
+            
         
         return({"frame":frame,"framepad":framepad,"stroke_width":stroke_width,"stroke_style":stroke_style,"bar_color":bar_color,
                 "frame_color":frame_color,"location":location,"bar_ratio":bar_ratio,"location_padding":location_padding,"frame_opacity":frame_opacity})
@@ -197,7 +210,6 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             
             im = im.rotate(rotation, expand=True)
             
-        
             
         if force_aspect != False:
             xd,yd = find_nearest_aspect_dim(im.width,im.height,force_aspect)
@@ -232,24 +244,32 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')  # Encode image as base64
     
     
-    txt  = text_style_dictgen(im,**txt_style)         
+    txt  = text_style_dictgen(im,**txt_style)    
+
+    
+    
     sbar = scalebar_style_dictgen(**scalebar_style)
+    if recalculate_stroke_width:
+        sbar["stroke_width"] *=im.width/1000 
+    
     txt_orig = txt.copy()
     sbar_orig = sbar.copy()
     
     OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3,"m":1e+0}
     #Find the scale parameters from the image in question: 
     
-            
-    pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale 
+    if pix_size_string != "ap_width":
+        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale
+    elif pix_size_string == "ap_width":
+        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale/og_w
+        
     rtilt = np.radians(sem_metadata['ap_stage_at_t'][1])
     rrot = np.radians(rotation)
-
+    
     if abs(sem_metadata['ap_stage_at_t'][1]) >= 5 and abs(rotation) > 10:
-
-        L = pix_size/np.sin(rtilt)
-        pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
-        #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
+            L = pix_size/np.sin(rtilt)
+            pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
+            #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
 
     #Define bar length and height. Note that setting the height to zero removes it
 
@@ -401,11 +421,35 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
     """
     def inserts_dict_generator(path=None,size=1/2,frame_color=plt.get_cmap("tab20c")(5), stroke_width=4, framing=[0,0,100,100],location=[1,1],loc_type="grid",delta_offset=[0,0],force_aspect=4/3,imcrop=[0,0,0,0],filterdict={},rotation=0):
         return({"path":path,"size":size,"frame_color":frame_color, "stroke_width":stroke_width, "framing":framing,"location":location,"loc_type":loc_type,"delta_offset":delta_offset,"imcrop":imcrop, "force_aspect":force_aspect,"filterdict":filterdict,"rotation":rotation})
-    print(inserts)
-    inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
-
-    resize = 1/np.min([insert["size"] for insert in inserts])
     
+    inserts = [inserts_dict_generator(**insert) for insert in inserts] #refactor inserts to adhere to formatting. Can't really be automatic, but will help I think
+    
+    with Image.open(image_overview) as im:
+        width = im.width
+        smallwidth = im.width*np.min([insert["size"] for insert in inserts])
+        
+    insert_widths  = []
+    scalefactors   = []
+    for insert in inserts:
+        with Image.open(insert["path"]) as im:
+            insert_widths.append(im.width)
+            insert["base_scale_factor"] = smallwidth/im.width
+            scalefactors.append(smallwidth/im.width)
+    
+    if np.min(scalefactors) < 1:
+        #Scale up overview, don't scale anything that has same scalefactor. Scale up things with greater scale factors
+        overview_scale = 1/np.min(scalefactors)
+        for insert in inserts:
+            insert["scale_factor"] = np.min(scalefactors) / insert["base_scale_factor"]  
+        
+    
+    
+    if np.min(scalefactors) >= 1:
+        #Scale up everything else, don't scale anything that has same scalefactor. Scale up things with greater scale factors
+        overview_scale = 1
+        for insert in inserts:
+            insert["scale_factor"] = insert["base_scale_factor"]
+            
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
         image_overview_path = ""
@@ -414,26 +458,28 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         image_overview_path = path+image_overview_name
     
     
-    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=resize,filterdict=filterdict,rotation=rotation)
+    dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=overview_scale,filterdict=filterdict,rotation=rotation)
+    
     
     scalebar_style = dwg["sbar"]
     txt_style= dwg["txt"]
     insert_svglist = []
     for insert in inserts:
-        s_factor = 1/insert["size"]
-        #location grid for the insert's s_factor
-        points = np.linspace(0, 1, int((s_factor*2-1)**2))
+        s_factor     = insert["scale_factor"] 
+        
+        #location grid for the insert's sizing 
+        points = np.linspace(0, 1, int((1/insert["size"]*2-1)**2))
         # Create the grid using np.meshgrid
         x_grid, y_grid = np.meshgrid(points*dwg["im"].width, points*dwg["im"].height)
         # Stack the x_grid and y_grid to create an array of tuples (x, y)
         cgrid = np.dstack((x_grid, y_grid)) # this is accessed as "row,col" 
         
         isbs = scalebar_style
-        
+     
         isbs["framepad"]         = [scalebar_style["framepad"][0],scalebar_style["framepad"][1]] 
-        isbs["stroke_width"]     = int(scalebar_style["stroke_width"])
-        isbs["bar_ratio"]        = [scalebar_style["bar_ratio"][0]*s_factor,scalebar_style["bar_ratio"][1]*s_factor]
-        isbs["location_padding"] = [scalebar_style["location_padding"][0]*s_factor,scalebar_style["location_padding"][1]*s_factor] 
+        isbs["stroke_width"]     = scalebar_style["stroke_width"]
+        isbs["bar_ratio"]        = [scalebar_style["bar_ratio"][0]/insert["size"]*0.8,scalebar_style["bar_ratio"][1]/insert["size"]]
+        isbs["location_padding"] = [scalebar_style["location_padding"][0]/insert["size"],scalebar_style["location_padding"][1]/insert["size"]] 
         
         itxt = txt_style 
         if itxt["fontsize"] == "Auto":
@@ -443,12 +489,11 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         insert_name = filename.split(".")[0]+"_"+insert_path.split("\\")[-1].split(".")[0]+"_insert.svg"
         insert_newpath = path+insert_name
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_newpath, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
-                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=1/insert["size"]/resize,filterdict=insert["filterdict"],rotation=insert["rotation"])
-
+                                                           force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=insert["scale_factor"],filterdict=insert["filterdict"],rotation=insert["rotation"],recalculate_stroke_width=False)
+        
         insert_svglist.append(insert_svg)
         img_loc = cgrid[insert["location"][0],insert["location"][1]]
         img_loc = (img_loc[0],img_loc[1])
-        print(dwg["im"].width/2)
         if img_loc[0] >= dwg["im"].width/2:
             ilx=-isbs["stroke_width"]
         elif img_loc[0] < dwg["im"].width/2:
@@ -468,7 +513,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         href = 'file:///' + insert_newpath.replace('\\', '/')
         dwg["svg"].add(dwg["svg"].image(href=href, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height)))
         
-        #Now we draw the framing around the insert and the location indicated by the "framing" parameter
+        #Now we draw the framing around the insert and the location indicated by the "framing" parameter, which we auto-scale to the same type of ratio is we would in the scalebar i.e. if recalculate_stroke_width sbar["stroke_width"] *=dwg["im"].width/1000 :
         
         if insert["framing"] != None:
             dwg["svg"].add(dwg["svg"].rect(
@@ -476,7 +521,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
                             size=(insert_svg["im"].width,insert_svg["im"].height),  # Width and height of the rectangle
                             fill="none",  # Fill color of the background (you can choose any color)
                             stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
-                            stroke_width=insert["stroke_width"]
+                            stroke_width=insert["stroke_width"]*dwg["im"].width/1000 
                         ))
         
             dwg["svg"].add(dwg["svg"].rect(
@@ -484,7 +529,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
                             size=(insert["framing"][2],insert["framing"][3]),  # Width and height of the rectangle
                             fill="none",  # Fill color of the background (you can choose any color)
                             stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
-                            stroke_width=insert["stroke_width"]
+                            stroke_width=insert["stroke_width"]*dwg["im"].width/1000 
                         ))
     
     dwg["svg"].save()
