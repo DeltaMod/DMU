@@ -173,10 +173,12 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         return({"frame":frame,"framepad":framepad,"stroke_width":stroke_width,"stroke_style":stroke_style,"bar_color":bar_color,
                 "frame_color":frame_color,"location":location,"bar_ratio":bar_ratio,"location_padding":location_padding,"frame_opacity":frame_opacity})
     
-    def text_style_dictgen(im,font_family="Arial",fontsize="Auto",font_weight="normal",font_style="normal",text_decoration="none",color="black"):
+    def text_style_dictgen(im,font_family="Arial",fontsize="Auto",font_fraction=1/20,font_weight="normal",font_style="normal",text_decoration="none",color="black"):
         if fontsize == "Auto":
             fontsize = int(im.height/20)
-
+        if fontsize == "fraction":
+            fontsize= int(im.height * font_fraction)
+        
         return({"font_family":font_family,"fontsize":fontsize,"font_weight":font_weight,"font_style":font_style,"text_decoration":text_decoration,"color":color})
     
     
@@ -343,7 +345,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         textloc = tuple([bar_middle_x,bar_start[1] + int(sbar["bar_height"]*1.2) * draw_dir[1]])
         
         # Create an SVG drawing with svgwrite
-        dwg = svgwrite.Drawing(svg_output, profile='tiny', size=(im.width, im.height))
+        dwg = svgwrite.Drawing(svg_output, profile='full', size=(im.width, im.height))
         
         # Add the raster image as base64 inside the SVG
         dwg.add(dwg.image(href=f"data:image/{im.format.lower()};base64,{img_str}",
@@ -452,10 +454,11 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
             
     if filename == "Auto":
         image_overview_name = image_overview.split("\\")[-1].split(".")[0]+"_combined_inserts.svg"
-        image_overview_path = ""
+        image_overview_path = os.path.join(path,image_overview_name)
+    
     else:
         image_overview_name = filename.split(".")[0] + ".svg"
-        image_overview_path = path+image_overview_name
+        image_overview_path = os.path.join(path,image_overview_name)
     
     
     dwg = SEM_Scalebar_Generator(image_overview, image_overview_path, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=imcrop,force_aspect=force_aspect,delta_offset=[0,0],resize=overview_scale,filterdict=filterdict,rotation=rotation)
@@ -466,7 +469,6 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
     insert_svglist = []
     for insert in inserts:
         s_factor     = insert["scale_factor"] 
-        
         #location grid for the insert's sizing 
         points = np.linspace(0, 1, int((1/insert["size"]*2-1)**2))
         # Create the grid using np.meshgrid
@@ -485,9 +487,9 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         if itxt["fontsize"] == "Auto":
             itxt["fontsize"] = int(dwg["im"].height/10)
         insert_path = insert["path"]
-        
+       
         insert_name = filename.split(".")[0]+"_"+insert_path.split("\\")[-1].split(".")[0]+"_insert.svg"
-        insert_newpath = path+insert_name
+        insert_newpath = os.path.join(path,insert_name)
         insert_svg  = SEM_Scalebar_Generator(insert_path, insert_newpath, scalebar_style=isbs,txt_style=itxt, imcrop=insert["imcrop"],
                                                            force_aspect=insert["force_aspect"],delta_offset=insert["delta_offset"],resize=insert["scale_factor"],filterdict=insert["filterdict"],rotation=insert["rotation"],recalculate_stroke_width=False)
         
@@ -511,29 +513,50 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         img_loc = (img_loc[0] + ilx, img_loc[1]+ily)
         
         href = 'file:///' + insert_newpath.replace('\\', '/')
-        dwg["svg"].add(dwg["svg"].image(href=href, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height)))
+        image = dwg["svg"].image(href=href, insert=img_loc, size=(insert_svg["im"].width, insert_svg["im"].height))
+        dwg["svg"].add(image)
         
-        #Now we draw the framing around the insert and the location indicated by the "framing" parameter, which we auto-scale to the same type of ratio is we would in the scalebar i.e. if recalculate_stroke_width sbar["stroke_width"] *=dwg["im"].width/1000 :
+        if insert["framing"] is not None:
+            # Calculate rx and ry as 5% of the width of the rectangle
+            rx = ry = 0.05 * insert_svg["im"].width
         
-        if insert["framing"] != None:
-            dwg["svg"].add(dwg["svg"].rect(
-                            insert=(img_loc[0],img_loc[1]),  # Bottom-left corner of the rectangle
-                            size=(insert_svg["im"].width,insert_svg["im"].height),  # Width and height of the rectangle
-                            fill="none",  # Fill color of the background (you can choose any color)
-                            stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
-                            stroke_width=insert["stroke_width"]*dwg["im"].width/1000 
-                        ))
+            # Create the first rectangle with rounded corners
+            rect1 = dwg["svg"].rect(
+                insert=(img_loc[0], img_loc[1]),  # Bottom-left corner of the rectangle
+                size=(insert_svg["im"].width, insert_svg["im"].height),  # Width and height of the rectangle
+                fill="none",  # Fill color of the background (you can choose any color)
+                stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
+                stroke_width=insert["stroke_width"] * dwg["im"].width / 1000,
+                rx=rx,
+                ry=ry
+            )
+            dwg["svg"].add(rect1)
         
-            dwg["svg"].add(dwg["svg"].rect(
-                            insert=(insert["framing"][0]-insert["framing"][2]/2,insert["framing"][1]+insert["framing"][3]/2),  # Bottom-left corner of the rectangle
-                            size=(insert["framing"][2],insert["framing"][3]),  # Width and height of the rectangle
-                            fill="none",  # Fill color of the background (you can choose any color)
-                            stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
-                            stroke_width=insert["stroke_width"]*dwg["im"].width/1000 
-                        ))
-    
+            # Create the second rectangle with rounded corners
+            rect2 = dwg["svg"].rect(
+                insert=(insert["framing"][0] - insert["framing"][2] / 2, insert["framing"][1] + insert["framing"][3] / 2),  # Bottom-left corner of the rectangle
+                size=(insert["framing"][2], insert["framing"][3]),  # Width and height of the rectangle
+                fill="none",  # Fill color of the background (you can choose any color)
+                stroke=mcolors.to_hex(insert["frame_color"]),  # Optional stroke for the rectangle
+                stroke_width=insert["stroke_width"] * dwg["im"].width / 1000,
+                rx=rx,
+                ry=ry
+            )
+            dwg["svg"].add(rect2)
+        
+            # Create a clipping path using the first rectangle
+            clip_path = dwg["svg"].defs.add(dwg["svg"].clipPath(id="clip"))
+            clip_path.add(dwg["svg"].rect(
+                insert=(img_loc[0], img_loc[1]),
+                size=(insert_svg["im"].width, insert_svg["im"].height),
+                rx=rx,
+                ry=ry
+            ))
+        
+            # Apply the clipping path to the image
+            image['clip-path'] = f'url(#{clip_path.get_id()})'
+    # Save the SVG file
     dwg["svg"].save()
-    
     
     
     return(dwg)
