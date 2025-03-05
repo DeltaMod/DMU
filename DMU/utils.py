@@ -2120,7 +2120,7 @@ def pickle_data(data, filename, overwrite=False):
     if filename in files and not overwrite:
         print("RENAME YOUR FILE OR RUN DELETE IN NEXT CELL")
     else:
-        pickle.dump(data, open( filename+".p", "wb" ) )
+        pickle.dump(data, open( filename+".pkl", "wb" ) )
    
 def unpickle_data(filename):
     return(pickle.load( open( filename, "rb" ) ))

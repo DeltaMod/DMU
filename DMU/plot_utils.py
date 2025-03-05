@@ -506,22 +506,82 @@ def segment_sweep(L,indices):
     return(swdat)
 
 
-def get_tab20bc():
+def get_tab20bc(output="list",grouping="pairs"):
     t20b = plt.get_cmap("tab20b")
     t20c = plt.get_cmap("tab20c")
 
-    ###CMAP!####
-    cmap20bc = []
-    for i in [0,1,2,3]:
-        for j in [0,2]:
-             cmap20bc.append(t20c(4*i + j))
-
-    for i in [4,3,0,1,2]:
-        for j in [0,2]:
-             cmap20bc.append(t20b(4*i + j))
-             
-    for i in [4]:
-        for j in [0,2]:
-             cmap20bc.append(t20c(4*i + j))
     
-    return(cmap20bc)
+    cmap20bc = []
+    if grouping == "pairs":
+        for i in [0,1,2,3]:
+            for j in [0,2]:
+                 cmap20bc.append(t20c(4*i + j))
+    
+        for i in [4,3,0,1,2]:
+            for j in [0,2]:
+                 cmap20bc.append(t20b(4*i + j))
+                 
+        for i in [4]:
+            for j in [0,2]:
+                 cmap20bc.append(t20c(4*i + j))
+    elif grouping == "all":
+        for i in [0,1,2,3,4]:
+            for j in [0,1,2,3]:
+                 cmap20bc.append(t20b(4*i + j))
+                 
+        for i in [0,1,2,3,4]:
+            for j in [0,1,2,3]:
+                 cmap20bc.append(t20c(4*i + j))
+    cmap = mpl.colors.LinearSegmentedColormap.from_list("tab20bc", cmap20bc,N=len(cmap20bc))
+    
+    if output == "list":    
+        return(cmap20bc)
+    if output == "cmap":
+        return(cmap)
+    if output == "both":
+        return(cmap20bc,cmap)
+    
+def get_rgbhex_color(color_name,ctype = "hex"):
+    
+    cmap = get_tab20bc(output="cmap",grouping="all")
+
+    # Select a color from the colormap (normalized index between 0 and 1)
+    colornames = ["dark violet", "violet", "light violet", "pale violet",
+                  "dark lime", "lime", "light lime", "pale lime",
+                  "dark tan", "tan", "light tan", "pale tan",
+                  "dark red", "red", "light red", "pale red",
+                  "dark lilac", "lilac", "light lilac", "pale lilac",
+                  "dark blue", "blue", "light blue", "pale blue",
+                  "dark orange", "orange", "light orange", "pale orange",
+                  "dark green", "green", "light green", "pale green",
+                  "dark lilac", "lilac", "light lilac", "pale lilac",
+                  "dark grey", "grey", "light grey", "pale grey"]
+    colordict = {colorname:colorID for colorID,colorname in enumerate(colornames)}
+    if color_name not in colornames:
+        raise ValueError(f"Invalid colour name: '{color_name}'\nValid names are: {', '.join(colornames)}")
+        
+    rgb = cmap(colordict[color_name]) 
+    if ctype == "rgba":
+        return(rgb)
+   
+    if ctype == "rgb":
+        return(rgb[:3])
+    
+    if ctype == "rgb255":
+        return(tuple([int(val*255) for val in rgb[:3]]))
+    
+    if ctype == "rgba255":
+        return(tuple([int(val*255) for val in rgb]))    
+        
+    
+    elif ctype == "hex":
+        # Include alpha channel (opacity) if needed
+        hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+
+        # If alpha exists, we handle it separately (adding a transparency value if RGBA)
+        if len(rgb) > 3:
+            # Normalize alpha (it should be between 0 and 1)
+            alpha = int(rgb[3] * 255)
+            hex_color += '{:02x}'.format(alpha)  # Add alpha value to the hex code
+
+        return hex_color

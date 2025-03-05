@@ -19,6 +19,7 @@ def DEF_BBOX(style="default",bboxstyle="default"):
                               "left asymmetric"  : (0.25,0.85,0.18,0.875),
                               "default"          : (0.05,0.95,0.05,0.875)},
               "PP2_4by3":{"symmetric"        : (0.165,0.835,0.125,0.875),
+                          "equal"        : (0.165,0.835,0.165,0.835),
                           "wide symmetric"   : (0.25,0.75,0.125,0.875),
                           "right asymmetric" : (0.15,0.75,0.125,0.875),
                           "left asymmetric"  : (0.15,0.75,0.125,0.875),
