@@ -10,23 +10,23 @@ update ```pip install DMU --upgrade```
 # Package Structure
 DMU contains several modules, all which should serve a specific function (with some overlap)
 * utils.py
-** Data importers (matloader, for instance, can pair .mat files with json files and collapse contents to a dict structure)
-** Automatic data plotting for Keithley and Nanonis tools
-** Lumerical functions  
+  * Data importers (matloader, for instance, can pair .mat files with json files and collapse contents to a dict structure)
+  * Automatic data plotting for Keithley and Nanonis tools
+  * Lumerical functions  
 * utils_utils.py
-** Contains additional miscellaneous utility functions. Mostly unused.
+  * Contains additional miscellaneous utility functions. Mostly unused.
   
 * plot_utils.py
-** Generally contains tools that assist in figure plotting, wherein some examples include:
-** adjust_ticks - increase or reduce number of ticks along axis to
-** align_axis_zeros - provide a list of twinx axes in a plot, and it will force the zero to be aligned in all of them. useful for visualisation.
-** And many, many other functions that assist in plotting.
+  * Generally contains tools that assist in figure plotting, wherein some examples include:
+  * adjust_ticks - increase or reduce number of ticks along axis to
+  * align_axis_zeros - provide a list of twinx axes in a plot, and it will force the zero to be aligned in all of them. useful for visualisation.
+  * And many, many other functions that assist in plotting.
   
 * sem_tools.py
-** Specialised package to import and modify SEM TIFF images. The main purpose of most of it being to:
-** Create uniform scalebars over many different images cropped to different sizes
-** Create nice looking inserts into images, highlighting both the area of the larger overview image and boxing in the insert at a specified location. Examples will be provided at a later date.
-** Perform rudimentary post-processing on the images, like expanding the dynamic range, modifying the contrast, sharpness and brightness.
+  * Specialised package to import and modify SEM TIFF images. The main purpose of most of it being to:
+  * Create uniform scalebars over many different images cropped to different sizes
+  * Create nice looking inserts into images, highlighting both the area of the larger overview image and boxing in the insert at a specified location. Examples will be provided at a later date.
+  * Perform rudimentary post-processing on the images, like expanding the dynamic range, modifying the contrast, sharpness and brightness.
     
 # How packages can be imported  
 ```import DMU``` -> DMU.utils, DMU.plot_utils, DMU.utils_utils, DMU.sem_tools etc
