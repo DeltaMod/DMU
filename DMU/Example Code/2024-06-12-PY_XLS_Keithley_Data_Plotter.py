@@ -4,7 +4,7 @@ import xlrd
 import matplotlib.cm as mcm
 import matplotlib as mpl
 
-GHIN = True
+GHIN = False
 
 if GHIN:
     sys.path.append(r"C:\Users\vidar\Documents")
@@ -68,7 +68,7 @@ for dkey in data.keys():
                 bbkey = "single"
                 ncols=1
                 
-            idict = {"fit_range":[0,1]}    
+            
             IFIG,IDF = dm.bias_plotter(d,FIG[ind],tool='Keithley',title=filename+' dev:'+device,c=['b','r','g'],
                                        ideality=True,altplot=True,idict = idict[NWID],plot_fit_points=True,
                                        legend_loc=legend_loc,legend_off=legend_off,ncols=ncols)
