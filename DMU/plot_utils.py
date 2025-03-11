@@ -45,6 +45,7 @@ except:
     print("Loading plot_utils packages locally, since root folder is the package folder")
 
     logger = get_custom_logger("DMU_PLOTUTILS")
+    
 class CustomFormatter(logging.Formatter):
 
     magenta  = "\033[1;35m"
@@ -207,6 +208,12 @@ def align_axis_zeros(axes):
         ax.set_ylim(tuple(ylims_mod[ax]))        
 
 class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
+    """
+    How to use:
+        yformat = ScalarFormatterForceFormat()
+        yformat.set_powerlimits((0,0))
+        gca().yaxis.set_major_formatter(format)
+    """
     def __init__(self, useOffset=True, useMathText=True):
         super().__init__(useOffset=useOffset, useMathText=useMathText)
         self.set_format()
@@ -585,3 +592,7 @@ def get_rgbhex_color(color_name,ctype = "hex"):
             hex_color += '{:02x}'.format(alpha)  # Add alpha value to the hex code
 
         return hex_color
+
+class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
+    def _set_format(self):  # Override function that finds format to use.
+        self.format = "%1.1f"  # Give format here

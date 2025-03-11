@@ -86,6 +86,10 @@ def return_forward_bias_matched_data(voltage,**kwargs):
 
 #%%
 def reorder_legend(ax,ncol=1):
+    """
+    input: (ax,ncol=1) = axis object and number of columsn you want to plot. 
+    Returns handles in a rowwise list instead. If you plot a1, a2, a3, b1, b2, b3, and you want 3 columns with items a along the first row, and b along the second row - then this function does that job for you, since default order is DOWN the columns. 
+    """
     handles = ax.get_legend_handles_labels()
     handles = [*handles[0]]
     rep = int(np.ceil(len(handles)/ncol))
