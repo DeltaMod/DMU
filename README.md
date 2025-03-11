@@ -30,9 +30,15 @@ DMU contains several modules, all which should serve a specific function (with s
     
 # How packages can be imported  
 ```import DMU``` -> DMU.utils, DMU.plot_utils, DMU.utils_utils, DMU.sem_tools etc
+
 how I usually import packages:
+
 from DMU import utils as dm
+
 from DMU import plot_utils as dmp
+
 from DMU import utils_utils as dmuu
+
 from DMU import sem_tools as dms
+
 from DMU import graph_styles as gss
