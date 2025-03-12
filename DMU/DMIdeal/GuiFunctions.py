@@ -526,26 +526,20 @@ def populate_run_table(self, selfvar="session", listwidgets=None,keylists=None):
                 run_edit   = run_info["editdict"]
                 nwid       = run_edit.get("NWID", "")
                 ideality   = run_edit.get("n", "N/A")
+                if type(ideality) !=str: ideality = f"{ideality:.5f}"
                 ideality_s = run_edit.get("n_series", "N/A")
+                if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
                 Rs_lin     = run_edit.get("Rs_lin", "N/A")
-                try:
-                    Rs_lin *=1e-6
-                except:
-                    None
+                if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
                 Rs_series  = run_edit.get("Rs", "N/A")
-                try:
-                    Rs_series *= 1e-6
-                except:
-                    None
+                if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
                 accept     = run_edit.get("accept",None)
                 lighton    = run_edit.get("light_on",False) 
                 mrange     = run_edit.get("mrange","Unknown")
                 if run_edit.get("accept") == True:
                     status = "Accepted"
-                    
                 elif run_edit.get("accept") == False:
                     status = "Rejected"
-                
                 else:
                     status = "Not Done"
                 
@@ -553,10 +547,10 @@ def populate_run_table(self, selfvar="session", listwidgets=None,keylists=None):
                 run_table.insertRow(row)
                 run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
                 run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
-                run_table.setItem(row, 2, qtw.QTableWidgetItem(f"{ideality}"))
-                run_table.setItem(row, 3, qtw.QTableWidgetItem(f"{ideality_s}"))
-                run_table.setItem(row, 4, qtw.QTableWidgetItem(f"{Rs_lin}"))
-                run_table.setItem(row, 5, qtw.QTableWidgetItem(f"{Rs_series}"))
+                run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
+                run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
+                run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
+                run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
                 run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
                 run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
                 run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
@@ -685,34 +679,29 @@ def update_all_on_run_change_and_colors(self, selfvar="session", listwidgets=Non
                 run_edit   = run_info["editdict"]
                 nwid       = run_edit.get("NWID", "")
                 ideality   = run_edit.get("n", "N/A")
+                if type(ideality) !=str: ideality = f"{ideality:.5f}"
                 ideality_s = run_edit.get("n_series", "N/A")
+                if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
                 Rs_lin     = run_edit.get("Rs_lin", "N/A")
-                try:
-                    Rs_lin *=1e-6
-                except:
-                    None
+                if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
                 Rs_series  = run_edit.get("Rs", "N/A")
-                try:
-                    Rs_series *= 1e-6
-                except:
-                    None
+                if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
                 accept     = run_edit.get("accept",None)
                 lighton    = run_edit.get("light_on",False) 
                 mrange     = run_edit.get("mrange","Unknown")
-                
-                if accept is True:
+                if run_edit.get("accept") == True:
                     status = "Accepted"
-                elif accept is False:
+                elif run_edit.get("accept") == False:
                     status = "Rejected"
                 else:
                     status = "Not Done"
-
+                
                 run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
                 run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
-                run_table.setItem(row, 2, qtw.QTableWidgetItem(f"{ideality}"))
-                run_table.setItem(row, 3, qtw.QTableWidgetItem(f"{ideality_s}"))
-                run_table.setItem(row, 4, qtw.QTableWidgetItem(f"{Rs_lin}"))
-                run_table.setItem(row, 5, qtw.QTableWidgetItem(f"{Rs_series}"))
+                run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
+                run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
+                run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
+                run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
                 run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
                 run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
                 run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
@@ -730,7 +719,7 @@ def update_all_on_run_change_and_colors(self, selfvar="session", listwidgets=Non
                 else:
                     color = 'pale tan'      # Not Done
 
-                for col in range(8):
+                for col in range(9):
                     run_table.item(row, col).setBackground(QColor(*get_rgbhex_color(color, ctype="rgba255")))
 
                 row += 1
@@ -840,11 +829,12 @@ def create_device_subdevice_list(self, selfvar="session", datavar="DATA", leftke
     device_widget.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)
     # Run Table
     run_table = qtw.QTableWidget()
-    run_table.setColumnCount(8)
+    run_table.setColumnCount(9)
     run_table.setHorizontalHeaderLabels(["NWID", "Run ID", "n linear", "n series", "Rs est [MΩ]", "Rs fit [MΩ]", "Light On", "Range", "Status"])
     run_table.horizontalHeader().setSectionResizeMode(qtw.QHeaderView.Stretch)
     run_table.verticalHeader().setVisible(False)
     run_table.setSelectionBehavior(qtw.QAbstractItemView.SelectRows)
+    run_table.setSizeAdjustPolicy(qtw.QAbstractScrollArea.AdjustToContents)
     device_widget.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)
     
     # Add widgets to the splitters
@@ -1300,7 +1290,7 @@ def plot_current_data(self):
     lw_narrow = 2
     self.ax.clear()
     c_IV    = get_rgbhex_color("green",ctype="rgba")
-    c_IVneg = get_rgbhex_color("pale red",ctype="rgba")
+    c_IVneg = get_rgbhex_color("pale lime",ctype="rgba")
     c_ideal = get_rgbhex_color("light violet",ctype="rgba")
     c_series = get_rgbhex_color("red",ctype="rgba")
     c_seriesn = get_rgbhex_color("tan",ctype="rgba")
@@ -1406,9 +1396,10 @@ def plot_current_data(self):
             self.ax.set_ylabel("Rs [$\Omega$]")
             
             Vfits = edit_vars["series_fit"]["Vfit"]
-            Rs_fit = edit_vars["series_fit"]["Rs_fit"]
+            
             
             try:
+                Rs_fit = edit_vars["series_fit"]["Rs_fit"]
                 Rsn =  extract_negative_segments_and_dots(Vfit,Rs_fit)
             except:
                 Rsn = False
