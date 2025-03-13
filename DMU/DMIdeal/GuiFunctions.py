@@ -1577,6 +1577,12 @@ def fit_guide_hide_ranges(self,selfvar=""):
     if not(self.session["Cursors"]["I0_cursor"]["visible"]):
         self.fit_guide_toggle_hide.setStyleSheet("background-color: red;")
         
+def fit_guide_setactive_all(self,**kwargs):
+    self.SET_ALL_FROM_RsLIN = not(self.SET_ALL_FROM_RsLIN)
+    if self.SET_ALL_FROM_RsLIN:
+        self.fit_guide_toggle_Rslin_SetsAll.setStyleSheet("background-color: lightgreen;")
+    else:
+        self.fit_guide_toggle_Rslin_SetsAll.setStyleSheet("background-color: lightgrey;")
 
 def fit_guide_setactive(self,selector=None,**kwargs):
     print("Setting new active")
@@ -1704,6 +1710,7 @@ def Ideality_Factor_Series(I,V,n_guess,I_0, Rs_lin, n_range, Rs_range,T=273):
     Rs_inds  = np.where((V>Rs_range[0])&(V<Rs_range[1]))[0]
     
     high_voltage_slope = np.polyfit(I[Rsl_inds], V[Rsl_inds], 1)[0]
+    print("Linear Resistance found: " + str(high_voltage_slope))
     Rs_guess = high_voltage_slope
     
     V_data = V # Voltage data
@@ -1906,17 +1913,31 @@ def Ideality_Factor_Series(I,V,n_guess,I_0, Rs_lin, n_range, Rs_range,T=273):
 
             # Step 1: Compute Rs for each point in the I-V curve
             Rs_values = compute_rs_values(V_data, I_data, I0, n_mean,suppress_text=True)
-
+            
+            if len(Rs_values[np.where(Rs_values>0)[0]]) >= 10:
+                Rs_values = Rs_values[np.where(Rs_values>0)[0]]
+            else:
+                None
             # Step 2: Calculate the mean Rs for the last 10 points
-            Rs_mean = np.mean(Rs_values[-10:])
+            Rs_mean = np.nanmean(Rs_values[-10:])
+            if Rs_mean<0:
+                Rs_mean = np.abs(Rs_mean)
             print(f"Mean Rs (last 10 points) = {Rs_mean:.4f} Ω")
 
             # Step 3: Compute n for each point in the I-V curve with Rs fixed
             n_values = compute_n_values(V_data, I_data, I0, Rs_mean,suppress_text=True)
-
+            
             # Step 4: Calculate the mean n for the last 10 points
-            n_mean = np.mean(n_values[np.where(V_data > 0.5)[0][:5]])
-            print(f"Mean n (last 10 points) = {n_mean:.4f}")
+            if np.max(V_data)>0.5:
+                n_mean = np.nanmean(n_values[np.where(V_data > 0.5)[0][:5]])
+            else:
+                n_mean = np.nanmean(n_values[np.where(V_data >= 0)[0][:5]])
+            
+            if n_mean < 0:
+                n_mean *= -1
+                
+                
+            print(f"Mean n (average of V>0.5) = {n_mean:.4f}")
 
         return Rs_mean, n_mean, Rs_values, n_values
 
@@ -1931,8 +1952,8 @@ def Ideality_Factor_Series(I,V,n_guess,I_0, Rs_lin, n_range, Rs_range,T=273):
     
         # Define bounds for I0, n, and Rs
         bounds = (
-            [np.min([I0_guess * 1e-1,I0_guess * 1e+1]), 0.8 * n_guess, 0.01 * Rs_guess],  # Lower bounds
-            [np.max([I0_guess * 1e-1,I0_guess * 1e+1]), 1.2 * n_guess, 100 * Rs_guess]    # Upper bounds
+            [np.min([I0_guess * 1e-1,I0_guess * 1e+1]), np.min([0.8 * n_guess,1.2 * n_guess]), np.min([0.01 * Rs_guess,100*Rs_guess])],  # Lower bounds
+            [np.max([I0_guess * 1e-1,I0_guess * 1e+1]), np.max([0.8 * n_guess,1.2 * n_guess]), np.max([0.01 * Rs_guess,100*Rs_guess])]    # Upper bounds
         )
         
         popt, pcov = curve_fit(model_wrapper, V_data, I_data, p0=[I0_guess, n_guess, Rs_guess], bounds=bounds)

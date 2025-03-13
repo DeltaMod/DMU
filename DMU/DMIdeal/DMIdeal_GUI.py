@@ -62,9 +62,10 @@ class MainWindow(qtw.QMainWindow):
         self.USERMODE          = "Ideality" 
         self.MATERIAL_Types    = ["Air","PMMA","Al2O3", "ALD","Polystyrene"]
         
-        self.CURRENT_DEVICE    = None
-        self.CURRENT_SUBDDEVICE= None
-        self.CURRENT_RUN       = None
+        self.CURRENT_DEVICE     = None
+        self.CURRENT_SUBDDEVICE = None
+        self.CURRENT_RUN        = None
+        self.SET_ALL_FROM_RsLIN = True
         
         self.session_reset     = dict(fitdict   = dict(Initial_Guess = dict(I0 = 1e-15, n = 2),
                                                        axis_lim      = dict(xlim = [None,None], ylim = [None,None]),
@@ -163,6 +164,7 @@ class MainWindow(qtw.QMainWindow):
         
         self.fit_guide_hide_ranges              = partial(gf.fit_guide_hide_ranges,self)
         self.fit_guide_setactive                = partial(gf.fit_guide_setactive,self)
+        self.fit_guide_setactive_all            = partial(gf.fit_guide_setactive_all,self)
 
         
         self.alter_Vmax_and_n_guess            = partial(gf.alter_Vmax_and_n_guess,self)
@@ -301,7 +303,7 @@ class MainWindow(qtw.QMainWindow):
         self.spinbox_sweep_index.valueChanged.connect(lambda: self.update_spinbox_value(self.spinbox_sweep_index))
 
     
-        
+            
         self.fit_guide_I0        = self.simple_function_button(function = self.fit_guide_setactive,
                                                                 function_variables=dict(selector=self.range_I0),
                                                                 button_text="Activate I0 Range",
@@ -320,6 +322,12 @@ class MainWindow(qtw.QMainWindow):
                                                           layout=auto_fit_func_layout,
                                                           stretch=2)
         
+        self.fit_guide_toggle_Rslin_SetsAll = self.simple_function_button(function = self.fit_guide_setactive_all,
+                                                                function_variables=dict(),
+                                                                button_text="Let Rs Linear Set All",
+                                                                layout=auto_fit_seriesfunc_layout,
+                                                                stretch=2)
+                
         self.fit_guide_Rs_linear        = self.simple_function_button(function = self.fit_guide_setactive,
                                                                 function_variables=dict(selector=self.range_Rs_linear),
                                                                 button_text="Activate Rs Linear",
@@ -904,6 +912,14 @@ class MainWindow(qtw.QMainWindow):
         self.update_rundata_variable(selfvar="selfvar",datavar="DATA",new_value=[xmin,xmax], alter_type="Overwrite", partial_keylist=["fitdict","Fit_range","Rs_lin"],
                                 listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
         print(f"Rs_lin Fit range selected: {(xmin,xmax)}")
+        if self.SET_ALL_FROM_RsLIN:
+            self.update_rundata_variable(selfvar="selfvar",datavar="DATA",new_value=[xmin,xmax], alter_type="Overwrite", partial_keylist=["fitdict","Fit_range","n_range"],
+                                    listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
+            self.update_rundata_variable(selfvar="selfvar",datavar="DATA",new_value=[xmin,xmax], alter_type="Overwrite", partial_keylist=["fitdict","Fit_range","Rs_mean"],
+                                    listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
+            print("Rs_lin sets all is active, therefore")
+            print(f"ns_series Fit range selected: {(xmin,xmax)}")
+            print(f"Rs_mean Fit range selected: {(xmin,xmax)}")
         self.ax.figure.canvas.draw_idle()
         
     def on_select_n_series(self, xmin, xmax):
@@ -918,7 +934,7 @@ class MainWindow(qtw.QMainWindow):
         self.update_rundata_variable(selfvar="selfvar",datavar="DATA",new_value=[xmin,xmax], alter_type="Overwrite", partial_keylist=["fitdict","Fit_range","Rs_mean"],
                                 listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
         print(f"Rs_mean Fit range selected: {(xmin,xmax)}")
-        self.ax.figure.canvas.draw_idle()
+        self.ax.figure.canvas.draw_idle() 
              
     def update_all_spans_and_make_active(self,selector):
         for sel in self.spans:
