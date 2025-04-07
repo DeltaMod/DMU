@@ -249,9 +249,7 @@ def save_and_update_USERMODE_jsondicts(self,selfvar="session",datavar="DATA",lis
             if any(exl in file for exl in FileExclusions):
                 continue
         data = dm.Keithley_xls_read(file)
-        
-        if usermode == "Ideality":
-            for dkey in data.keys():
+        for dkey in data.keys():
                 if "LOG" not in dkey:
                     for key in [k for k in data[dkey].keys() if "Run" in k]: 
                         d = data[dkey][key] 
@@ -260,34 +258,36 @@ def save_and_update_USERMODE_jsondicts(self,selfvar="session",datavar="DATA",lis
                         except:
                             nolog.append(file.split("\\")[-1] + key + "Has no log entry!")
                             break
-                        
-                        if len(d["Settings"]["Npts"]) == 2:
-                            if len(d["current"]) <5:
-                                material = "AIR"
-                                if any(mat in file for mat in self.MATERIAL_Types):
-                                    material = next((mat for mat in self.MATERIAL_Types if mat in file), "AIR")    
-                                
-                                fulldevice = d["LOG"]["Device"].replace(" ","-").replace("_","-")
-                                device     = "-".join(fulldevice.split("-")[:2]) 
-                                filtered_device = [part for part in fulldevice.split("-") if part not in self.MATERIAL_Types] #We are just double checking that we don't have material duplicates
-                                subdevice  = "-".join(filtered_device[1:]) + "_" + material
-                                
-                                if device not in devicedict.keys():
-                                    devicedict[device] = {}
+                        if usermode == "Ideality":
+            
+                            
+                            if len(d["Settings"]["Npts"]) == 2:
+                                if len(d["current"]) <5:
+                                    material = "AIR"
+                                    if any(mat in file for mat in self.MATERIAL_Types):
+                                        material = next((mat for mat in self.MATERIAL_Types if mat in file), "AIR")    
                                     
-                                if subdevice not in devicedict[device]:
-                                    devicedict[device][subdevice] = {}
-                                    devicedict[device][subdevice]["Sample"]     = device.split("-")[0]
-                                    devicedict[device][subdevice]["Device"]     = device
-                                    devicedict[device][subdevice]["Waveguide"]  = material
-                                    devicedict[device][subdevice]["filename"]   = device+".json"    
-                                nwid = d["emitter"]["NWID"]
-                                if nwid not in devicedict[device][subdevice]:
-                                    devicedict[device][subdevice][nwid] = {}
-                                
-                                # Add new runs to existing NWID
-                                jsondict = self.create_devicedata_dict(d,key)
-                                devicedict[device][subdevice][nwid].update(jsondict)
+                                    fulldevice = d["LOG"]["Device"].replace(" ","-").replace("_","-")
+                                    device     = "-".join(fulldevice.split("-")[:2]) 
+                                    filtered_device = [part for part in fulldevice.split("-") if part not in self.MATERIAL_Types] #We are just double checking that we don't have material duplicates
+                                    subdevice  = "-".join(filtered_device[1:]) + "_" + material
+                                    
+                                    if device not in devicedict.keys():
+                                        devicedict[device] = {}
+                                        
+                                    if subdevice not in devicedict[device]:
+                                        devicedict[device][subdevice] = {}
+                                        devicedict[device][subdevice]["Sample"]     = device.split("-")[0]
+                                        devicedict[device][subdevice]["Device"]     = device
+                                        devicedict[device][subdevice]["Waveguide"]  = material
+                                        devicedict[device][subdevice]["filename"]   = device+".json"    
+                                    nwid = d["emitter"]["NWID"]
+                                    if nwid not in devicedict[device][subdevice]:
+                                        devicedict[device][subdevice][nwid] = {}
+                                    
+                                    # Add new runs to existing NWID
+                                    jsondict = self.create_devicedata_dict(d,key)
+                                    devicedict[device][subdevice][nwid].update(jsondict)
 
     # Sort keys at the upper level alphabetically
     devicedict = {k: devicedict[k] for k in sorted(devicedict)}

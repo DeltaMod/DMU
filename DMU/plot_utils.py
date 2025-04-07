@@ -87,15 +87,20 @@ logger.addHandler(ch)
 PLOT TOOLS
 """
 
-def dummy_text_params(string,FIG,fontsize=12,usetex=True,visible=False):
+def dummy_text_params(string,FIG,fontsize=12,usetex=True,visible=False,ezplot=True):
     #This function just guesses based on fontsize, there's no way to do this nicely so we won't try:
     
     dummy = {"width":None,"height":None} 
     HMOD = 2;  WMOD = 0.175;
-    dummy["height"] = (HMOD*fontsize)/FIG.fig.dpi
-    dummy["width"] = (WMOD * len(string) * fontsize )/FIG.fig.dpi
+    if ezplot:
+        DPI = FIG.fig.dpi
+    else:
+        DPI = FIG.dpi
+    dummy["height"] = (HMOD*fontsize)/DPI
+    dummy["width"] = (WMOD * len(string) * fontsize )/DPI
        
     return(dummy)
+
     
 #Getting Legend entries
 def get_combined_legend(FIG):
