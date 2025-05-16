@@ -29,7 +29,7 @@ DMU contains several modules, all which should serve a specific function (with s
   * Perform rudimentary post-processing on the images, like expanding the dynamic range, modifying the contrast, sharpness and brightness.
 ## DMIdeal
 This is a GUI whose development was mainly focused on folder-scrubbing and sorting device data from our excessively expansive electrical characterisation data for the express purpose of fitting, and cataloguing ideality data.
-[Annotated image of the DMIdeal GUI](DMU/ReadMe_Assets/DMIdealGUI_Image.png)
+![Annotated image of the DMIdeal GUI](DMU/ReadMe_Assets/DMIdealGUI_Image.png)
 
 Unfortunately, much of this project is hard-coded to support our device architecture and measurement structure. I hope to be able to rewrite this to be more general in the future, but for now this works for our 2NW/1NW measurements. This means that if you have 2 probe measurements, you can adapt this repo for your own purposes with minor modifications to the retrieval code. 
 
