@@ -23,6 +23,7 @@ from functools import partial
 
 class MainWindow(qtw.QMainWindow):
     def __init__(self):
+        self.fontsizes = {"legend":10,"xlabel":15,"ylabel":15,"xticks":10,"yticks":10}
         
         self.value_changed = pyqtSignal()
 
@@ -30,7 +31,7 @@ class MainWindow(qtw.QMainWindow):
         
         #Initialisation of Variables
         super().__init__()
-        self.setWindowTitle("KeithleyPlotter")
+        self.setWindowTitle("DMIdeal_GUI")
         try:
             self.splash_screen_polygon = mpl.patches.Polygon(np.genfromtxt("GuiSplash\\GuiSplash.txt"),facecolor= plt.get_cmap("tab20c")(np.random.randint(0,4)*4))
         except:
@@ -41,7 +42,7 @@ class MainWindow(qtw.QMainWindow):
         self.show_ideality_fit = True
         self.show_series_resistance_fit = True
         self.alpha_styling = dict(edge = dict(active = 0.8, inactive=0.4), face = dict(active=0.15,inactive=0.03)) 
-        
+        self.run_table_columns = 9
         """
         Initialisation of Editable Variables
         """
@@ -190,11 +191,13 @@ class MainWindow(qtw.QMainWindow):
         #Plotting Functions
         self.add_plot          = partial(gf.add_plot,self)
         self.plot_current_data = partial(gf.plot_current_data,self)
+        self.log_abs           = partial(gf.log_abs,self)
         self.get_axscale_set_lim = partial(gf.get_axscale_set_lim,self)
         self.toggle_axis_scale = partial(gf.toggle_axis_scale,self)
         self.fit_guide_fitvals = partial(gf.fit_guide_fitvals,self)
         self.fit_guide_fitseriesvals = partial(gf.fit_guide_fitseriesvals,self)
         self.Correct_Forward_Voltage = partial(gf.Correct_Forward_Voltage,self)
+        self.Match_Forward_Voltage_Pulse = partial(gf.Match_Forward_Voltage_Pulse,self)
         # Matplotlib Canvas
         self.canvas = FigureCanvas(Figure(figsize=(5, 3)))
         self.add_plot(self.canvas)
@@ -826,8 +829,10 @@ class MainWindow(qtw.QMainWindow):
         fitdict   = RD["fitdict"]
         data      = RD["data"]
         edit_vars = RD["editdict"]
-        current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
-        
+        if self.USERMODE == "Ideality":    
+            current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
+        elif self.USERMODE == "Communication":
+            current,voltage = [data["receiver current"][fitdict["sweep_index"]],data["receiver voltage"][fitdict["sweep_index"]]]
         I0 = np.mean(current[np.where((voltage>xmin) & (voltage<xmax))])
         
         self.update_rundata_variable(selfvar="selfvar",datavar="DATA", new_value = I0, alter_type="Overwrite", partial_keylist=["fitdict","Initial_Guess","I0"],
@@ -857,10 +862,14 @@ class MainWindow(qtw.QMainWindow):
         fitdict   = RD["fitdict"]
         data      = RD["data"]
         edit_vars = RD["editdict"]
-        current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
-        
-        I0 = np.mean(current[np.where((voltage>IVmin) & (voltage<IVmax))])
-        
+        if self.USERMODE == "Ideality":    
+            current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
+        elif self.USERMODE == "Communication":
+            current,voltage = [data["receiver current"][fitdict["sweep_index"]],data["receiver voltage"][fitdict["sweep_index"]]]
+        try:
+            I0 = np.mean(current[np.where((voltage>IVmin) & (voltage<IVmax))])
+        except:
+            I0 = np.mean(current)
         self.update_rundata_variable(selfvar="selfvar",datavar="DATA", new_value = I0, alter_type="Overwrite", partial_keylist=["fitdict","Initial_Guess","I0"],
                                 listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
         

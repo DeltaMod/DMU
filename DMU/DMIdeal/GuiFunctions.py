@@ -11,6 +11,7 @@ import matplotlib as mpl
 import xlrd
 from DMU import utils as dm
 from DMU import utils_utils as dmm
+from DMU import plot_utils as dmp
 import scipy 
 from scipy.optimize import curve_fit, root, least_squares
 from scipy.interpolate import interp1d
@@ -230,6 +231,12 @@ def create_devicedata_dict(self, KeithleyData, runID):
         fitdict  = self.session_reset["fitdict"].copy() 
         editdict = dict(n = None, n_series = None, Rs_lin=None, Rs=None, accept=None, light_on=bool(kd["LOG"]["Light Microscope"]),mrange=" ".join([item for item in kd["Settings"]["Current Range"] if str(item) !=str(None)]), NWID=kd["emitter"]["NWID"], ideality_fit = dict(n=None,I0=None,Vfit=None,Ifit=None),series_fit = dict(n=None,Rs_lin=None,Rs=None,I0=None,Vfit=None,Ifit=None,Rs_fit = None,n_fit = None))
         return {runID: dict(fitdict=fitdict, editdict=editdict, data=kd)}
+    
+    if self.USERMODE == "Communication":
+        kd = KeithleyData
+        fitdict  = self.session_reset["fitdict"].copy() 
+        editdict = dict(n = None, n_series = None, Rs_lin=None, Rs=None, accept=None, light_on=bool(kd["LOG"]["Light Microscope"]),mrange=" ".join([item for item in kd["Settings"]["Current Range"] if str(item) !=str(None)]), NWID=kd["emitter"]["NWID"], ideality_fit = dict(n=None,I0=None,Vfit=None,Ifit=None),series_fit = dict(n=None,Rs_lin=None,Rs=None,I0=None,Vfit=None,Ifit=None,Rs_fit = None,n_fit = None),Vstep=None, I_avg=None)
+        return {runID: dict(fitdict=fitdict, editdict=editdict, data=kd)}
 
 
 def save_and_update_USERMODE_jsondicts(self,selfvar="session",datavar="DATA",listwidgets = None,keylists=""):
@@ -250,44 +257,134 @@ def save_and_update_USERMODE_jsondicts(self,selfvar="session",datavar="DATA",lis
                 continue
         data = dm.Keithley_xls_read(file)
         for dkey in data.keys():
-                if "LOG" not in dkey:
-                    for key in [k for k in data[dkey].keys() if "Run" in k]: 
-                        d = data[dkey][key] 
-                        try:
-                            d["LOG"]
-                        except:
-                            nolog.append(file.split("\\")[-1] + key + "Has no log entry!")
-                            break
-                        if usermode == "Ideality":
-            
-                            
-                            if len(d["Settings"]["Npts"]) == 2:
-                                if len(d["current"]) <5:
-                                    material = "AIR"
-                                    if any(mat in file for mat in self.MATERIAL_Types):
-                                        material = next((mat for mat in self.MATERIAL_Types if mat in file), "AIR")    
+            if "LOG" not in dkey:
+                for key in [k for k in data[dkey].keys() if "Run" in k]: 
+                    
+                    d = data[dkey][key] 
+                    try:
+                        d["LOG"]
+                    except:
+                        nolog.append(file.split("\\")[-1] + key + "Has no log entry!")
+                        break
+                    
+                    if usermode == "Ideality":
+                        if len(d["Settings"]["Npts"]) == 2:
+                            if len(d["current"]) <5:
+                                material = "AIR"
+                                if any(mat in file for mat in self.MATERIAL_Types):
+                                    material = next((mat for mat in self.MATERIAL_Types if mat in file), "AIR")    
+                                
+                                fulldevice = d["LOG"]["Device"].replace(" ","-").replace("_","-")
+                                device     = "-".join(fulldevice.split("-")[:2]) 
+                                filtered_device = [part for part in fulldevice.split("-") if part not in self.MATERIAL_Types] #We are just double checking that we don't have material duplicates
+                                subdevice  = "-".join(filtered_device[1:]) + "_" + material
+                                
+                                if device not in devicedict.keys():
+                                    devicedict[device] = {}
                                     
-                                    fulldevice = d["LOG"]["Device"].replace(" ","-").replace("_","-")
-                                    device     = "-".join(fulldevice.split("-")[:2]) 
-                                    filtered_device = [part for part in fulldevice.split("-") if part not in self.MATERIAL_Types] #We are just double checking that we don't have material duplicates
-                                    subdevice  = "-".join(filtered_device[1:]) + "_" + material
-                                    
-                                    if device not in devicedict.keys():
-                                        devicedict[device] = {}
+                                if subdevice not in devicedict[device]:
+                                    devicedict[device][subdevice] = {}
+                                    devicedict[device][subdevice]["Sample"]     = device.split("-")[0]
+                                    devicedict[device][subdevice]["Device"]     = device
+                                    devicedict[device][subdevice]["Waveguide"]  = material
+                                    devicedict[device][subdevice]["filename"]   = device+".json"    
+                                nwid = d["emitter"]["NWID"]
+                                if nwid not in devicedict[device][subdevice]:
+                                    devicedict[device][subdevice][nwid] = {}
+                                
+                                # Add new runs to existing NWID
+                                jsondict = self.create_devicedata_dict(d,key)
+                                devicedict[device][subdevice][nwid].update(jsondict)
+        
+                    if usermode == "Communication":
+                        if ((len(d["Settings"]["Npts"]) == 4) and ("Voltage List Sweep" in d["Settings"]["Operation Mode"])):
+                                material = "AIR"
+                                if any(mat in file for mat in self.MATERIAL_Types):
+                                    material = next((mat for mat in self.MATERIAL_Types if mat in file), "AIR")    
+                                
+                                #Sort the data by rounding to nearest 0.2
+                                sort_data = {"I_E":[],"V_E":[],"I_R":[]}
+                                avg_data  = {"I_E":[],"V_E":[],"I_R":[]}
+                                d["emitter voltage"] = d[d["emitter"]["NWID"]+" voltage"]
+                                d["emitter current"] = d[d["emitter"]["NWID"]+" current"]
+                                d["receiver voltage"] = d[d["detector"]["NWID"]+" voltage"]
+                                d["receiver current"] = d[d["detector"]["NWID"]+" current"]
+                                
+                                for item in ["emitter voltage","emitter current","receiver voltage","receiver current"]:
+                                    if type(d[item][0]) != list:
+                                        d[item] = [d[item]]
+                                
+                                for i,val in enumerate(d["receiver voltage"]):
+                                    d["emitter current"][i],d["emitter voltage"][i],d["receiver current"][i],d["receiver voltage"][i] = self.Match_Forward_Voltage_Pulse(d["emitter current"][i],d["emitter voltage"][i],d["receiver current"][i],d["receiver voltage"][i])
+                                
+                                ### Now we have to play a game to figure out if we need to swap receiver and emitter voltages...
+                                if any(item in d["Settings"]["Test Name"] for item in ["4_pulse","4 probe","ladder"]):
+                                    if np.max(np.abs(np.diff(d["emitter voltage"][0]))) < np.max(np.abs(np.diff(d["receiver voltage"][0]))):
+                                        rec = d["emitter voltage"].copy()
+                                        emm = d["receiver voltage"].copy()
+                                        d["emitter voltage"] = emm
+                                        d["receiver voltage"] = rec
                                         
-                                    if subdevice not in devicedict[device]:
-                                        devicedict[device][subdevice] = {}
-                                        devicedict[device][subdevice]["Sample"]     = device.split("-")[0]
-                                        devicedict[device][subdevice]["Device"]     = device
-                                        devicedict[device][subdevice]["Waveguide"]  = material
-                                        devicedict[device][subdevice]["filename"]   = device+".json"    
-                                    nwid = d["emitter"]["NWID"]
-                                    if nwid not in devicedict[device][subdevice]:
-                                        devicedict[device][subdevice][nwid] = {}
+                                    if np.max(np.abs(d["emitter current"][0])) < np.max(np.abs(d["receiver current"][0])):
+                                        rec = d["emitter current"].copy()
+                                        emm = d["receiver current"].copy()
+                                        d["emitter current"] = emm
+                                        d["receiver current"] = rec
+                                        
+                                for item in ["NW1 current","NW1 voltage","NW2 current","NW2 voltage"]:
+                                    d.pop(item)
+                                
+                                for i,EVarr in enumerate(d["emitter voltage"]):        
+                                    sort_data["I_E"].append({})
+                                    sort_data["V_E"].append({})
+                                    sort_data["I_R"].append({})
+                                    for j,volt in enumerate(EVarr):
+                                        #We go through and find all consecutive values measured at each voltage. This means we build up an average pulse voltage on emitter = average current on Receiver.
+                                        rvolt = round(volt,1) 
+                                        if rvolt not in sort_data["V_E"][i].keys():
+                                            sort_data["I_E"][i][rvolt] = []
+                                            sort_data["V_E"][i][rvolt] = []
+                                            sort_data["I_R"][i][rvolt] = []
+                                        else:
+                                            sort_data["I_E"][i][rvolt].append(d["emitter current"][i][j])
+                                            sort_data["V_E"][i][rvolt].append(rvolt)
+                                            sort_data["I_R"][i][rvolt].append(d["receiver current"][i][j])
+                                for i,VEdict in enumerate(sort_data["V_E"]):     
+                                    avg_data["I_E"].append([])
+                                    avg_data["V_E"].append([])
+                                    avg_data["I_R"].append([])
                                     
-                                    # Add new runs to existing NWID
-                                    jsondict = self.create_devicedata_dict(d,key)
-                                    devicedict[device][subdevice][nwid].update(jsondict)
+                                    for kkey in VEdict.keys():
+                                        #avg_data now contains the average emitter and Receiver current for each unique applied voltage.
+                                        avg_data["I_E"][i].append(np.mean(sort_data["I_E"][i][kkey]))
+                                        avg_data["V_E"][i].append(np.mean(sort_data["V_E"][i][kkey]))
+                                        avg_data["I_R"][i].append(np.mean(sort_data["I_R"][i][kkey]))
+                                
+                                d["I_E_steps"] = avg_data["I_E"]
+                                d["I_R_steps"] = avg_data["I_R"]
+                                d["V_E_steps"] = avg_data["V_E"]
+                                
+                                fulldevice = d["LOG"]["Device"].replace(" ","-").replace("_","-")
+                                device     = "-".join(fulldevice.split("-")[:2]) 
+                                filtered_device = [part for part in fulldevice.split("-") if part not in self.MATERIAL_Types] #We are just double checking that we don't have material duplicates
+                                subdevice  = "-".join(filtered_device[1:]) + "_" + material
+                                
+                                if device not in devicedict.keys():
+                                    devicedict[device] = {}
+                                    
+                                if subdevice not in devicedict[device]:
+                                    devicedict[device][subdevice] = {}
+                                    devicedict[device][subdevice]["Sample"]     = device.split("-")[0]
+                                    devicedict[device][subdevice]["Device"]     = device
+                                    devicedict[device][subdevice]["Waveguide"]  = material
+                                    devicedict[device][subdevice]["filename"]   = device+".json"    
+                                nwid = d["emitter"]["NWID"]
+                                if nwid not in devicedict[device][subdevice]:
+                                    devicedict[device][subdevice][nwid] = {}
+                                
+                                # Add new runs to existing NWID
+                                jsondict = self.create_devicedata_dict(d,key)
+                                devicedict[device][subdevice][nwid].update(jsondict)
 
     # Sort keys at the upper level alphabetically
     devicedict = {k: devicedict[k] for k in sorted(devicedict)}
@@ -356,9 +453,10 @@ def update_rundata_variable(self, selfvar="session", datavar="DATA", alter_type=
             new_value = toggle_options[0]  # Default to first option if current value is invalid
         
         if "accept" in partial_keylist:
-            if isinstance(self.get_nested_dict_value(datavar,[devicekey, subdevicekey, nwkey, runkey] + ["editdict","n"]),(type(None),str)):
-                new_value = False 
-                print("IDEALITY NOT FITTED, CANNOT SET TRUE")
+            if self.USERMODE == "Ideality":
+                if isinstance(self.get_nested_dict_value(datavar,[devicekey, subdevicekey, nwkey, runkey] + ["editdict","n"]),(type(None),str)):
+                    new_value = False 
+                    print("IDEALITY NOT FITTED, CANNOT SET TRUE")
         
         print("Toggled " + " - ".join((keylist)) +  " to: " +str(new_value)  )
     elif alter_type == "Overwrite" and new_value is not None:
@@ -518,42 +616,69 @@ def populate_run_table(self, selfvar="session", listwidgets=None,keylists=None):
     if selected_device and selected_subdevice:
         subdevice_data = device_data[selected_device][selected_subdevice]
         NWkeys = [key for key in subdevice_data.keys() if key not in ["Sample","Device","Waveguide","filename"]]
+        run_table.setColumnCount(self.run_table_columns)    
+        run_table.setHorizontalHeaderLabels(self.run_table_colheaders)
         for nw_key in NWkeys:
             nw_data = subdevice_data[nw_key]
-            
             for runID, run_info in nw_data.items():
-                
+                row = run_table.rowCount()
+                run_table.insertRow(row)
                 run_edit   = run_info["editdict"]
                 nwid       = run_edit.get("NWID", "")
-                ideality   = run_edit.get("n", "N/A")
-                if type(ideality) !=str: ideality = f"{ideality:.5f}"
-                ideality_s = run_edit.get("n_series", "N/A")
-                if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
-                Rs_lin     = run_edit.get("Rs_lin", "N/A")
-                if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
-                Rs_series  = run_edit.get("Rs", "N/A")
-                if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
                 accept     = run_edit.get("accept",None)
                 lighton    = run_edit.get("light_on",False) 
                 mrange     = run_edit.get("mrange","Unknown")
+                operation  = run_info["data"]["Settings"]["Test Name"].split("#")[0]
                 if run_edit.get("accept") == True:
                     status = "Accepted"
                 elif run_edit.get("accept") == False:
                     status = "Rejected"
                 else:
                     status = "Not Done"
+                if self.USERMODE == "Ideality":
+                    ideality   = run_edit.get("n", "N/A")
+                    if type(ideality) !=str: ideality = f"{ideality:.5f}"
+                    ideality_s = run_edit.get("n_series", "N/A")
+                    if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
+                    Rs_lin     = run_edit.get("Rs_lin", "N/A")
+                    if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
+                    Rs_series  = run_edit.get("Rs", "N/A")
+                    if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
+                                    
+                    run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
+                    run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
+                    run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
+                    run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
+                    run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
+                    run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
+                    run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
+                    run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
+                    run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
                 
-                row = run_table.rowCount()
-                run_table.insertRow(row)
-                run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
-                run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
-                run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
-                run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
-                run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
-                run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
-                run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
-                run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
-                run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
+                
+                if self.USERMODE == "Communication":
+                    try:
+                        SI = run_info["fitdict"]["sweep_index"]
+                    except:
+                        SI = 0
+                    try:
+                        IRavg = "["+", ".join([f"{step*1e+15:.2f}" for step in run_info["data"]["I_R_steps"][SI]])+"]"
+                        VEavg = "["+", ".join([f"{step:.2f}" for step in run_info["data"]["V_E_steps"][SI]])+"]"
+                        IEavg = "["+", ".join([f"{step*1e+6:.3f}" for step in run_info["data"]["I_E_steps"][SI]])+"]" 
+                    except:
+                        IRavg = "N/A"
+                        VEavg = "N/A"
+                        IEavg = "N/A"
+                        
+                    run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
+                    run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
+                    run_table.setItem(row, 2, qtw.QTableWidgetItem(IRavg))
+                    run_table.setItem(row, 3, qtw.QTableWidgetItem(VEavg))
+                    run_table.setItem(row, 4, qtw.QTableWidgetItem(IEavg))
+                    run_table.setItem(row, 5, qtw.QTableWidgetItem(f"{lighton}"))
+                    run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{mrange}"))
+                    run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{status}"))
+                    run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{operation}"))
     run_table.blockSignals(False)    
     run_table.setCurrentCell(run_id,0) #If we just reset, this run_id will be 0 anyway, but this will trigger the run_table index update function anwyay.
 
@@ -673,39 +798,66 @@ def update_all_on_run_change_and_colors(self, selfvar="session", listwidgets=Non
         subdevice_data = device_data[selected_subdevice]
         NWkeys = [key for key in subdevice_data.keys() if key not in ["Sample", "Device", "Waveguide", "filename"]]
         row = 0
+        run_table.setColumnCount(self.run_table_columns)    
+        run_table.setHorizontalHeaderLabels(self.run_table_colheaders)
         for nw_key in NWkeys:
             nw_data = subdevice_data[nw_key]
             for runID, run_info in nw_data.items():
                 run_edit   = run_info["editdict"]
                 nwid       = run_edit.get("NWID", "")
-                ideality   = run_edit.get("n", "N/A")
-                if type(ideality) !=str: ideality = f"{ideality:.5f}"
-                ideality_s = run_edit.get("n_series", "N/A")
-                if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
-                Rs_lin     = run_edit.get("Rs_lin", "N/A")
-                if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
-                Rs_series  = run_edit.get("Rs", "N/A")
-                if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
                 accept     = run_edit.get("accept",None)
                 lighton    = run_edit.get("light_on",False) 
                 mrange     = run_edit.get("mrange","Unknown")
+                operation  = run_info["data"]["Settings"]["Test Name"].split("#")[0]
                 if run_edit.get("accept") == True:
                     status = "Accepted"
                 elif run_edit.get("accept") == False:
                     status = "Rejected"
                 else:
                     status = "Not Done"
+                if self.USERMODE == "Ideality":
+                    ideality   = run_edit.get("n", "N/A")
+                    if type(ideality) !=str: ideality = f"{ideality:.5f}"
+                    ideality_s = run_edit.get("n_series", "N/A")
+                    if type(ideality_s) !=str: ideality_s = f"{ideality_s:.5f}"
+                    Rs_lin     = run_edit.get("Rs_lin", "N/A")
+                    if type(Rs_lin) !=str: Rs_lin = f"{Rs_lin*1e-6:.5f}"
+                    Rs_series  = run_edit.get("Rs", "N/A")
+                    if type(Rs_series) !=str: Rs_series = f"{Rs_series*1e-6:.5f}"
+                                    
+                    run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
+                    run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
+                    run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
+                    run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
+                    run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
+                    run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
+                    run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
+                    run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
+                    run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
                 
-                run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
-                run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
-                run_table.setItem(row, 2, qtw.QTableWidgetItem(ideality))
-                run_table.setItem(row, 3, qtw.QTableWidgetItem(ideality_s))
-                run_table.setItem(row, 4, qtw.QTableWidgetItem(Rs_lin))
-                run_table.setItem(row, 5, qtw.QTableWidgetItem(Rs_series))
-                run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{lighton}"))
-                run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{mrange}"))
-                run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{status}"))
-
+                if self.USERMODE == "Communication":
+                    try:
+                        SI = run_info["fitdict"]["sweep_index"]
+                    except:
+                        SI = 0
+                    try:
+                        IRavg = "["+", ".join([f"{step*1e+15:.2f}" for step in run_info["data"]["I_R_steps"][SI]])+"]"
+                        VEavg = "["+", ".join([f"{step:.2f}" for step in run_info["data"]["V_E_steps"][SI]])+"]"
+                        IEavg = "["+", ".join([f"{step*1e+6:.3f}" for step in run_info["data"]["I_E_steps"][SI]])+"]" 
+                    except:
+                        IRavg = "N/A"
+                        VEavg = "N/A"
+                        IEavg = "N/A"
+                    
+                    run_table.setItem(row, 0, qtw.QTableWidgetItem(f"{nwid}"))
+                    run_table.setItem(row, 1, qtw.QTableWidgetItem(f"{runID}"))
+                    run_table.setItem(row, 2, qtw.QTableWidgetItem(IRavg))
+                    run_table.setItem(row, 3, qtw.QTableWidgetItem(VEavg))
+                    run_table.setItem(row, 4, qtw.QTableWidgetItem(IEavg))
+                    run_table.setItem(row, 5, qtw.QTableWidgetItem(f"{lighton}"))
+                    run_table.setItem(row, 6, qtw.QTableWidgetItem(f"{mrange}"))
+                    run_table.setItem(row, 7, qtw.QTableWidgetItem(f"{status}"))
+                    run_table.setItem(row, 8, qtw.QTableWidgetItem(f"{operation}"))
                 if lighton and accept:
                     color = 'pale blue'     # Light on + Accepted
                 elif lighton and accept is False:
@@ -719,7 +871,7 @@ def update_all_on_run_change_and_colors(self, selfvar="session", listwidgets=Non
                 else:
                     color = 'pale tan'      # Not Done
 
-                for col in range(9):
+                for col in range(self.run_table_columns):
                     run_table.item(row, col).setBackground(QColor(*get_rgbhex_color(color, ctype="rgba255")))
 
                 row += 1
@@ -829,8 +981,8 @@ def create_device_subdevice_list(self, selfvar="session", datavar="DATA", leftke
     device_widget.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)
     # Run Table
     run_table = qtw.QTableWidget()
-    run_table.setColumnCount(9)
-    run_table.setHorizontalHeaderLabels(["NWID", "Run ID", "n linear", "n series", "Rs est [MΩ]", "Rs fit [MΩ]", "Light On", "Range", "Status"])
+    run_table.setColumnCount(self.run_table_columns)    
+    run_table.setHorizontalHeaderLabels(self.run_table_colheaders)
     run_table.horizontalHeader().setSectionResizeMode(qtw.QHeaderView.Stretch)
     run_table.verticalHeader().setVisible(False)
     run_table.setSelectionBehavior(qtw.QAbstractItemView.SelectRows)
@@ -1072,9 +1224,13 @@ def update_spinbox_range(self, selfvar, spinbox):
     """
     Updates the range and value of the spin box whenever self.CURRENT_RUN changes.
     """
-    
+    if self.USERMODE == "Ideality":
+        datakey = "voltage"
+    elif self.USERMODE == "Communication":
+        datakey = "emitter voltage"
+        
     try:
-        data_length = len(self.CURRENT_RUN["data"]["voltage"])
+        data_length = len(self.CURRENT_RUN["data"][datakey])
         max_value = data_length - 1  # Set the maximum value to length of the data - 1
     except:
         data_length = 0
@@ -1171,23 +1327,38 @@ def update_directory_button(self,selfvar, button, keylist):
             print("Data succesfully loaded from DataStorage. If you just selected it, the last error was wrong!")
         except:
             print("Data does not yet exist in DataStorage. Add some files first, then select it again!")
+            
 def update_usermode_button_directory(self,selfvar, button, rootlist,usermodeIDkeys,keylist):
     rootdir        = self.get_nested_dict_value(selfvar, rootlist)
     self.USERMODE  = self.USERMODE_Types[self.get_nested_dict_value(selfvar,usermodeIDkeys)] 
     newdir         = os.sep.join([rootdir,self.USERMODE ])
     self.set_nested_dict_value(selfvar,keylist,newdir)
+    if self.USERMODE == "Ideality":
+        self.run_table_columns = 9
+        self.run_table_colheaders = ["NWID", "Run ID", "n linear", "n series", "Rs est [MΩ]", "Rs fit [MΩ]", "Light On", "Range", "Status"]
+        
+    if self.USERMODE == "Communication":
+        self.run_table_columns = 9
+        self.run_table_colheaders = ["NWEID", "Run ID" ,"I_Rec avg [fA]", "V_Emit avg [V]", "I_Emit avg [uA]", "Light On", "Range", "Status", "Operation"]
+    
+    self.read_data_storage()
     print("Changed user mode directory to "+newdir)
         
 def read_data_storage(self):
     #We will do data storage in this way: 
     #device (DFR1-EG) -> #subdevice (BR1) -> runID + NWID -> [deviceID, subdeviceID, NWID, Vdata, Idata, Vfitdata, Ifitdata, inital_guess, plot_range,fit_range,light_on, accept_data]
-    
+    self.DATA = {}
     datafilepath = os.sep.join([self.session["Directories"]["Data_Storage"],self.USERMODE])
     try:
         for file in [f for f in os.listdir(datafilepath) if f.endswith(".json")]:    
             self.DATA[file.replace(".json","")] = json_loaddata(os.sep.join([datafilepath,file]))
     except:
         print("Please select new data directories")
+    print("Loaded Devices: "+", ".join(list(self.DATA.keys())))
+    try:
+        self.populate_device_list(selfvar="session", datavar = "DATA",device_widget = self.device_subdevice_list[0])
+    except:
+        None
     
 def select_directory(self,selfvar, button, keylist,select_string=None):
     if select_string == None:
@@ -1242,6 +1413,17 @@ def Correct_Forward_Voltage(self,I,V):
         I = np.array(I)
     return(I,V)
 
+def Match_Forward_Voltage_Pulse(self,Em_I,Em_V,Det_I,Det_V):
+    #We want all currents to show "foward current", so we must check if the abs(min) > abs(max)    
+    if abs(np.max(Det_I)) < abs(np.min(Det_I)):
+        Det_I = -np.array(Det_I)
+    
+    if abs(np.max(Em_I)) < abs(np.min(Em_I)):
+        if Em_V[Em_I.index(np.min(Em_I))] < 0:
+            Em_V = -np.array(Em_V)
+        Em_I = -np.array(Em_I)    
+    return(Em_I,Em_V,Det_I,Det_V)    
+
 def alter_Vmax(self,selfvar="session",increment=1):
     Vmax = self.get_nested_dict_value("session",["fitdict","Fit_plot","Vmax"]) + increment
     self.update_rundata_variable(selfvar="selfvar",datavar="DATA", alter_type="Overwrite",new_value=Vmax,partial_keylist=["fitdict","Fit_plot","Vmax"],listwidgets=self.device_subdevice_list,keylists=[["List_Indices","DeviceID"],["List_Indices","SubdeviceID"],["List_Indices","RunID"]])
@@ -1283,12 +1465,29 @@ def extract_negative_segments_and_dots(V, I):
             dots.append((V[segment], I[segment]))
     return segments, dots
     
+def log_abs(self,val):
+    if self.is_log_scale:
+        return(np.abs(val))
+    else:
+        return(val)
     
 def plot_current_data(self):
     lw_wide   = 5
     lw_mid    = 3
     lw_narrow = 2
     self.ax.clear()
+    try:
+        for item in self.axs[1:]:
+            item.remove()
+    except:
+        None
+        
+    #Communication Colours
+    cols = {"IE":[get_rgbhex_color("dark blue",ctype="rgba"),get_rgbhex_color("blue",ctype="rgba")],
+            "VE":[get_rgbhex_color("dark orange",ctype="rgba"),get_rgbhex_color("orange",ctype="rgba")],
+            "IR":[get_rgbhex_color("dark green",ctype="rgba"),get_rgbhex_color("green",ctype="rgba")]}
+    
+    #Ideality Colours
     c_IV    = get_rgbhex_color("green",ctype="rgba")
     c_IVneg = get_rgbhex_color("pale lime",ctype="rgba")
     c_ideal = get_rgbhex_color("light violet",ctype="rgba")
@@ -1299,8 +1498,171 @@ def plot_current_data(self):
     fitdict   = RD["fitdict"]
     data      = RD["data"]
     edit_vars = RD["editdict"]
-    current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
+    if self.USERMODE == "Communication":
+        
+        self.axs = [] #new ax handles
+        self.ph  = [] #Plot handles 
+        self.axs.append(self.ax)
+        self.axs.append(self.ax.twinx())
+        self.axs.append(self.ax.twinx())
+        self.axs[0].patch.set_alpha(0)  # Set the background behind everything
+        self.ax.set_zorder(2)
+        self.axs[2].patch.set_zorder(0)
+        self.axs[1].set_zorder(1)
+        
+        plotkwargs = {}
+
+        Em_V,Em_I,Det_V,Det_I = [data["emitter voltage"][fitdict["sweep_index"]],data["emitter current"][fitdict["sweep_index"]],data["receiver voltage"][fitdict["sweep_index"]],data["receiver current"][fitdict["sweep_index"]]] 
+        
+        self.ph.append(self.axs[1].plot(data["Time"][0:len(Det_I)],Det_I,label='$I_{Receiver}$ [A]',color=cols["IR"][1],**plotkwargs,linewidth=5,zorder=5)[0] ) 
+        self.ph.append(self.axs[2].plot(data["Time"][0:len(Det_I)],Em_I,label='$I_{Emitter}$ [A]',color=cols["IE"][1],**plotkwargs,linewidth=5,zorder=4)[0] ) 
+        self.ph.append(self.axs[0].plot(data["Time"][0:len(Det_I)],Em_V,'-.',label='$V_{Emitter}$ [V]',color=cols["VE"][1],linewidth = 5*0.5,zorder=6)[0] )
+                        
+                
+        self.axs[0].set_xlabel("Time [s]")
+        self.axs[1].set_ylabel("$I_{Receiver}$ [A]" ,color=cols["IR"][0])
+        self.axs[2].set_ylabel('$I_{Emitter}$ [A]'  , color=cols["IE"][0])
+        self.axs[0].set_ylabel('$V_{Emitter}$ [V]',color=cols["VE"][0])
+        
+   
+        # # Get the right spine of ax[2] 
+        # bboxes = {}
+        # for ax in self.axs:
+        #     bbox = ax.get_position()
+            
+        #     bbox.x0 = kw.bounds_padding[0]; bbox.x1 = kw.bounds_padding[1]; 
+        #     bbox.y0 = kw.bounds_padding[2]; bbox.y1 = kw.bounds_padding[3]; 
+        #     ax.set_position(bbox)
+        #     bboxes[ax] = bbox
+
+        
+        
+        #We want to set axis limits so that Voltage = 90% of the ylim
+        def rpad(data,ratio):
+            drange = np.max(data)-np.min(data)
+            dpad   = (drange*(1/ratio) - drange)/2
+            return([np.min(data)-dpad,np.max(data)+dpad],dpad)
+
+        V_range = 0.925
+        
+        Vlim,Vpad = rpad(Em_V,0.925)
+        
+        fit_range=True
+        if fit_range:
+            self.axs[0].set_ylim(Vlim)
+                                    
+        #This is the ratio of the positive axis over the negative one such that the currents fit underneath the voltage every time 
+        
+        try: 
+            RM1 = np.array([(np.min(Em_V) - Vpad)/(Vlim[1] - Vlim[0]) ,(np.max(Em_V) + Vpad)/(Vlim[1] - Vlim[0])])  
+            RM2 = np.array([(np.min(Em_I))/(np.max(Em_I) - np.min(Em_I)) ,(np.max(Em_I))/(np.max(Em_I) - np.min(Em_I))])  
+        except:
+            None
+        #NOTE: 0.5 RATIO MOD means that 0.5 of the TOTAL RANGE should fit.
+            
+        maxmod = 1 - np.abs(RM1[1] - RM2[1])
+        minmod = -(1-np.max(np.abs(RM1)))
+        #%%
+        def mod_mod(val):
+            #0.5 = 2, 1 = 1
+            mod = 1/val
+            return(mod)
+        #%%
+
+        DetIMod = 1.4*mod_mod(RM1[1])
+        EmIMod  = 1.2*mod_mod(RM1[1])
+        if fit_range:
+            self.axs[1].set_ylim(np.max(np.abs(Det_I))*minmod*DetIMod, 
+                               np.max(np.abs(Det_I))*maxmod*DetIMod)  
+            self.axs[2].set_ylim(np.max(np.abs(Em_I))*minmod*EmIMod,
+                               np.max(np.abs(Em_I))*maxmod*EmIMod)  
+        
+            dmp.align_axis_zeros([self.axs[1],self.axs[2],self.axs[0]])
+            
+            for nax in self.axs:
+                dmp.adjust_ticks(nax,which="both",Nx=5,Ny=5,xpad=1,ypad=1,respect_zero =True,whole_numbers_only = True)       #adjust ticks based on original ticks
+
+       
+        ticklabelwidth = dmp.dummy_text_params("−0.00",self.canvas.figure,fontsize=self.fontsizes["yticks"],ezplot=False)["width"] # Get the width of the bounding box in figure coordinates
+        #We will get the width of a single "-" in figure coordinates too.
+        minuslabelwidth = dmp.dummy_text_params("−",self.canvas.figure,fontsize=self.fontsizes["yticks"],ezplot=False)["width"] # Get the width of the bounding box in figure coordinates
+        
+        spine_move = self.canvas.figure.dpi*4.01*ticklabelwidth
+        spine_move_fig = self.axs[2].transAxes.inverted().transform((spine_move, 0))
+        
+        self.axs[2].spines.right.set_position(("outward",spine_move*2))
+
+        
+        #Setting Spine colours and tickparameters
+        self.axs[1].yaxis.label.set_color(cols["IR"][0])
+        self.axs[2].yaxis.label.set_color(cols["IE"][0])
+        self.axs[0].yaxis.label.set_color(cols["VE"][0])
+        
+        
+        self.axs[0].tick_params(which="both", axis='y', colors=cols["VE"][0])
+        self.axs[1].tick_params(which="both", axis='y', colors=cols["IR"][0])
+        self.axs[2].tick_params(which="both",axis='y', colors=cols["IE"][0])
+        
+        self.axs[0].spines["left"].set_color(cols["VE"][0])
+        self.axs[1].spines["right"].set_color(cols["IR"][0])
+        self.axs[2].spines["right"].set_color(cols["IE"][0])
+        
+        self.axs[1].tick_params(axis='x')
+        legend = self.axs[1].legend(ncol=3,handles=[self.ph[0], self.ph[1], self.ph[2]],loc="upper center",frameon=False,columnspacing=0.8,handlelength=1.5) 
+        # Get the font size for the legend text
+       
+        legendheight = dmp.dummy_text_params("DUMMY",self.canvas.figure,fontsize=self.fontsizes["legend"],ezplot=False)["height"] # Get the width of the bounding box in figure coordinates
+        for t in legend.get_texts(): t.set_va('bottom')
+        legend.set_bbox_to_anchor([sum(x) for x in zip((0, 0.6*legendheight, 1, 1),(0,0,0,0))])
+ 
+ 
+        t1 = self.axs[1].yaxis.get_offset_text().get_position()
+        t2 = self.axs[2].yaxis.get_offset_text().get_position()
+   
+        self.axs[1].yaxis.get_offset_text().set_position((t1[0] ,t1[1] ))
+        self.axs[2].yaxis.get_offset_text().set_position((t2[0]+0.07 ,t2[1]+0.07 ))
+        # self.axs[1].yaxis.get_offset_text().set_position((t1[0] +0.125 ,t1[1] + 0.125))
+        # self.axs[2].yaxis.get_offset_text().set_position((t2[0] + -spine_move_fig[0]+0.04,t2[1] + 0.125))
+
+        for ax in self.axs:
+            ax.spines["left"].set_color(cols["VE"][0])
+        
+     
+
+        for ax in self.axs:
+            if ax != 0:
+                move_ax = False
+                
+                y_min, y_max = ax.get_ylim()
+                
+                # Get the y-tick positions
+                yticks = ax.get_yticks()
+                
+                # Filter tick labels based on whether they are within the y-axis limits
+                in_bounds_labels = [tick for tick in yticks if y_min <= tick <= y_max]
+                
+                if np.min(in_bounds_labels)<0:
+                    move_ax = True
+                            
+                if move_ax:
+                    for j, tickobj in enumerate(ax.get_yticklabels()):
+                                                            
+                        ticktext   = tickobj.get_text()
+                        if ticktext == "":
+                            ticktext = "-1"
+                            
+                        if float(ticktext.replace("$\\mathdefault{","").replace("}$","").replace("−","-"))>=0:
+                            tick_position = tickobj.get_position()
+
+                            # Create a new position with the x-axis translation
+                            new_position = (tick_position[0] + 0.8*minuslabelwidth, tick_position[1])
+             
+                            # Set the new position for the tick label
+                            tickobj.set_position(new_position)
+                            #ticktrans = mpl.transforms.Affine2D().translate(minuslabelwidth*FIG.fig.dpi,0) 
+                            #tickobj.set_transform(tickobj.get_transform() + ticktrans)
     if self.USERMODE == "Ideality":
+        current,voltage = self.Correct_Forward_Voltage(data["current"][fitdict["sweep_index"]],data["voltage"][fitdict["sweep_index"]])
         if self.session["PlotWhich"]["Ideality"]["IV"]:    
             self.ax.set_xlabel("Voltage [V]")
             self.ax.set_ylabel("Current [A]")
@@ -1327,69 +1689,71 @@ def plot_current_data(self):
 
             n    =  edit_vars["n"]
             
-            if self.is_log_scale: 
-                self.ax.plot(voltage,np.abs(current),linewidth=lw_wide,c=c_IV)
-                if IVfitneg:
-                    for v_segment, i_segment in IVfitneg[0]:
-                        self.ax.plot(v_segment, np.abs(i_segment),linewidth=lw_mid, color=c_IVneg)
-    
-                    # Plot dots
-                    for v_dot, i_dot in IVfitneg[1]:
-                        self.ax.plot(v_dot, np.abs(i_dot), 'o', color=c_IVneg)
-                
-                        
-                if IVneg:
-                    for v_segment, i_segment in IVneg[0]:
-                        self.ax.plot(v_segment, np.abs(i_segment),linewidth=lw_wide, color=c_IVneg)
-    
-                    # Plot dots
-                    for v_dot, i_dot in IVneg[1]:
-                        self.ax.plot(v_dot, np.abs(i_dot), 'o', color=c_IVneg)
-                
+
+            self.ax.plot(voltage,self.log_abs(current),linewidth=lw_wide,c=c_IV)
+            if IVfitneg:
+                for v_segment, i_segment in IVfitneg[0]:
+                    self.ax.plot(v_segment, self.log_abs(i_segment),linewidth=lw_mid, color=c_IVneg)
+
+                # Plot dots
+                for v_dot, i_dot in IVfitneg[1]:
+                    self.ax.plot(v_dot, self.log_abs(i_dot), 'o', color=c_IVneg)
+            
                     
-                if IVfitsneg:
-                    for v_segment, i_segment in IVfitsneg[0]:
-                        self.ax.plot(v_segment, np.abs(i_segment), color=c_seriesn)
-    
-                    # Plot dots
-                    for v_dot, i_dot in IVfitsneg[1]:
-                        self.ax.plot(v_dot, np.abs(i_dot), 'o', color=c_seriesn)
-                        
+            if IVneg:
+                for v_segment, i_segment in IVneg[0]:
+                    self.ax.plot(v_segment, self.log_abs(i_segment),linewidth=lw_wide, color=c_IVneg)
+
+                # Plot dots
+                for v_dot, i_dot in IVneg[1]:
+                    self.ax.plot(v_dot, self.log_abs(i_dot), 'o', color=c_IVneg)
+            
+                
+            if IVfitsneg:
+                for v_segment, i_segment in IVfitsneg[0]:
+                    self.ax.plot(v_segment, self.log_abs(i_segment), color=c_seriesn)
+
+                # Plot dots
+                for v_dot, i_dot in IVfitsneg[1]:
+                    self.ax.plot(v_dot, self.log_abs(i_dot), 'o', color=c_seriesn)
+                    
+            
+            if not isinstance(Vfit,(type(None), str)) and not isinstance(Ifit,(type(None),str)):
+                self.ax.plot(Vfit,self.log_abs(Ifit),linewidth=lw_mid,c=c_ideal)
+            
+            if not isinstance(Vfits,(type(None), str)) and not isinstance(Ifits,(type(None),str)):
+                self.ax.plot(Vfits,self.log_abs(Ifits),linewidth=lw_narrow,c=c_series)
+                    
+            if self.is_log_scale:
                 self.ax.set_yscale("log")
                 self.toggle_log_button.setText("Log")
-        
-                if not isinstance(Vfit,(type(None), str)) and not isinstance(Ifit,(type(None),str)):
-                    self.ax.plot(Vfit,np.abs(Ifit),linewidth=lw_mid,c=c_ideal)
-                
-                if not isinstance(Vfits,(type(None), str)) and not isinstance(Ifits,(type(None),str)):
-                    self.ax.plot(Vfits,np.abs(Ifits),linewidth=lw_narrow,c=c_series)
-                    
-               
-                
-                
             else:
-                self.ax.plot(voltage,current,c=c_IV)
-                if not isinstance(Vfit,(type(None), str)) and not isinstance(Ifit,(type(None),str)):
-                    self.ax.plot(Vfit,Ifit,c=c_ideal)
+               self.ax.set_yscale("linear")
+               self.toggle_log_button.setText("Linear") 
                 
-                if IVfitneg:
-                    for v_segment, i_segment in IVfitneg[0]:
-                        self.ax.plot(v_segment, i_segment, color=c_IVneg)
+                
+            # else:
+            #     self.ax.plot(voltage,current,c=c_IV)
+            #     if not isinstance(Vfit,(type(None), str)) and not isinstance(Ifit,(type(None),str)):
+            #         self.ax.plot(Vfit,Ifit,c=c_ideal)
+                
+            #     if IVfitneg:
+            #         for v_segment, i_segment in IVfitneg[0]:
+            #             self.ax.plot(v_segment, i_segment, color=c_IVneg)
     
-                    # Plot dots
-                    for v_dot, i_dot in IVfitneg[1]:
-                        self.ax.plot(v_dot, np.abs(i_dot), 'o', color=c_IVneg)
-                if IVneg:
-                    for v_segment, i_segment in IVneg[0]:
-                        self.ax.plot(v_segment, i_segment, color=c_IVneg)
+            #         # Plot dots
+            #         for v_dot, i_dot in IVfitneg[1]:
+            #             self.ax.plot(v_dot, np.abs(i_dot), 'o', color=c_IVneg)
+            #     if IVneg:
+            #         for v_segment, i_segment in IVneg[0]:
+            #             self.ax.plot(v_segment, i_segment, color=c_IVneg)
     
-                    # Plot dots
-                    for v_dot, i_dot in IVneg[1]:
-                        self.ax.plot(v_dot, i_dot, 'o', color=c_IVneg)
+            #         # Plot dots
+            #         for v_dot, i_dot in IVneg[1]:
+            #             self.ax.plot(v_dot, i_dot, 'o', color=c_IVneg)
                         
                 
-                self.ax.set_yscale("linear")
-                self.toggle_log_button.setText("Linear")
+                
          
         if self.session["PlotWhich"]["Ideality"]["Rs"]:
             self.ax.set_xlabel("Voltage [V]")
@@ -1404,37 +1768,23 @@ def plot_current_data(self):
             except:
                 Rsn = False
             try:            
+               
+                self.ax.plot(voltage,self.log_abs(Rs_fit),c=c_IV)
+                if Rsn:
+                    for v_segment, r_segment in Rsn[0]:
+                        self.ax.plot(v_segment, self.log_abs(r_segment), color=c_IVneg)
+    
+                    # Plot dots
+                    for v_dot, r_dot in Rsn[1]:
+                        self.ax.plot(v_dot, self.log_abs(r_dot), 'o', color=c_IVneg)
+                
                 if self.is_log_scale: 
-                    self.ax.plot(voltage,np.abs(Rs_fit),c=c_IV)
-                    if Rsn:
-                        for v_segment, r_segment in Rsn[0]:
-                            self.ax.plot(v_segment, np.abs(r_segment), color=c_IVneg)
-        
-                        # Plot dots
-                        for v_dot, r_dot in Rsn[1]:
-                            self.ax.plot(v_dot, np.abs(r_dot), 'o', color=c_IVneg)
-                    
                     self.ax.set_yscale("log")
                     self.toggle_log_button.setText("Log")
-   
-                
                 else:
-                    self.ax.plot(voltage,Rs_fit,c=c_IV)
-                    
-                    if Rsn:
-                        for v_segment, r_segment in Rsn[0]:
-                            self.ax.plot(v_segment, r_segment, color=c_IVneg)
-        
-                        # Plot dots
-                        for v_dot, r_dot in Rsn[1]:
-                            self.ax.plot(v_dot, r_dot, 'o', color=c_IVneg)
-                            
-                    
                     self.ax.set_yscale("linear")
                     self.toggle_log_button.setText("Linear")
-            
-            
-                        
+                
             except:
                 None
             
@@ -1450,34 +1800,24 @@ def plot_current_data(self):
             except:
                 nsn = False
             try:            
+               
+                self.ax.plot(voltage,self.log_abs(n_fit),c=c_IV)
+                if nsn:
+                    for v_segment, r_segment in nsn[0]:
+                        self.ax.plot(v_segment, self.log_abs(r_segment), color=c_IVneg)
+    
+                    # Plot dots
+                    for v_dot, r_dot in nsn[1]:
+                        self.ax.plot(v_dot, self.log_abs(r_dot), 'o', color=c_IVneg)
+                
                 if self.is_log_scale: 
-                    self.ax.plot(voltage,np.abs(n_fit),c=c_IV)
-                    if nsn:
-                        for v_segment, r_segment in nsn[0]:
-                            self.ax.plot(v_segment, np.abs(r_segment), color=c_IVneg)
-        
-                        # Plot dots
-                        for v_dot, r_dot in nsn[1]:
-                            self.ax.plot(v_dot, np.abs(r_dot), 'o', color=c_IVneg)
-                    
                     self.ax.set_yscale("log")
                     self.toggle_log_button.setText("Log")
-   
-                
                 else:
-                    self.ax.plot(voltage,n_fit,c=c_IV)
-                    
-                    if nsn:
-                        for v_segment, r_segment in nsn[0]:
-                            self.ax.plot(v_segment, r_segment, color=c_IVneg)
-        
-                        # Plot dots
-                        for v_dot, r_dot in nsn[1]:
-                            self.ax.plot(v_dot, r_dot, 'o', color=c_IVneg)
-                            
-                    
                     self.ax.set_yscale("linear")
                     self.toggle_log_button.setText("Linear")
+   
+                
             except:
                 None
                     
