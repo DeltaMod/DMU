@@ -518,7 +518,7 @@ def SEM_Create_Insert(image_overview, inserts, filename="Auto",path="", scalebar
         
         if insert["framing"] is not None:
             # Calculate rx and ry as 5% of the width of the rectangle
-            rx = ry = 0.05 * insert_svg["im"].width
+            rx = ry = 0*0.05 * insert_svg["im"].width
         
             # Create the first rectangle with rounded corners
             rect1 = dwg["svg"].rect(

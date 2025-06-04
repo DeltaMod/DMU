@@ -598,6 +598,3 @@ def get_rgbhex_color(color_name,ctype = "hex"):
 
         return hex_color
 
-class ScalarFormatterForceFormat(mpl.ticker.ScalarFormatter):
-    def _set_format(self):  # Override function that finds format to use.
-        self.format = "%1.1f"  # Give format here
