@@ -101,7 +101,7 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
     return(cropl+offset,length-cropr+offset)
 
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
-                           remove_annotation=True, resampling="nearest",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True):
+                           remove_annotation=True, resampling="bicubic",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True):
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
     Example svg_output = 'output.svg'
