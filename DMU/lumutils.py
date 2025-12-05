@@ -277,20 +277,17 @@ class Nanowire:
         endcaps="both",          # "none", "top", "bottom", "both"
         cap_factor=0.5,          # squash factor for z-radius
         seed="none",             # "none", "top", "bottom", "both"
-        seed_radius_factor=0.9,
-        NW_mat=None,
-        seed_mat=None):
+        seed_rfactor = 0.1,      # Percentage of radius to offset particle by. 0.1 = 0.1r, -0.1 = -0.1r
+        seed_z_offset=0.1,):
         
         self.radius   = radius
         self.length   = length
-        self.NW_mat   = NW_mat
-        self.seed_mat = seed_mat
-        
+                
         self.endcaps = endcaps
         self.cap_factor = cap_factor
         
         self.seed = seed
-        self.seed_radius_factor = seed_radius_factor
+        self.seed_rfactor = seed_rfactor
         self.shape = shape
         
         # Storage (mirrors your RoundedCuboid structure)
@@ -310,16 +307,17 @@ class Nanowire:
         cyl = {
             "loc": {"x": 0, "y": 0, "z": self.length/2},
             "radius": {"x": self.radius, "y": self.radius, "z": self.length/2},
-            "range": {"zmin": 0, "zmax": self.length},
-            "norm": [0, 0, 1]
+            "range": {"zmin": -self.length/2, "zmax": self.length/2},
+            "norm": [0, 0, 1] #Technically, we cannot choose this at all...
         }
         self.core_cylinder.append(cyl)
     
     # -----------------------------------------------------------
-    #  ENDCAPS (deformed spheres)
+    #  ENDCAPS (deformed spheres) Note that this is only supported for shape=circle!
     # -----------------------------------------------------------
     def _make_endcaps(self):
-        if self.endcaps not in ("bottom", "top", "both"):
+
+        if self.endcaps not in ("bottom", "top", "both") or self.shape!="circle":
             return
         
         r = self.radius
@@ -328,7 +326,7 @@ class Nanowire:
         # Bottom
         if self.endcaps in ("bottom", "both"):
             cap = {
-                "loc": {"x": 0, "y": 0, "z": 0},
+                "loc": {"x": 0, "y": 0, "z": -self.length/2},
                 "radius": {"x": r, "y": r, "z": rz}
             }
             self.endcaps_list.append(cap)
@@ -336,7 +334,7 @@ class Nanowire:
         # Top
         if self.endcaps in ("top", "both"):
             cap = {
-                "loc": {"x": 0, "y": 0, "z": self.length},
+                "loc": {"x": 0, "y": 0, "z": self.length/2},
                 "radius": {"x": r, "y": r, "z": rz}
             }
             self.endcaps_list.append(cap)
@@ -344,31 +342,58 @@ class Nanowire:
     
     # -----------------------------------------------------------
     #  SEEDS (small spheres with different material)
+    # We need to make both, but we set the z-order of the "air" sphere to be at the bottom of everything.
     # -----------------------------------------------------------
     def _make_seeds(self):
         if self.seed not in ("bottom", "top", "both"):
             return
         
-        seed_r = self.radius * self.seed_radius_factor
+        seed_rz = self.radius * self.seed_rfactor
         
         # Bottom seed
         if self.seed in ("bottom", "both"):
             s = {
-                "loc": {"x": 0, "y": 0, "z": 0},
-                "radius": {"x": seed_r, "y": seed_r, "z": seed_r},
-                "seed_material": True
+                "loc": {"x": 0, "y": 0, "z": -self.length/2 - self.seed_rfactor*self.radius},
+                "radius": {"x": seed_rz, "y": seed_rz, "z": seed_rz}
             }
             self.seed_list.append(s)
         
         # Top seed
         if self.seed in ("top", "both"):
             s = {
-                "loc": {"x": 0, "y": 0, "z": self.length},
-                "radius": {"x": seed_r, "y": seed_r, "z": seed_r},
-                "seed_material": True
+                "loc": {"x": 0, "y": 0, "z": self.length/2 + self.seed_rfactor*self.radius},
+                "radius": {"x": seed_rz, "y": seed_rz, "z": seed_rz},
             }
             self.seed_list.append(s)
-            
+
+def L_primitive(sim,primitive="rect", method="span", x=0,y=0,z=0, Dx=0, Dy=0, Dz=0,xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
+    if primitive == "sphere":
+        name = sim.addsphere()
+        sim.setnamed(name, "x", x)
+        sim.setnamed(name, "y", y)
+        sim.setnamed(name, "z", z)
+        sim.setnamed(name, "radius x", rx)
+        sim.setnamed(name, "radius y", ry)
+        sim.setnamed(name, "radius z", rz)
+        if material: sim.setnamed(name, "material", material)
+        sim.setnamed(name, "z order", zorder)
+    
+    if primitive == "rect":
+        name = sim.addsphere()
+        sim.setnamed(name, "x", x)
+        sim.setnamed(name, "y", y)
+        sim.setnamed(name, "z", z)
+        sim.setnamed(name, "radius x", rx)
+        sim.setnamed(name, "radius y", ry)
+        sim.setnamed(name, "radius z", rz)
+        if material: sim.setnamed(name, "material", material)
+        sim.setnamed(name, "z order", zorder)
+
+def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
+    for sphere in NW.seed_list:
+        name = sim.addsphere()
+
+                     
 def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None):
     """
     Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.

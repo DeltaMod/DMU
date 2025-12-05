@@ -2,9 +2,7 @@ import os
 #%% Importing and executing logging
 import logging
 
-#%% Importing and executing logging
-import logging
-import logging
+
 try:
     from . custom_logger import get_custom_logger
     logger = get_custom_logger("DMU_SEMUTILS")
@@ -23,7 +21,7 @@ except:
     
 import tifffile
 import svgwrite
-from PIL import Image,ImageEnhance,ImageOps
+from PIL import Image,ImageEnhance,ImageOps, ImageFilter
 import base64
 from io import BytesIO
 import numpy as np 
@@ -33,11 +31,20 @@ import matplotlib.pyplot as plt
 import subprocess
 
 def ANY_Image_Enhance(PIL_im,brightness=None,contrast=None,sharpness=None,expand_range=True):
-    PIL_im = PIL_im.convert("L")
     
+    try:
+        PIL_im = PIL_im.convert("L")
+    except:
+        if PIL_im.dtype == np.float32 or PIL_im.dtype == np.float64:
+            img_array_uint8 = (PIL_im * 255).astype(np.uint8)
+        else:
+            img_array_uint8 = PIL_im
+        # Convert to PIL Image
+        PIL_im = Image.fromarray(img_array_uint8)
+        
     if expand_range:
         pixvals = np.array(PIL_im)
-        
+
         
         pixvals = ((pixvals - pixvals.min()) / (pixvals.max()-pixvals.min())) * 255
         PIL_im = Image.fromarray(pixvals.astype(np.uint8))
@@ -100,10 +107,151 @@ def split_crop_bounds_evenly(length,newlength,offset=0):
         cropr = crop-cropl
     return(cropl+offset,length-cropr+offset)
 
+def SEM_Strip_Banner_And_Enhance(image_path,filterdict={}):
+    """
+    filterdict_raw = dict(brightness=1,
+                          contrast=1,
+                          sharpness=1,
+                          expand_range=True,
+                          resampling="bicubic",
+                          blur=dict(type=None,radius=0),
+                          strip_banner=True,
+                          tweak_aspect=[1,1],
+                          force_aspect=False,
+                          imcrop=[0,0,0,0],
+                          crop_rescale=[0,0]
+                          rotation=0,
+                          delta_offset=[0,0])
+
+    """
+    filterdict_raw = dict(brightness=1,
+                          contrast=1,
+                          sharpness=1,
+                          expand_range=True,
+                          resampling="bicubic",
+                          blur=dict(type=None,radius=0),
+                          strip_banner=True,
+                          tweak_aspect=[1,1],
+                          force_aspect=False,
+                          imcrop=[0,0,0,0],
+                          crop_rescale=[0,0],
+                          rotation=0,
+                          delta_offset=[0,0],
+                          resize=1)
+    
+    filterdict_raw.update({k: v for k, v in filterdict.items() if k in filterdict_raw})
+    FD = filterdict_raw
+    sem_metadata = SEM_get_metadata(image_path)
+    
+    FD["resampling"] = {"nearest":Image.Resampling.NEAREST,"bicubic":Image.Resampling.BICUBIC,"bilinear":Image.Resampling.BILINEAR,"lancoz":Image.Resampling.LANCZOS,"box":Image.Resampling.BOX}[FD["resampling"].lower()]
+        
+    with Image.open(image_path) as im:
+        buffer = BytesIO()
+        imformat = im.format            
+        
+        if FD["strip_banner"] == True:
+            annocrop= SEM_Annotation_Finder(image_path)        
+            im = im.crop((annocrop[0],annocrop[1],im.width-annocrop[2],im.height-annocrop[3]))
+            
+        
+        og_w,og_h = (im.width, im.height)
+        
+        if FD["tweak_aspect"] != [1,1]:
+            im = im.resize((int(im.width*FD["tweak_aspect"][0]),int(im.height*FD["tweak_aspect"][1])),resample=FD["resampling"])    
+            og_w,og_h = (im.width, im.height)
+        
+        if FD["force_aspect"]!=False:
+            og_w,og_h = find_nearest_aspect_dim(im.width,im.height,FD["force_aspect"])
+        
+        if FD["imcrop"] != [0,0,0,0]:
+            im = im.crop((FD["imcrop"][0],FD["imcrop"][1],im.width- FD["imcrop"][2],im.height-FD["imcrop"][3]))
+           
+            
+        if FD["rotation"] != 0:
+            
+            im = im.rotate(FD["rotation"], expand=True)
+            
+            
+        if FD["force_aspect"] != False:
+            xd,yd = find_nearest_aspect_dim(im.width,im.height,FD["force_aspect"])
+            xcrop = split_crop_bounds_evenly(im.width, xd,offset=FD["delta_offset"][0])
+            ycrop = split_crop_bounds_evenly(im.height, yd,offset=FD["delta_offset"][1])
+            im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
+        
+        
+            
+        if FD["crop_rescale"] == True:
+            pix_rescale = 1/(og_w/im.width)
+            im = im.resize((og_w,og_h),resample=FD["resampling"])
+        else:
+            pix_rescale = 1
+        
+
+            
+        if FD["resize"] != None:
+            rszm = FD["resize"]
+            im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=FD["resampling"])
+            pix_rescale *=1/(rszm)
+        else:
+            rszm = 1
+            
+        if len(FD.keys())!=0:
+            im = ANY_Image_Enhance(im,**filterdict)
+        
+        # --- NEW: Apply blur ---
+        blur_info = FD.get("blur", {})
+        if blur_info.get("type") is not None:
+            blur_type = blur_info["type"].lower()
+            radius = blur_info.get("radius")
+            if blur_type == "gaussian":
+                im = im.filter(ImageFilter.GaussianBlur(radius=radius))
+            elif blur_type == "box":
+                im = im.filter(ImageFilter.BoxBlur(radius))
+            elif blur_type == "average":
+                # BoxBlur with radius approximates averaging
+                im = im.filter(ImageFilter.BoxBlur(radius))
+                
+        im.format = imformat
+
+        
+    return(im.convert("L"),sem_metadata)
+    
+    
+def SEM_get_metadata(image_path):
+
+    with tifffile.TiffFile(image_path) as tif:
+        sem_metadata = tif.sem_metadata
+        if sem_metadata == None:
+            
+            try:
+                if tif.fei_metadata["System"]["SystemType"] == 'Nova NanoLab':                
+                    sem_metadata = tif.fei_metadata["EScan"]
+                    sem_metadata["sv_serial_number"] = ["Serial Code",tif.fei_metadata["System"]["SystemType"]]
+                    sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
+                    pix_size_string = "ap_image_pixel_size"
+                    sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
+                
+            except:
+                print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
+        elif "SUPRA 35-29-41" in sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
+        elif "Gemini" in sem_metadata['sv_serial_number'][1]:
+            pix_size_string = "ap_image_pixel_size"
+        elif "1560-95-96" in sem_metadata["sv_serial_number"][1]:
+            pix_size_string = "ap_width"
+        else:
+            pix_size_string = "ap_pixel_size"
+    sem_metadata["pix_size_string"] = pix_size_string        
+    return(sem_metadata)
+            
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
-                           remove_annotation=True, resampling="bicubic",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True):
+                           remove_annotation=True, resampling="bicubic",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True,
+                           sem_metadata=None,imformat_override="tiff"):
+    
+    
     """
     Example image_path = 'DFR1-HE_BR204.tif' (or any literal string address)
+    you can also give it an image, and sem_metadata if you want to avoid image_path stuff. 
     Example svg_output = 'output.svg'
     If svg_output is set to "Auto" then the name image_path+anno.svg is used
     
@@ -138,31 +286,10 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     """
     Defining the default scalebar and text settings
     """
+    if sem_metadata == None:
+        sem_metadata = SEM_get_metadata(image_path)
+    pix_size_string = sem_metadata["pix_size_string"]
     
-    with tifffile.TiffFile(image_path) as tif:
-        sem_metadata = tif.sem_metadata
-        if sem_metadata == None:
-            
-            try:
-                if tif.fei_metadata["System"]["SystemType"] == 'Nova NanoLab':                
-                    sem_metadata = tif.fei_metadata["EScan"]
-                    sem_metadata["sv_serial_number"] = ["Serial Code",tif.fei_metadata["System"]["SystemType"]]
-                    sem_metadata["ap_image_pixel_size"] = ["ap_image_pixel_size",sem_metadata["PixelWidth"],"m"]
-                    pix_size_string = "ap_image_pixel_size"
-                    sem_metadata["ap_stage_at_t"] = ["rotation",tif.fei_metadata["Stage"]["SpecTilt"]]
-                
-            except:
-                print("SEM MODEL NOT IMPLEMENTED!!! FIX IMPORTER")
-        elif "SUPRA 35-29-41" in sem_metadata['sv_serial_number'][1]:
-            pix_size_string = "ap_image_pixel_size"
-        elif "Gemini" in sem_metadata['sv_serial_number'][1]:
-            pix_size_string = "ap_image_pixel_size"
-        elif "1560-95-96" in sem_metadata["sv_serial_number"][1]:
-            pix_size_string = "ap_width"
-        else:
-            pix_size_string = "ap_pixel_size"
-            
-            
     
     def scalebar_style_dictgen(frame=None,framepad=[2,2],stroke_width=4,stroke_style="line",
                                  bar_color="white",frame_color="black",frame_opacity=1.0,
@@ -183,69 +310,85 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     
     
     resampling = {"nearest":Image.Resampling.NEAREST,"bicubic":Image.Resampling.BICUBIC,"bilinear":Image.Resampling.BILINEAR,"lancoz":Image.Resampling.LANCZOS,"box":Image.Resampling.BOX}[resampling.lower()]
-    if svg_output == "Auto":
-        svg_output = image_path.split(".")[0]+"_anno.svg"
-        
-    with Image.open(image_path) as im:
-        buffer = BytesIO()
-        imformat = im.format            
-        
-        if remove_annotation == True:
-            annocrop= SEM_Annotation_Finder(image_path)        
-            im = im.crop((annocrop[0],annocrop[1],im.width-annocrop[2],im.height-annocrop[3]))
+    pix_rescale = 1
+    
+    if type(image_path) == str:
+        print("WHAT ARE YOU DOING HERE?")
+        if svg_output == "Auto":
+            svg_output = image_path.split(".")[0]+"_anno.svg"
             
-        
-        og_w,og_h = (im.width, im.height)
-        
-        if tweak_aspect != [1,1]:
-            im = im.resize((int(im.width*tweak_aspect[0]),int(im.height*tweak_aspect[1])),resample=resampling)    
+        with Image.open(image_path) as im:
+            buffer = BytesIO()
+            imformat = im.format            
+            
+            if remove_annotation == True:
+                annocrop= SEM_Annotation_Finder(image_path)        
+                im = im.crop((annocrop[0],annocrop[1],im.width-annocrop[2],im.height-annocrop[3]))
+                
+            
             og_w,og_h = (im.width, im.height)
+            
+            if tweak_aspect != [1,1]:
+                im = im.resize((int(im.width*tweak_aspect[0]),int(im.height*tweak_aspect[1])),resample=resampling)    
+                og_w,og_h = (im.width, im.height)
+            
+            if force_aspect!=False:
+                og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
+            
+            if imcrop != [0,0,0,0]:
+                im = im.crop((imcrop[0],imcrop[1],im.width-imcrop[2],im.height-imcrop[3]))
+               
+                
+            if rotation != 0:
+                
+                im = im.rotate(rotation, expand=True)
+                
+                
+            if force_aspect != False:
+                xd,yd = find_nearest_aspect_dim(im.width,im.height,force_aspect)
+                xcrop = split_crop_bounds_evenly(im.width, xd,offset=delta_offset[0])
+                ycrop = split_crop_bounds_evenly(im.height, yd,offset=delta_offset[1])
+                im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
+            
+            
+                
+            if crop_rescale == True:
+                pix_rescale = 1/(og_w/im.width)
+                im = im.resize((og_w,og_h),resample=resampling)
+            else:
+                pix_rescale = 1
+            
+    
+                
+            if resize != None:
+                rszm = resize
+                im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
+                pix_rescale *=1/(rszm)
+            else:
+                rszm = 1
+                
+            if len(filterdict.keys())!=0:
+                im = ANY_Image_Enhance(im,**filterdict)
+            
+            im.format = imformat
+    
+            im.save(buffer, format=im.format)
+            #im.save(buffer, format=im.format)  # Save the image in its original format to a buffer
+            img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')  # Encode image as base64
+            
+    else:
+        im = image_path
+        buffer = BytesIO()
         
-        if force_aspect!=False:
-            og_w,og_h = find_nearest_aspect_dim(im.width,im.height,force_aspect)
-        
-        if imcrop != [0,0,0,0]:
-            im = im.crop((imcrop[0],imcrop[1],im.width-imcrop[2],im.height-imcrop[3]))
-           
-            
-        if rotation != 0:
-            
-            im = im.rotate(rotation, expand=True)
-            
-            
-        if force_aspect != False:
-            xd,yd = find_nearest_aspect_dim(im.width,im.height,force_aspect)
-            xcrop = split_crop_bounds_evenly(im.width, xd,offset=delta_offset[0])
-            ycrop = split_crop_bounds_evenly(im.height, yd,offset=delta_offset[1])
-            im = im.crop((xcrop[0],ycrop[0],xcrop[1],ycrop[1]))
-        
-        
-            
-        if crop_rescale == True:
-            pix_rescale = 1/(og_w/im.width)
-            im = im.resize((og_w,og_h),resample=resampling)
-        else:
-            pix_rescale = 1
-        
-
-            
-        if resize != None:
-            rszm = resize
-            im = im.resize((int(im.width*rszm),int(im.height*rszm)),resample=resampling)
-            pix_rescale *=1/(rszm)
-        else:
-            rszm = 1
-            
-        if len(filterdict.keys())!=0:
-            im = ANY_Image_Enhance(im,**filterdict)
-        
-        im.format = imformat
-
+        if type(im) == Image.Image:
+            if im.format == None:
+                im.format = imformat_override
+            im.format.replace(".","")
+        if im.format.lower() in ["tif"]:
+            im.format = "tiff"
         im.save(buffer, format=im.format)
-        #im.save(buffer, format=im.format)  # Save the image in its original format to a buffer
-        img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')  # Encode image as base64
-    
-    
+        img_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
     txt  = text_style_dictgen(im,**txt_style)    
 
     
@@ -254,17 +397,31 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     if recalculate_stroke_width:
         sbar["stroke_width"] *=im.width/1000 
     
+    def normalize_unit_key(s):
+        if not isinstance(s, str):
+            return s
+        try:
+            # Decode from bytes in case of mojibake
+            s = s.encode('latin1').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+        # Standardize common ASCII alternatives
+        s = s.replace('u', 'µ') if s.lower().startswith('um') else s
+        return s
+
     txt_orig = txt.copy()
     sbar_orig = sbar.copy()
     
-    OOM = {"nm":1e-9,"um":1e-6,"µm":1e-6,"mm":1e-3,"m":1e+0}
+    OOM_raw = {"nm":1e-9,"um":1e-6,'µm':1e-6,"mm":1e-3,"m":1e+0}
+    OOM = {normalize_unit_key(k): v for k,v in OOM_raw.items()}
     #Find the scale parameters from the image in question: 
     
     if pix_size_string != "ap_width":
         pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale
+        
     elif pix_size_string == "ap_width":
         pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]*pix_rescale/og_w
-        
+      
     rtilt = np.radians(sem_metadata['ap_stage_at_t'][1])
     rrot = np.radians(rotation)
     
@@ -284,8 +441,9 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         """
         # List of allowed multipliers
         multipliers = np.array([1, 2, 5, 10, 20, 50, 100, 200, 500])
-        scale_dict = {"1e+09":"Gm","1e+06":"Mm","1e+03":"km","1e+00":"m","1e-03":"mm","1e-06":"µm","1e-09":"nm"}
+        scale_dict_raw = {"1e+09":"Gm","1e+06":"Mm","1e+03":"km","1e+00":"m","1e-03":"mm","1e-06":"µm","1e-09":"nm"}
         OOMS = np.array([1e+9, 1e+6, 1e+3, 1e+0, 1e-3, 1e-6, 1e-9])    
+        scale_dict = {normalize_unit_key(k): v for k,v in scale_dict_raw.items()}
         allowed_values = (multipliers[:, None] * OOMS).flatten()
         powers_array = np.tile(OOMS, len(multipliers))
         
@@ -303,9 +461,9 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         len_string = str(np.round(nearest_scale_bar/nearest_power_of_ten,1))
         if len_string.endswith(".0"):
             len_string = len_string.replace(".0","")
-            
+          
         len_string +=scale_dict["{:.0e}".format(nearest_power_of_ten)]
-
+          
         return(nearest_scale_bar, nearest_power_of_ten, len_string)
     
     
