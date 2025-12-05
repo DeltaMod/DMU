@@ -29,6 +29,42 @@ import os
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import subprocess
+import tempfile
+
+def svg_to_pil(svgdrawing, inkscape_path, mode="L"):
+    """
+    Convert an svgwrite.Drawing object to a PIL image using Inkscape CLI.
+    Works reliably on Windows by using temporary files.
+    """
+    # Convert SVG to bytes
+    svg_bytes = svgdrawing.tostring().encode("utf-8")
+
+    # Create a temporary SVG file
+    fd_svg, tmp_svg_name = tempfile.mkstemp(suffix=".svg")
+    os.close(fd_svg)  # Close immediately so Inkscape can write
+    with open(tmp_svg_name, "wb") as f:
+        f.write(svg_bytes)
+
+    # Create a temporary PNG filename
+    fd_png, tmp_png_name = tempfile.mkstemp(suffix=".png")
+    os.close(fd_png)
+
+    # Run Inkscape to export PNG
+    cmd = [
+        inkscape_path,
+        tmp_svg_name,
+        "--export-type=png",
+        f"--export-filename={tmp_png_name}"
+    ]
+    subprocess.run(cmd, check=True)
+
+    # Read PNG into PIL
+    pil_img = Image.open(tmp_png_name).convert(mode)
+
+    # Clean up temporary files
+    os.remove(tmp_svg_name)
+    os.remove(tmp_png_name)
+    return(pil_img)
 
 def ANY_Image_Enhance(PIL_im,brightness=None,contrast=None,sharpness=None,expand_range=True):
     
