@@ -10,8 +10,13 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+#%%
 
-
+def select_and_set_props(sim, name, propdict):
+    for key, item in propdict.items():
+        sim.select(name)
+        sim.set(key,item)
+        
 
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
@@ -392,8 +397,8 @@ def L_primitive(sim,primitive="rect", method="span", x=0,y=0,z=0, Dx=0, Dy=0, Dz
 def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
     for sphere in NW.seed_list:
         name = sim.addsphere()
-
-                     
+        
+            
 def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None):
     """
     Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
@@ -493,70 +498,142 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
 
         if group:
             sim.addtogroup(group, name)
-  
 
+def span_to_minmax(loc, span):
+    """Returns [min,max] of a span, or [min,max] if span provided is already [min,max]."""
+    # Case 1: user supplied [min, max]
+    if isinstance(span, (list, tuple)):
+        if len(span) == 1:
+            span = span[0]
+        elif len(span) == 2:
+            return span
+
+def range_dict(xyz,xrange,yrange,zrange):
+    adict = dict(loc={},rng = {"x":xrange,"y":yrange,"z":zrange}) 
+    for i,dim in ["x","y","z"]:
+        loc            = xyz[i]
+        adict["loc"][dim]     = loc
+        adict["rng"]["r"] = span_to_minmax(loc, adict["rng"][dim]) 
+    return(adict)
+
+def L_addDFT(sim, name, group=None, xyz=(0,0,0),xrange=0,yrange=0,zrange=0):
+    """
+    Two modes: span or range. You may provide either xrange = 5 or xrange = [-2.5,2.5]
+
+    """
+    xyz = tuple(xyz) #make sure to treat as tuple.
+    adict = range_dict(xyz,xrange,yrange,zrange)
+    
+    # Determine which dims have span > 0
+    spans = {
+        "x": adict["rng"]["x"][1] - adict["rng"]["x"][0],
+        "y": adict["rng"]["y"][1] - adict["rng"]["y"][0],
+        "z": adict["rng"]["z"][1] - adict["rng"]["z"][0]
+    }
+
+    nonzero = [d for d in spans if spans[d] > 0]
+    zero    = [d for d in spans if spans[d] == 0]
+
+    # --- Determine 2D vs 3D ---
+    if len(nonzero) == 3:
+        monitor_type = "DFT"            # 3D DFT
+    elif len(nonzero) == 2 and len(zero) == 1:
+        monitor_type = "DFT (2D)"       # 2D plane DFT
+    else:
+        raise ValueError(
+            f"Invalid span combination: got zero spans in {zero}. "
+            "Provide either all 3 spans (3D) or exactly one zero span (2D)."
+        )
+
+    # Create the monitor
+    mon = sim.addanalysis(monitor_type)
+    mon["name"] = name
+
+    # Set spatial extent
+    for dim in ["x", "y", "z"]:
+        mon[f"{dim} min"] = adict["rng"][dim][0]
+        mon[f"{dim} max"] = adict["rng"][dim][1]
+
+    return mon
+
+    
+    
 
 
 """
 HELPER SCRIPTS!!!
 SCRIPTS BELOW ARE USED TO VERIFY FUNCTIONALITY OF THE CODE ABOVE, SUCH AS MATPLOTLIB PLOTTING OF CUBES, CYLINDER NANOWIRES, AND MORE!
 """
-def plot_rounded_cuboid(A):
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
+# ---------- CYLINDERS ----------
+def check_ax(ax):
+    try:
+        bbox = ax.bbox
+    except Exception as e:
+        raise Exception("No axis provided") from e
+        
+def plot_cylinder(center, radius, height, ax=None, axis="z", resolution=20):
+    # axis-aligned cylinder
+    check_ax(ax)
+        
+    u = np.linspace(0, 2 * np.pi, resolution)
+    h = np.linspace(-height/2, height/2, 2)
+    U, H = np.meshgrid(u, h)
+    if axis == "x":
+        X = H + center["x"]
+        Y = radius["y"] * np.cos(U) + center["y"]
+        Z = radius["z"] * np.sin(U) + center["z"]
+    elif axis == "y":
+        X = radius["x"] * np.cos(U) + center["x"]
+        Y = H + center["y"]
+        Z = radius["z"] * np.sin(U) + center["z"]
+    else:  # z-axis
+        X = radius["x"] * np.cos(U) + center["x"]
+        Y = radius["y"] * np.sin(U) + center["y"]
+        Z = H + center["z"]
+    ax.plot_surface(X, Y, Z, color="green", alpha=0.6)
+    
+def plot_cube(cube,ax=None):
+    check_ax(ax)
+    rng = cube["range"]
+    x = [rng["xmin"], rng["xmax"]]
+    y = [rng["ymin"], rng["ymax"]]
+    z = [rng["zmin"], rng["zmax"]]
 
-    for cube in A.c_cubes:
-        rng = cube["range"]
-        x = [rng["xmin"], rng["xmax"]]
-        y = [rng["ymin"], rng["ymax"]]
-        z = [rng["zmin"], rng["zmax"]]
+    # Create 2D surfaces for each face
+    X, Y = np.meshgrid(x, y)
+    ax.plot_surface(X, Y, z[0]*np.ones_like(X), color="cyan", alpha=0.3)  # bottom
+    ax.plot_surface(X, Y, z[1]*np.ones_like(X), color="cyan", alpha=0.3)  # top
+
+    Y, Z = np.meshgrid(y, z)
+    ax.plot_surface(x[0]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # left
+    ax.plot_surface(x[1]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # right
+
+    X, Z = np.meshgrid(x, z)
+    ax.plot_surface(X, y[0]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # front
+    ax.plot_surface(X, y[1]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # back
     
-        # Create 2D surfaces for each face
-        X, Y = np.meshgrid(x, y)
-        ax.plot_surface(X, Y, z[0]*np.ones_like(X), color="cyan", alpha=0.3)  # bottom
-        ax.plot_surface(X, Y, z[1]*np.ones_like(X), color="cyan", alpha=0.3)  # top
+def plot_sphere(sphere,resolution=20,ax=None):
+    check_ax(ax)
+    u = np.linspace(0, 2 * np.pi, resolution)
+    v = np.linspace(0, np.pi, resolution)
+    cx, cy, cz = sphere["loc"]["x"], sphere["loc"]["y"], sphere["loc"]["z"]
+    rx, ry, rz = sphere["radius"]["x"], sphere["radius"]["y"], sphere["radius"]["z"]
+    X = rx * np.outer(np.cos(u), np.sin(v)) + cx
+    Y = ry * np.outer(np.sin(u), np.sin(v)) + cy
+    Z = rz * np.outer(np.ones_like(u), np.cos(v)) + cz
+    ax.plot_surface(X, Y, Z, color="red", alpha=0.6)
     
-        Y, Z = np.meshgrid(y, z)
-        ax.plot_surface(x[0]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # left
-        ax.plot_surface(x[1]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # right
-    
-        X, Z = np.meshgrid(x, z)
-        ax.plot_surface(X, y[0]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # front
-        ax.plot_surface(X, y[1]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # back
+def plot_rounded_cuboid(CG,ax=None):
+    check_ax(ax)
+    for cube in CG.c_cubes:
+        plot_cube(cube,ax=ax)
 
     # ---------- ROUNDING SPHERES ----------
-    u = np.linspace(0, 2 * np.pi, 20)
-    v = np.linspace(0, np.pi, 20)
-    for sphere in A.r_spheres:
-        cx, cy, cz = sphere["loc"]["x"], sphere["loc"]["y"], sphere["loc"]["z"]
-        rx, ry, rz = sphere["radius"]["x"], sphere["radius"]["y"], sphere["radius"]["z"]
-        X = rx * np.outer(np.cos(u), np.sin(v)) + cx
-        Y = ry * np.outer(np.sin(u), np.sin(v)) + cy
-        Z = rz * np.outer(np.ones_like(u), np.cos(v)) + cz
-        ax.plot_surface(X, Y, Z, color="red", alpha=0.6)
-
-    # ---------- CYLINDERS ----------
-    def plot_cylinder(center, radius, height, axis="z", resolution=20):
-        # axis-aligned cylinder
-        u = np.linspace(0, 2 * np.pi, resolution)
-        h = np.linspace(-height/2, height/2, 2)
-        U, H = np.meshgrid(u, h)
-        if axis == "x":
-            X = H + center["x"]
-            Y = radius["y"] * np.cos(U) + center["y"]
-            Z = radius["z"] * np.sin(U) + center["z"]
-        elif axis == "y":
-            X = radius["x"] * np.cos(U) + center["x"]
-            Y = H + center["y"]
-            Z = radius["z"] * np.sin(U) + center["z"]
-        else:  # z-axis
-            X = radius["x"] * np.cos(U) + center["x"]
-            Y = radius["y"] * np.sin(U) + center["y"]
-            Z = H + center["z"]
-        ax.plot_surface(X, Y, Z, color="green", alpha=0.6)
-
-    for cyl in A.r_cylinders:
-        plot_cylinder(cyl["loc"], cyl["radius"], cyl["height"], axis=cyl["norm"])
+    for sphere in CG.r_spheres:
+        plot_sphere(sphere,resolution=20,ax=ax)
+        
+    for cyl in CG.r_cylinders:
+        plot_cylinder(cyl["loc"], cyl["radius"], cyl["height"],ax=ax, axis=cyl["norm"])
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -565,10 +642,14 @@ def plot_rounded_cuboid(A):
     plt.show()
 
 # --- Example usage ---
-helper_functions = False
+helper_functions = True
 if helper_functions:
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
     A = RoundedCuboid(rx=1, ry=1, rz=1, Dx=6, Dy=6, Dz=6, rx2=2, ry2=2, rz2=2)
-    plot_rounded_cuboid(A)
-           
-  
+    plot_rounded_cuboid(A,ax=ax)
+
+
+def plot_Nanowire(NWG):       
+    None
                                     
