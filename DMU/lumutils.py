@@ -16,8 +16,45 @@ def select_and_set_props(sim, name, propdict):
     for key, item in propdict.items():
         sim.select(name)
         sim.set(key,item)
-        
 
+def create_groups_from_list(sim, grouplist):
+    """
+    Given a list like ["g1::a::b", "g1::c"], ensures that all groups exist.
+    Creates missing ones and attaches them to their correct parents.
+    """
+    
+    def find_child(parent, name):
+        """Return child object with this name under parent, or None."""
+        for child in parent["contents"]:
+            if child["name"] == name:
+                return child
+        return None
+
+    for path in grouplist:
+        parts = path.split("::")
+
+        parent = sim             # top-level simulation object
+        full_path = ""
+
+        for part in parts:
+            full_path = full_path + part
+
+            # Check if the group already exists under this parent
+            existing = find_child(parent, part)
+
+            if existing is not None:
+                # Move down into this existing group
+                parent = existing
+            else:
+                # Create a new group
+                newgroup = parent.addgroup()
+                newgroup["name"] = part
+
+                # Descend into it for the next loop iteration
+                parent = newgroup
+
+            full_path = full_path + "::"  # prepare for next level   
+    
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
         return all(are_all_dict_values_type(value) for value in d.values())
