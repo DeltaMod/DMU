@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import lumapi
 #%%
 
 def select_and_set_props(sim, name, propdict):
@@ -38,7 +39,7 @@ def create_groups_from_list(sim, grouplist):
             try:
                 sim.getnamed(full_name, "name")
                 current_parent = full_name  # exists → becomes parent
-            except RuntimeError:
+            except:
                 # Group does not exist → create it
                 new_group = sim.addstructuregroup()
                 new_group.name = part
