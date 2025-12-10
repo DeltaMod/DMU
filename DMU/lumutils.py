@@ -19,29 +19,37 @@ def select_and_set_props(sim, name, propdict):
 
 def create_groups_from_list(sim, grouplist):
     """
-    Given a list like ["g1::a::b", "g1::c"], ensures that all groups exist.
-    Creates missing ones and attaches them to their correct parents.
+    Create structure groups in Lumerical from a list of hierarchical paths.
+    Example input: ["G1::A::B", "G1::C"]
+    Works around Lumerical API quirks:
+      - check existence via try/querynamed
+      - create groups via addstructuregroup()
+      - attach subgroups via addtogroup()
     """
-
-    def find_child(parent, name):
-        """Return child group with this name under parent, or None."""
-        for child in parent.groups:   # use the actual property, not ["contents"]
-            if child.name == name:    # use .name, not ["name"]
-                return child
-        return None
 
     for path in grouplist:
         parts = path.split("::")
-        parent = sim
+        current_parent = None  # keeps track of parent for addtogroup
 
-        for part in parts:
-            existing = find_child(parent, part)
-            if existing is not None:
-                parent = existing
-            else:
-                newgroup = parent.addgroup()  # correct
-                newgroup.name = part           # correct
-                parent = newgroup
+        for i, part in enumerate(parts):
+            full_name = "::".join(parts[: i + 1])
+
+            # Try to get the group; if it exists, continue
+            try:
+                sim.querynamed(full_name, "name")
+                # group exists, nothing to do
+                current_parent = full_name  # this becomes parent for next subgroup
+            except RuntimeError:
+                # group doesn't exist → create it
+                new_group = sim.addstructuregroup()
+                new_group.name = part
+
+                # If there is a parent, attach this group to it
+                if current_parent is not None:
+                    sim.addtogroup(current_parent)  # attaches currently selected group
+
+                # Update current parent for next level
+                current_parent = full_name
     
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
@@ -581,8 +589,87 @@ def L_addDFT(sim, name, group=None, xyz=(0,0,0),xrange=0,yrange=0,zrange=0):
 
     return mon
 
-    
-    
+def get_material_list(sim,substr=None,legacy=False):
+    if not sim:
+        legacy=True
+        
+    if legacy:
+        Matlist = [ "Ag (Silver) - Johnson and Christy",
+                    "Al (Aluminium) - CRC",
+                    "Ag (Silver) - Palik (0-2um)",
+                    "W (Tungsten) - Palik",
+                    "InAs - Palik",
+                    "TiO2 (Titanium Dioxide) - Sarkar",
+                    "Cr (Chromium) - CRC",
+                    "5CB - Li",
+                    "Ge (Germanium) - Palik",
+                    "Si3N4 (Silicon Nitride) - Luke",
+                    "5PCH - Li",
+                    "TiO2 (Titanium Dioxide) - Kischkat,"
+                    "Ag (Silver) - CRC",
+                    "PEC (Perfect Electrical Conductor),"
+                    "Al2O3 - Palik",
+                    "Al (Aluminium) - Palik",
+                    "E44 - Li",
+                    "W (Tungsten) - CRC",
+                    "TiO2 (Titanium Dioxide) - Devore",
+                    "Si3N4 (Silicon Nitride) - Phillip",
+                    "Sn (Tin) - Palik",
+                    "Cr (Chromium) - Palik",
+                    "Fe (Iron) - Palik",
+                    "MLC-6608 - Li",
+                    "C (graphene) - Falkovsky (mid-IR)",
+                    "Pt (Platinum) - Palik",
+                    "Au (Gold) - CRC",
+                    "Si (Silicon) - Palik",
+                    "Fe (Iron) - CRC",
+                    "SiO2 (Glass) - Palik",
+                    "Si3N4 (Silicon Nitride) - Kischkat,"
+                    "Pd (Palladium) - Palik",
+                    "In (Indium) - Palik",
+                    "Ni (Nickel) - CRC",
+                    "MLC-9200-100 - Li",
+                    "InP - Palik",
+                    "MLC-9200-000 - Li",
+                    "Ni (Nickel) - Palik",
+                    "Cu (Copper) - CRC",
+                    "Ge (Germanium) - CRC",
+                    "etch",
+                    "Au (Gold) - Palik",
+                    "Ti (Titanium) - Palik",
+                    "TiN - Palik",
+                    "TiO2 (Titanium Dioxide) - Siefke",
+                    "Ti (Titanium) - CRC",
+                    "H2O (Water) - Palik",
+                    "Au (Gold) - Johnson and Christy",
+                    "GaAs - Palik",
+                    "V (Vanadium ) - CRC",
+                    "6241-000 - Li",
+                    "Cu (Copper) - Palik",
+                    "Ta (Tantalum) - CRC",
+                    "E7 - Li",
+                    "Rh (Rhodium) - Palik",
+                    "Ag (Silver) - Palik (1-10um)",
+                    "TL-216 - Li"]
+    else:
+        Matlist = sim.getmaterial().split("\n")
+        
+    if substr:
+        # 1. If substr is a str → convert to list
+        if isinstance(substr, str):
+            substr_list = [substr]
+        else:
+            # 2. If it's already a list or tuple → use as-is
+            substr_list = list(substr)
+
+        # 3. Apply AND-filter:
+        # Keep only materials that contain *all* substrings
+        def match_all(mat):
+            return all(s in mat for s in substr_list)
+
+        Matlist = [mat for mat in Matlist if match_all(mat)]
+
+    return(Matlist)
 
 
 """
