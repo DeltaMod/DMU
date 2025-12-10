@@ -19,36 +19,35 @@ def select_and_set_props(sim, name, propdict):
 
 def create_groups_from_list(sim, grouplist):
     """
-    Create structure groups in Lumerical from a list of hierarchical paths.
+    Create hierarchical structure groups in Lumerical from a list of paths.
     Example input: ["G1::A::B", "G1::C"]
-    Works around Lumerical API quirks:
-      - check existence via try/querynamed
-      - create groups via addstructuregroup()
-      - attach subgroups via addtogroup()
+    
+    Behaviour:
+    - Checks existence via getnamed()
+    - Creates missing groups via addstructuregroup()
+    - Attaches subgroups to parent automatically
     """
-
     for path in grouplist:
         parts = path.split("::")
-        current_parent = None  # keeps track of parent for addtogroup
+        current_parent = None  # parent full path for addtogroup
 
         for i, part in enumerate(parts):
             full_name = "::".join(parts[: i + 1])
 
-            # Try to get the group; if it exists, continue
+            # Check if this group exists
             try:
-                sim.querynamed(full_name, "name")
-                # group exists, nothing to do
-                current_parent = full_name  # this becomes parent for next subgroup
+                sim.getnamed(full_name, "name")
+                current_parent = full_name  # exists → becomes parent
             except RuntimeError:
-                # group doesn't exist → create it
+                # Group does not exist → create it
                 new_group = sim.addstructuregroup()
                 new_group.name = part
 
-                # If there is a parent, attach this group to it
+                # Attach to parent if any
                 if current_parent is not None:
-                    sim.addtogroup(current_parent)  # attaches currently selected group
+                    sim.addtogroup(current_parent)
 
-                # Update current parent for next level
+                # Update current parent
                 current_parent = full_name
     
 def are_all_dict_values_type(d,ttype=None):
