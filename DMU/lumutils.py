@@ -14,43 +14,64 @@ import lumapi
 #%%
 
 def select_and_set_props(sim, name, propdict):
-    for key, item in propdict.items():
+    """
+    If name=None, we assume it's already been selected in the scope, so you can use this after creation without passing a name
+    """
+    if name:
         sim.select(name)
+    for key, item in propdict.items():    
         sim.set(key,item)
 
-def create_groups_from_list(sim, grouplist):
+def create_groups_from_dict(sim, grouplist):
     """
-    Create hierarchical structure groups in Lumerical from a list of paths.
-    Example input: ["G1::A::B", "G1::C"]
+    Create structure and analysis groups in Lumerical without checking for existence.
+    Uses temporary SETTER groups and Lumerical's addtogroup behavior.
+    Only maximal (non-subset) paths are used.
     
-    Behaviour:
-    - Checks existence via getnamed()
-    - Creates missing groups via addstructuregroup()
-    - Attaches subgroups to parent automatically
+    grouplist example:
+    {
+        "structure": ["Geometry", "Geometry::Substrate", "Geometry::SurfaceComponents"],
+        "analysis": ["Analysis::DFTMonitors","Analysis::VideoMonitors"]
+    }
     """
-    for path in grouplist:
-        parts = path.split("::")
-        current_parent = None  # parent full path for addtogroup
-
-        for i, part in enumerate(parts):
-            full_name = "::".join(parts[: i + 1])
-
-            # Check if this group exists
-            try:
-                sim.getnamed(full_name, "name")
-                current_parent = full_name  # exists → becomes parent
-            except:
-                # Group does not exist → create it
-                new_group = sim.addstructuregroup()
-                new_group.name = part
-
-                # Attach to parent if any
-                if current_parent is not None:
-                    sim.addtogroup(current_parent)
-
-                # Update current parent
-                current_parent = full_name
     
+    def filter_maximal_paths(paths):
+        """Keep only paths that are not prefixes of other paths"""
+        paths_sorted = sorted(paths, key=lambda x: -len(x))  # longest first
+        maximal = []
+        for p in paths_sorted:
+            if not any(other.startswith(p + "::") for other in maximal):
+                maximal.append(p)
+        return maximal
+    
+    # --- Structure groups ---
+    struct_paths = filter_maximal_paths(grouplist.get("structure", []))
+    for path in struct_paths:
+        sim.addstructuregroup()
+        sim.set("name", "structure_setter")
+        sim.addtogroup(path)
+        sim.delete()
+    
+    # --- Analysis groups ---
+    analysis_paths = filter_maximal_paths(grouplist.get("analysis", []))
+    
+    if analysis_paths:
+        # Find all unique top-level analysis groups
+        top_level_analysis = set(p.split("::")[0] for p in analysis_paths)
+        
+        # Create each top-level analysis group
+        for top_group in top_level_analysis:
+            sim.addanalysisgroup()
+            sim.set("name", top_group)
+        
+        # Add all paths under their respective top-level analysis groups
+        for path in analysis_paths:
+            top_group = path.split("::")[0]
+            sim.addanalysisgroup()
+            sim.set("name", "analysis_setter")
+            sim.addtogroup(path)
+            sim.delete()
+            
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
         return all(are_all_dict_values_type(value) for value in d.values())
@@ -468,7 +489,7 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         sim.setnamed(name, "z order", zorder)
 
         if group:
-            sim.addtogroup(group, name)
+            sim.addtogroup(group)
 
     # -------------------------------------------------------------
     # SPHERES
@@ -530,64 +551,154 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         sim.setnamed(name, "z order", zorder)
 
         if group:
-            sim.addtogroup(group, name)
+            sim.addtogroup(group)
 
 def span_to_minmax(loc, span):
-    """Returns [min,max] of a span, or [min,max] if span provided is already [min,max]."""
-    # Case 1: user supplied [min, max]
+    """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
     if isinstance(span, (list, tuple)):
         if len(span) == 1:
             span = span[0]
         elif len(span) == 2:
             return span
+    return([loc - span/2, loc + span/2])
 
 def range_dict(xyz,xrange,yrange,zrange):
     adict = dict(loc={},rng = {"x":xrange,"y":yrange,"z":zrange}) 
-    for i,dim in ["x","y","z"]:
+    for i,dim in enumerate(["x","y","z"]):
         loc            = xyz[i]
         adict["loc"][dim]     = loc
-        adict["rng"]["r"] = span_to_minmax(loc, adict["rng"][dim]) 
+        adict["rng"][dim] = span_to_minmax(loc, adict["rng"][dim]) 
     return(adict)
 
-def L_addDFT(sim, name, group=None, xyz=(0,0,0),xrange=0,yrange=0,zrange=0):
-    """
-    Two modes: span or range. You may provide either xrange = 5 or xrange = [-2.5,2.5]
 
-    """
-    xyz = tuple(xyz) #make sure to treat as tuple.
-    adict = range_dict(xyz,xrange,yrange,zrange)
+def determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True):
+    adict = range_dict(xyz, xrange, yrange, zrange)
     
-    # Determine which dims have span > 0
-    spans = {
-        "x": adict["rng"]["x"][1] - adict["rng"]["x"][0],
-        "y": adict["rng"]["y"][1] - adict["rng"]["y"][0],
-        "z": adict["rng"]["z"][1] - adict["rng"]["z"][0]
-    }
-
+    # Determine which dimensions have non-zero span
+    spans = {dim: adict["rng"][dim][1] - adict["rng"][dim][0] for dim in ["x","y","z"]}
     nonzero = [d for d in spans if spans[d] > 0]
     zero    = [d for d in spans if spans[d] == 0]
 
-    # --- Determine 2D vs 3D ---
+    # Determine 2D vs 3D
+    if len(nonzero) not in [3,2]:
+        raise ValueError(f"Invalid span combination: zero spans in {zero}. Provide either all 3 spans (3D) or exactly one zero span (2D).")
+    if len(nonzero) == 3 and not allow3D:
+        raise ValueError("Attempted to set 3 dimensions when only two are allowed. Please provide exactly one zero span (2D).")
+    
     if len(nonzero) == 3:
-        monitor_type = "DFT"            # 3D DFT
+        monitor_type = "3D"
+        
     elif len(nonzero) == 2 and len(zero) == 1:
-        monitor_type = "DFT (2D)"       # 2D plane DFT
-    else:
-        raise ValueError(
-            f"Invalid span combination: got zero spans in {zero}. "
-            "Provide either all 3 spans (3D) or exactly one zero span (2D)."
-        )
+        monitor_type = "2D"
+        for key,item in adict["rng"].items():
+            if min(item) == max(item):
+                normal = key
+        monitor_type = "2D "+normal.upper()+"-normal"
+    return(adict,monitor_type,[normal])
 
-    # Create the monitor
-    mon = sim.addanalysis(monitor_type)
-    mon["name"] = name
+def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
+    """
+    Add a 2D or 3D DFT monitor to the simulation.
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of the DFT monitor
+        group     : Optional parent group (currently not used)
+        xyz       : centre coordinates (tuple)
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    
+    # Create the DFT monitor
+    sim.adddftmonitor()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    
+    sim.set("monitor type",monitor_type)
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+    return({"bounds":adict["rng"]})
+                
+def L_addmovie(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
+    """
+    Add a 2D moviemonitor
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of  monitor
+        group     : format: "model::group1::group2"
+        xyz       : centre coordinates (tuple) - if using min/max, this can be anything
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    
+    # Create the movie monitor
+    sim.addmovie()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    
+    sim.set("monitor type",monitor_type)
+    
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+            
+    return({"bounds":adict["rng"]})
 
-    # Set spatial extent
-    for dim in ["x", "y", "z"]:
-        mon[f"{dim} min"] = adict["rng"][dim][0]
-        mon[f"{dim} max"] = adict["rng"][dim][1]
+def L_addanalysis(sim, atype, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={}):
+    """
+    Add a 2D moviemonitor
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of  monitor
+        group     : format: "model::group1::group2"
+        xyz       : centre coordinates (tuple) - if using min/max, this can be anything
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    
+    # Create the movie monitor
+    sim.addmovie()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    
+    sim.set("monitor type",monitor_type)
+    
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+    
+    select_and_set_props(sim, None, prop_dict)
+    
+    return({"bounds":adict["rng"]})
 
-    return mon
 
 def get_material_list(sim,substr=None,legacy=False):
     if not sim:
