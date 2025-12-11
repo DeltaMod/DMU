@@ -7,10 +7,13 @@ Created on Thu Nov 13 13:36:03 202
 @author: vidar
 """
 import numpy as np
+from scipy import constants
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import lumapi
+import os
+import numpy as np
 #%%
 
 def select_and_set_props(sim, name, propdict):
@@ -425,35 +428,63 @@ class Nanowire:
             }
             self.seed_list.append(s)
 
-def L_primitive(sim,primitive="rect", method="span", x=0,y=0,z=0, Dx=0, Dy=0, Dz=0,xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
-    if primitive == "sphere":
-        name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-    
-    if primitive == "rect":
-        name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
+def get_minmax_items(xmm,ymm,zmm):
+    return([["x","y","z"],["min","max"],[xmm,ymm,zmm]])
 
+def quick_sphere(sim, xyz, rx, ry, rz, zorder=0, material=None):
+    name = sim.addsphere()
+    x,y,z = xyz
+    sim.setnamed(name, "x", x)
+    sim.setnamed(name, "y", y)
+    sim.setnamed(name, "z", z)
+    sim.setnamed(name, "radius x", rx)
+    sim.setnamed(name, "radius y", ry)
+    sim.setnamed(name, "radius z", rz)
+    if material: sim.setnamed(name, "material", material)
+    sim.setnamed(name, "z order", zorder)
+    
+
+def quick_cuboid(sim, xyz, xmm,ymm,zmm, zorder=0, material=None):
+    name = sim.addrect()
+    axnorm,mim,xyzmm = get_minmax_items(xmm,ymm,zmm) 
+    for i,norm in enumerate(axnorm):
+        for ii,mm in enumerate(mim):
+            sim.setnamed(name, norm, xyz[i])
+            sim.setnamed(" ".join([norm,mm]),xyzmm[i][ii])
+
+    if material: sim.setnamed(name, "material", material)
+    sim.setnamed(name, "z order", zorder)
+    
+    
+def L_primitive(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz=1e-6, rx=1e-6, ry=1e-6, rz=1e-6, xmm = None, ymm=None,zmm = None,material=None,zorder=0,bounds=None,group=None):
+    if not xyz:
+        xyz = (x,y,z)
+    
+    if primitive == "sphere":
+        quick_sphere(xyz,rx,ry,rz,zorder=zorder,material=material)
+        xyz,minmax = radius_to_minmax(xyz, rx, ry, rz)
+        adict = range_dict(xyz, *minmax)
+        
+    if primitive == "rect":
+        if all(val == None for val in [xmm,ymm,zmm]):
+            xyz,minmax = span_to_minmax(xyz, Dx,Dy,Dz)
+        else:
+            xyz,minmax = span_to_minmax(xyz, xmm,ymm,zmm)
+        quick_cuboid(x,y,z,*minmax)
+        adict = range_dict(xyz, *minmax)
+    
+    if group:
+        sim.addtogroup(group)
+        
+    if bounds:
+        bounds.append(adict["rng"])
+        
 def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
     for sphere in NW.seed_list:
-        name = sim.addsphere()
+        sim.addsphere()
         
             
-def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None):
+def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None,bounds=None):
     """
     Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
     
@@ -464,32 +495,21 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
     axis_offset: (dx, dy, dz)
     group: name of group to insert objects into (string)
     """
-    dx, dy, dz = axis_offset
+    aox, aoy, aoz = axis_offset
 
     # -------------------------------------------------------------
     # CORE CUBES
     # -------------------------------------------------------------
     for cube in RC.c_cubes:
         cube_range = cube["range"]
-        x = (cube_range["xmin"] + cube_range["xmax"]) / 2 + dx
-        y = (cube_range["ymin"] + cube_range["ymax"]) / 2 + dy
-        z = (cube_range["zmin"] + cube_range["zmax"]) / 2 + dz
+        x = (cube_range["xmin"] + cube_range["xmax"]) / 2 + aox
+        y = (cube_range["ymin"] + cube_range["ymax"]) / 2 + aoy
+        z = (cube_range["zmin"] + cube_range["zmax"]) / 2 + aoz
         Dx = cube_range["xmax"] - cube_range["xmin"]
         Dy = cube_range["ymax"] - cube_range["ymin"]
         Dz = cube_range["zmax"] - cube_range["zmin"]
 
-        name = sim.addrect()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "x span", Dx)
-        sim.setnamed(name, "y span", Dy)
-        sim.setnamed(name, "z span", Dz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-
-        if group:
-            sim.addtogroup(group)
+        L_primitive(sim,primitive="rect",xyz=(x,y,z), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,bounds=bounds,group=group)        
 
     # -------------------------------------------------------------
     # SPHERES
@@ -498,24 +518,13 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         loc = sphere["loc"]
         radius = sphere["radius"]
 
-        x = loc["x"] + dx
-        y = loc["y"] + dy
-        z = loc["z"] + dz
+        x = loc["x"] + aox
+        y = loc["y"] + aoy
+        z = loc["z"] + aoz
 
         rx, ry, rz = radius["x"], radius["y"], radius["z"]
-
-        name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-
-        if group:
-            sim.addtogroup(group, name)
+        L_primitive(sim,primitive="sphere",xyz=(x,y,z), rx=rx, ry=ry, rz=rz,material=material,zorder=zorder,bounds=bounds,group=group)      
+        
 
     # -------------------------------------------------------------
     # CYLINDERS
@@ -526,9 +535,9 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         axis_range = cyl["range"]
         norm = cyl["norm"]
 
-        x = loc["x"] + dx
-        y = loc["y"] + dy
-        z = loc["z"] + dz
+        x = loc["x"] + aox
+        y = loc["y"] + aoy
+        z = loc["z"] + aoz
 
         rx = radius.get("x", 0)
         ry = radius.get("y", 0)
@@ -553,14 +562,47 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         if group:
             sim.addtogroup(group)
 
-def span_to_minmax(loc, span):
+def radius_to_minmax_oneax(loc, rad):
+    """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
+    if isinstance(rad, (list, tuple)):
+        if len(rad) == 1:
+            rad = rad[0]
+        elif len(rad) == 2:
+            return rad
+    return(loc, [loc - rad, loc + rad])
+
+def radius_to_minmax(xyz, rx,ry,rz):
+    radii = [rx,ry,rz]
+    minmax    = []
+    for i,loc in enumerate(xyz):
+        locnew,mm = radius_to_minmax_oneax(loc,radii[i])
+        minmax.append(mm)
+    return(xyz,minmax)
+
+
+def span_to_minmax_oneax(loc, span):
     """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
     if isinstance(span, (list, tuple)):
         if len(span) == 1:
             span = span[0]
         elif len(span) == 2:
-            return span
-    return([loc - span/2, loc + span/2])
+            locnew = np.mean(span)
+            return(locnew,span)
+    mm = [loc - span/2, loc + span/2]
+    
+    return(loc,mm)
+
+def span_to_minmax(xyz,Dx,Dy,Dz):
+    spans = [Dx,Dy,Dz]
+    xyzn      = []
+    minmax    = []
+    for i,loc in enumerate(xyz):
+        locnew,mm = span_to_minmax_oneax(loc,spans[i])
+        xyzn.append(locnew)
+        minmax.append(mm)
+    
+    return(xyzn,minmax)
+    
 
 def range_dict(xyz,xrange,yrange,zrange):
     adict = dict(loc={},rng = {"x":xrange,"y":yrange,"z":zrange}) 
@@ -595,8 +637,8 @@ def determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True):
                 normal = key
         monitor_type = "2D "+normal.upper()+"-normal"
     return(adict,monitor_type,[normal])
-
-def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
+        
+def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds=None):
     """
     Add a 2D or 3D DFT monitor to the simulation.
     
@@ -612,14 +654,14 @@ def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
         zrange    : float or [min,max] for z
     """
     xyz = tuple(xyz)
-    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True)
     
     # Create the DFT monitor
     sim.adddftmonitor()
     sim.set("name",name)
     sim.addtogroup(group)
-    
     sim.set("monitor type",monitor_type)
+    
     for key,item in adict["loc"].items():
             sim.set(key,item)
             
@@ -627,9 +669,11 @@ def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
         if key not in skip:
             sim.set(key+" min",item[0])
             sim.set(key+" max",item[1])
-    return({"bounds":adict["rng"]})
+    select_and_set_props(sim, None, prop_dict)    
+    if bounds:
+        bounds.append(adict["rng"])
                 
-def L_addmovie(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0):
+def L_addmovie(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds=None):
     """
     Add a 2D moviemonitor
     
@@ -660,10 +704,12 @@ def L_addmovie(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0)
         if key not in skip:
             sim.set(key+" min",item[0])
             sim.set(key+" max",item[1])
-            
-    return({"bounds":adict["rng"]})
+    select_and_set_props(sim, None, prop_dict)        
+    if bounds:
+        bounds.append(adict["rng"])
+     
 
-def L_addanalysis(sim, atype, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={}):
+def L_addanalysis(sim, atype, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds = None):
     """
     Add a 2D moviemonitor
     
@@ -697,7 +743,8 @@ def L_addanalysis(sim, atype, name, group=None, xyz=(0,0,0), xrange=1, yrange=1,
     
     select_and_set_props(sim, None, prop_dict)
     
-    return({"bounds":adict["rng"]})
+    if bounds:
+        bounds.append(adict["rng"])
 
 
 def get_material_list(sim,substr=None,legacy=False):
@@ -782,6 +829,58 @@ def get_material_list(sim,substr=None,legacy=False):
 
     return(Matlist)
 
+def loaddata(filepath):
+    """
+    Load a 3-column material file (wl, n, k).
+    Accepts comma- or space-delimited formats automatically.
+    Returns wl, n, k as numpy arrays.
+    """
+
+    # genfromtxt automatically detects commas or whitespace
+    data = np.genfromtxt(
+        filepath,
+        comments="#",
+        delimiter=None,      # auto-detect
+        dtype=float,
+        invalid_raise=False  # tolerate stray commas at end
+    )
+
+    # Remove empty rows that load as NaN
+    data = data[~np.isnan(data).any(axis=1)]
+
+    if data.shape[1] < 3:
+        raise ValueError(f"{filepath} must contain at least 3 columns (wl, n, k).")
+    cc = constants.c
+    wl = np.array(data[:, 0])
+    freq = 2 * np.pi * cc / (wl*1e-6)  # rad/s
+    n  = np.array(data[:, 1])
+    k  = np.array(data[:, 2])
+    nik = n + 1j * k
+    data_2col = np.column_stack((freq, nik))
+    return wl, n, k,np.array(data_2col)
+
+def import_materials_from_folder(sim,path,extlist=[".csv",".txt"],mat_type="Sampled 3D data",overwrite=True):
+    filelist = [file for file in os.listdir(path) if any(ext in file for ext in extlist)]
+    for file in filelist:
+        fpath = os.path.join(path, file)
+        material_name = file.split(".")[0]
+        wl,n,k,data = loaddata(fpath)
+        
+        print(f"Importing material: {material_name}")
+
+        # --- Create a new material in the simulation ---
+        materiallist = sim.getmaterial().split("\n")
+        if material_name in materiallist and overwrite==False:
+            print(f"{material_name} already exists, skipping")
+            return
+        
+        if material_name in materiallist and overwrite==True:
+            sim.deletematerial(material_name)
+        newmat = sim.addmaterial(mat_type)                   # creates a plain material
+        sim.setmaterial(newmat,"name",material_name);
+        sim.setmaterial(material_name, mat_type.lower(),data)
+        
+        print(f"Loaded {material_name} ({len(wl)} points)")
 
 """
 HELPER SCRIPTS!!!
@@ -865,7 +964,7 @@ def plot_rounded_cuboid(CG,ax=None):
     plt.show()
 
 # --- Example usage ---
-helper_functions = True
+helper_functions = False
 if helper_functions:
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
