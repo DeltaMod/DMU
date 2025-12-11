@@ -431,37 +431,112 @@ class Nanowire:
 def get_minmax_items(xmm,ymm,zmm):
     return([["x","y","z"],["min","max"],[xmm,ymm,zmm]])
 
-def quick_sphere(sim, xyz, rx, ry, rz, zorder=0, material=None):
-    name = sim.addsphere()
+def rot_matrix(xr, yr, zr):
+    cx, sx = np.cos(np.radians(xr)), np.sin(np.radians(xr))
+    cy, sy = np.cos(np.radians(yr)), np.sin(np.radians(yr))
+    cz, sz = np.cos(np.radians(zr)), np.sin(np.radians(zr))
+
+    Rx = np.array([[1, 0, 0],
+                   [0, cx, -sx],
+                   [0, sx,  cx]])
+
+    Ry = np.array([[ cy, 0, sy],
+                   [  0, 1,  0],
+                   [-sy, 0, cy]])
+
+    Rz = np.array([[cz, -sz, 0],
+                   [sz,  cz, 0],
+                   [ 0,   0, 1]])
+
+    # Lumerical uses Rz * Ry * Rx
+    return Rz @ Ry @ Rx
+
+def aabb_of_rotated_cylinder(center, rx, ry, length, xr, yr, zr):
+    cx, cy, cz = center
+    h = length / 2
+
+    # Local extreme points
+    pts = np.array([
+        [ rx,  0,  0],
+        [-rx,  0,  0],
+        [  0, ry,  0],
+        [  0,-ry,  0],
+        [  0,  0,  h],
+        [  0,  0, -h],
+    ])
+
+    R = rot_matrix(xr, yr, zr)
+
+    # Rotate + translate
+    world_pts = (R @ pts.T).T + np.array(center)
+
+    xmin, ymin, zmin = world_pts.min(axis=0)
+    xmax, ymax, zmax = world_pts.max(axis=0)
+
+    return({"rng":{"x":[xmin, xmax], "y":[ymin, ymax], "z":[zmin, zmax]}})
+
+def quick_sphere(sim, xyz, rx, ry, rz, zorder=0, material=None,name=None):
+    sim.addsphere()
+    if name:
+        sim.set("name",name)
     x,y,z = xyz
-    sim.setnamed(name, "x", x)
-    sim.setnamed(name, "y", y)
-    sim.setnamed(name, "z", z)
-    sim.setnamed(name, "radius x", rx)
-    sim.setnamed(name, "radius y", ry)
-    sim.setnamed(name, "radius z", rz)
-    if material: sim.setnamed(name, "material", material)
-    sim.setnamed(name, "z order", zorder)
+    sim.set("x", x)
+    sim.set("y", y)
+    sim.set("z", z)
+    sim.set("radius", rx)
+    sim.set("radius 2", ry)
+    sim.set("radius 3", rz)
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
     
 
-def quick_cuboid(sim, xyz, xmm,ymm,zmm, zorder=0, material=None):
-    name = sim.addrect()
+def quick_cuboid(sim, xyz, xmm,ymm,zmm, zorder=0, material=None,name=None):
+    sim.addrect()
+    if name:
+        sim.set("name",name)
     axnorm,mim,xyzmm = get_minmax_items(xmm,ymm,zmm) 
     for i,norm in enumerate(axnorm):
         for ii,mm in enumerate(mim):
-            sim.setnamed(name, norm, xyz[i])
-            sim.setnamed(" ".join([norm,mm]),xyzmm[i][ii])
+            sim.set(norm, xyz[i])
+            sim.set(" ".join([norm,mm]),xyzmm[i][ii])
 
-    if material: sim.setnamed(name, "material", material)
-    sim.setnamed(name, "z order", zorder)
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
     
+
+def quick_cylinder(sim, xyz,rx=1e-6,ry=1e-6,L=1e-6, xr=0,yr=0,zr=0, zorder=0, normal="z", material=None,name=None):
+    sim.addcircle() #note that the circle is always instaned in the xy plane, normal to the z axis
+    if name:
+        sim.set("name",name)
+    sim.set("first axis","x")
+    sim.set("second axis","y")
+    sim.set("third axis","z")
+    if normal == "x":
+        yr += 90
+        
+    if normal == "y":
+        xr += 90
+    sim.set("make ellipsoid",1)
+    sim.set("radius",rx)
+    sim.set("radius 2",ry)  
+    sim.set("z span",L)
+    sim.set("rotation 1",xr)
+    sim.set("rotation 2",yr)
+    sim.set("rotation 3",zr)     
     
-def L_primitive(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz=1e-6, rx=1e-6, ry=1e-6, rz=1e-6, xmm = None, ymm=None,zmm = None,material=None,zorder=0,bounds=None,group=None):
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
+    
+def L_primitive(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz=1e-6, xmm = None, ymm=None,zmm = None,
+                rx=1e-6, ry=1e-6, rz=1e-6, L=1e-6,xr=0,yr=0,zr=0,normal="z", material=None, zorder=0,bounds=None,name=None,group=None):
     if not xyz:
         xyz = (x,y,z)
     
     if primitive == "sphere":
-        quick_sphere(xyz,rx,ry,rz,zorder=zorder,material=material)
+        quick_sphere(sim,xyz,rx,ry,rz,zorder=zorder,material=material)
         xyz,minmax = radius_to_minmax(xyz, rx, ry, rz)
         adict = range_dict(xyz, *minmax)
         
@@ -469,10 +544,16 @@ def L_primitive(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz
         if all(val == None for val in [xmm,ymm,zmm]):
             xyz,minmax = span_to_minmax(xyz, Dx,Dy,Dz)
         else:
+            
             xyz,minmax = span_to_minmax(xyz, xmm,ymm,zmm)
-        quick_cuboid(x,y,z,*minmax)
+        
+        
+        quick_cuboid(sim,xyz,*minmax)
         adict = range_dict(xyz, *minmax)
-    
+    if primitive == "cylinder":
+        quick_cylinder(sim,xyz,rx=rx,ry=ry,L=L, xr=xr,yr=yr,zr=zr, zorder=zorder, normal=normal, material=material,name=name)
+        adict = aabb_of_rotated_cylinder(center=(0,0,0), rx=rx, ry=ry, length=L, xr=xr, yr=yr, zr=zr)     
+        
     if group:
         sim.addtogroup(group)
         
@@ -608,8 +689,8 @@ def range_dict(xyz,xrange,yrange,zrange):
     adict = dict(loc={},rng = {"x":xrange,"y":yrange,"z":zrange}) 
     for i,dim in enumerate(["x","y","z"]):
         loc            = xyz[i]
-        adict["loc"][dim]     = loc
-        adict["rng"][dim] = span_to_minmax(loc, adict["rng"][dim]) 
+
+        adict["loc"][dim], adict["rng"][dim] = span_to_minmax_oneax(loc, adict["rng"][dim]) 
     return(adict)
 
 
