@@ -448,7 +448,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     txt_orig = txt.copy()
     sbar_orig = sbar.copy()
     
-    OOM_raw = {"nm":1e-9,"um":1e-6,'µm':1e-6,"mm":1e-3,"m":1e+0}
+    OOM_raw = {"pm":1e-12,"nm":1e-9,"um":1e-6,'µm':1e-6,"mm":1e-3,"m":1e+0}
     OOM = {normalize_unit_key(k): v for k,v in OOM_raw.items()}
     #Find the scale parameters from the image in question: 
     
@@ -477,7 +477,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
         """
         # List of allowed multipliers
         multipliers = np.array([1, 2, 5, 10, 20, 50, 100, 200, 500])
-        scale_dict_raw = {"1e+09":"Gm","1e+06":"Mm","1e+03":"km","1e+00":"m","1e-03":"mm","1e-06":"µm","1e-09":"nm"}
+        scale_dict_raw = {"1e+09":"Gm","1e+06":"Mm","1e+03":"km","1e+00":"m","1e-03":"mm","1e-06":"µm","1e-09":"nm","1e-12":"pm"}
         OOMS = np.array([1e+9, 1e+6, 1e+3, 1e+0, 1e-3, 1e-6, 1e-9])    
         scale_dict = {normalize_unit_key(k): v for k,v in scale_dict_raw.items()}
         allowed_values = (multipliers[:, None] * OOMS).flatten()
