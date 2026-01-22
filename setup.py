@@ -20,7 +20,9 @@ except ImportError:
 cmd_classes = {}
 if CleanCommand is not None:
    cmd_classes['clean'] = CleanCommand
- 
+target_folder = "DMU" 
+filelist = os.listdir(target_folder)
+file_pathlist = [os.path.join(target_folder,file) for file in filelist  if ".py" in file]
 TrgtScr = "DMU//utils.py"
 
 
@@ -62,14 +64,16 @@ def visit_ImportFrom(node):
     if node.module is not None and node.level == 0:
         modules.add(node.module.split(".")[0])
     
-def module_filter(modules):
+def module_filter(modules,exceptions):
     mod2 = list(modules)
     for module in mod2:
-         if module in ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","custom_logger","plot_utils","utils_utils","pickle"]:
+         if module in []:
              modules.remove(module)
 
     return(list(modules))
         
+
+module_exceptions = [file.split(".py")[0].replace(os.path.join(target_folder,""),"") for file in filelist] + ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","pickle"]       
 
 
 node_iter = ast.NodeVisitor()
@@ -85,14 +89,14 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 
-installREQ = [module_filter(modules)+["docutils>=0.3"]]
+installREQ = [module_filter(modules,module_exceptions)+["docutils>=0.3"]]
 installREQ = [[item for item in installREQ[0] if item not in ["logging"]]]
 
 setup(
     name="DMU",
-    version="0.3.9",
+    version="0.4.0",
     packages=find_packages(),
-    scripts=[TrgtScr],
+    scripts=[],
 
     # Project uses reStructuredText, so ensure that the docutils get
     # installed or upgraded on the target machine
@@ -105,8 +109,8 @@ setup(
     }, 
     # metadata to display on PyPI
     author="Atli Vidar Már FLodgren",
-    author_email="vidar.flodgren@sljus.lu.se",
-    description="This package is used to store commonly used functions on pip for the sake of easy pulling for other code.",
+    author_email="vidar@flodgren.com",
+    description="This package is used to store commonly used functions on pip for the sake of easy pulling for other code. Features utilities for IV characterisation, lumerical data analysis and geometry instanciation, SEM stitching and other tools.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     keywords="hello world example examples",

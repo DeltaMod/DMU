@@ -7,12 +7,74 @@ Created on Thu Nov 13 13:36:03 202
 @author: vidar
 """
 import numpy as np
+from scipy import constants
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import lumapi
+import os
+import numpy as np
+#%%
 
+def select_and_set_props(sim, name, propdict):
+    """
+    If name=None, we assume it's already been selected in the scope, so you can use this after creation without passing a name
+    """
+    if name:
+        sim.select(name)
+    for key, item in propdict.items():    
+        sim.set(key,item)
 
-
+def create_groups_from_dict(sim, grouplist):
+    """
+    Create structure and analysis groups in Lumerical without checking for existence.
+    Uses temporary SETTER groups and Lumerical's addtogroup behavior.
+    Only maximal (non-subset) paths are used.
+    
+    grouplist example:
+    {
+        "structure": ["Geometry", "Geometry::Substrate", "Geometry::SurfaceComponents"],
+        "analysis": ["Analysis::DFTMonitors","Analysis::VideoMonitors"]
+    }
+    """
+    
+    def filter_maximal_paths(paths):
+        """Keep only paths that are not prefixes of other paths"""
+        paths_sorted = sorted(paths, key=lambda x: -len(x))  # longest first
+        maximal = []
+        for p in paths_sorted:
+            if not any(other.startswith(p + "::") for other in maximal):
+                maximal.append(p)
+        return maximal
+    
+    # --- Structure groups ---
+    struct_paths = filter_maximal_paths(grouplist.get("structure", []))
+    for path in struct_paths:
+        sim.addstructuregroup()
+        sim.set("name", "structure_setter")
+        sim.addtogroup(path)
+        sim.delete()
+    
+    # --- Analysis groups ---
+    analysis_paths = filter_maximal_paths(grouplist.get("analysis", []))
+    
+    if analysis_paths:
+        # Find all unique top-level analysis groups
+        top_level_analysis = set(p.split("::")[0] for p in analysis_paths)
+        
+        # Create each top-level analysis group
+        for top_group in top_level_analysis:
+            sim.addanalysisgroup()
+            sim.set("name", top_group)
+        
+        # Add all paths under their respective top-level analysis groups
+        for path in analysis_paths:
+            top_group = path.split("::")[0]
+            sim.addanalysisgroup()
+            sim.set("name", "analysis_setter")
+            sim.addtogroup(path)
+            sim.delete()
+            
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
         return all(are_all_dict_values_type(value) for value in d.values())
@@ -366,7 +428,6 @@ class Nanowire:
             }
             self.seed_list.append(s)
 
-
 def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=None,Dz=None,rx=None,ry=None,rz=None,xmm=None,ymm=None,zmm=None):
     """
     This function works by taking a limited set of co-ordinates, and outputting the full set.
@@ -444,8 +505,6 @@ def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=
     return(xyz,Dxyz,rxyz,mmxyz)
                 
         
-        
-        
     
 def L_primitive(sim,primitive="rect", method="span",x=0,y=0,z=0, Dx=None,rx=None,Dy=None,ry=None,Dz=None,rz=None,norm="z",xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
     
@@ -501,13 +560,146 @@ def L_primitive(sim,primitive="rect", method="span",x=0,y=0,z=0, Dx=None,rx=None
         
         if material: sim.setnamed(name, "material", material)
         sim.setnamed(name, "z order", zorder)
+
+
+def get_minmax_items(xmm,ymm,zmm):
+    return([["x","y","z"],["min","max"],[xmm,ymm,zmm]])
+
+def rot_matrix(xr, yr, zr):
+    cx, sx = np.cos(np.radians(xr)), np.sin(np.radians(xr))
+    cy, sy = np.cos(np.radians(yr)), np.sin(np.radians(yr))
+    cz, sz = np.cos(np.radians(zr)), np.sin(np.radians(zr))
+
+    Rx = np.array([[1, 0, 0],
+                   [0, cx, -sx],
+                   [0, sx,  cx]])
+
+    Ry = np.array([[ cy, 0, sy],
+                   [  0, 1,  0],
+                   [-sy, 0, cy]])
+
+    Rz = np.array([[cz, -sz, 0],
+                   [sz,  cz, 0],
+                   [ 0,   0, 1]])
+
+    # Lumerical uses Rz * Ry * Rx
+    return Rz @ Ry @ Rx
+
+def aabb_of_rotated_cylinder(center, rx, ry, length, xr, yr, zr):
+    cx, cy, cz = center
+    h = length / 2
+
+    # Local extreme points
+    pts = np.array([
+        [ rx,  0,  0],
+        [-rx,  0,  0],
+        [  0, ry,  0],
+        [  0,-ry,  0],
+        [  0,  0,  h],
+        [  0,  0, -h],
+    ])
+
+    R = rot_matrix(xr, yr, zr)
+
+    # Rotate + translate
+    world_pts = (R @ pts.T).T + np.array(center)
+
+    xmin, ymin, zmin = world_pts.min(axis=0)
+    xmax, ymax, zmax = world_pts.max(axis=0)
+
+    return({"rng":{"x":[xmin, xmax], "y":[ymin, ymax], "z":[zmin, zmax]}})
+
+def quick_sphere(sim, xyz, rx, ry, rz, zorder=0, material=None,name=None):
+    sim.addsphere()
+    if name:
+        sim.set("name",name)
+    x,y,z = xyz
+    sim.set("x", x)
+    sim.set("y", y)
+    sim.set("z", z)
+    sim.set("radius", rx)
+    sim.set("radius 2", ry)
+    sim.set("radius 3", rz)
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
+    
+
+def quick_cuboid(sim, xyz, xmm,ymm,zmm, zorder=0, material=None,name=None):
+    sim.addrect()
+    if name:
+        sim.set("name",name)
+    axnorm,mim,xyzmm = get_minmax_items(xmm,ymm,zmm) 
+    for i,norm in enumerate(axnorm):
+        for ii,mm in enumerate(mim):
+            sim.set(norm, xyz[i])
+            sim.set(" ".join([norm,mm]),xyzmm[i][ii])
+
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
+    
+
+def quick_cylinder(sim, xyz,rx=1e-6,ry=1e-6,L=1e-6, xr=0,yr=0,zr=0, zorder=0, normal="z", material=None,name=None):
+    sim.addcircle() #note that the circle is always instaned in the xy plane, normal to the z axis
+    if name:
+        sim.set("name",name)
+    sim.set("first axis","x")
+    sim.set("second axis","y")
+    sim.set("third axis","z")
+    if normal == "x":
+        yr += 90
+        
+    if normal == "y":
+        xr += 90
+    sim.set("make ellipsoid",1)
+    sim.set("radius",rx)
+    sim.set("radius 2",ry)  
+    sim.set("z span",L)
+    sim.set("rotation 1",xr)
+    sim.set("rotation 2",yr)
+    sim.set("rotation 3",zr)     
+    
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database",1); 
+    sim.set("mesh order",zorder);
+    
+def L_primitive_old(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz=1e-6, xmm = None, ymm=None,zmm = None,
+                rx=1e-6, ry=1e-6, rz=1e-6, L=1e-6,xr=0,yr=0,zr=0,normal="z", material=None, zorder=0,bounds=None,name=None,group=None):
+    if not xyz:
+        xyz = (x,y,z)
+    
+    if primitive == "sphere":
+        quick_sphere(sim,xyz,rx,ry,rz,zorder=zorder,material=material)
+        xyz,minmax = radius_to_minmax(xyz, rx, ry, rz)
+        adict = range_dict(xyz, *minmax)
+        
+    if primitive == "rect":
+        if all(val == None for val in [xmm,ymm,zmm]):
+            xyz,minmax = span_to_minmax(xyz, Dx,Dy,Dz)
+        else:
+            
+            xyz,minmax = span_to_minmax(xyz, xmm,ymm,zmm)
+        
+        
+        quick_cuboid(sim,xyz,*minmax)
+        adict = range_dict(xyz, *minmax)
+    if primitive == "cylinder":
+        quick_cylinder(sim,xyz,rx=rx,ry=ry,L=L, xr=xr,yr=yr,zr=zr, zorder=zorder, normal=normal, material=material,name=name)
+        adict = aabb_of_rotated_cylinder(center=(0,0,0), rx=rx, ry=ry, length=L, xr=xr, yr=yr, zr=zr)     
+        
+    if group:
+        sim.addtogroup(group)
+        
+    if bounds:
+        bounds.append(adict["rng"])
         
 def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
     for sphere in NW.seed_list:
-        name = sim.addsphere()
-
-                     
-def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None):
+        sim.addsphere()
+        
+            
+def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None,bounds=None):
     """
     Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
     
@@ -518,32 +710,21 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
     axis_offset: (dx, dy, dz)
     group: name of group to insert objects into (string)
     """
-    dx, dy, dz = axis_offset
+    aox, aoy, aoz = axis_offset
 
     # -------------------------------------------------------------
     # CORE CUBES
     # -------------------------------------------------------------
     for cube in RC.c_cubes:
         cube_range = cube["range"]
-        x = (cube_range["xmin"] + cube_range["xmax"]) / 2 + dx
-        y = (cube_range["ymin"] + cube_range["ymax"]) / 2 + dy
-        z = (cube_range["zmin"] + cube_range["zmax"]) / 2 + dz
+        x = (cube_range["xmin"] + cube_range["xmax"]) / 2 + aox
+        y = (cube_range["ymin"] + cube_range["ymax"]) / 2 + aoy
+        z = (cube_range["zmin"] + cube_range["zmax"]) / 2 + aoz
         Dx = cube_range["xmax"] - cube_range["xmin"]
         Dy = cube_range["ymax"] - cube_range["ymin"]
         Dz = cube_range["zmax"] - cube_range["zmin"]
 
-        name = sim.addrect()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "x span", Dx)
-        sim.setnamed(name, "y span", Dy)
-        sim.setnamed(name, "z span", Dz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-
-        if group:
-            sim.addtogroup(group, name)
+        L_primitive(sim,primitive="rect",xyz=(x,y,z), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,bounds=bounds,group=group)        
 
     # -------------------------------------------------------------
     # SPHERES
@@ -552,24 +733,13 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         loc = sphere["loc"]
         radius = sphere["radius"]
 
-        x = loc["x"] + dx
-        y = loc["y"] + dy
-        z = loc["z"] + dz
+        x = loc["x"] + aox
+        y = loc["y"] + aoy
+        z = loc["z"] + aoz
 
         rx, ry, rz = radius["x"], radius["y"], radius["z"]
-
-        name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-
-        if group:
-            sim.addtogroup(group, name)
+        L_primitive(sim,primitive="sphere",xyz=(x,y,z), rx=rx, ry=ry, rz=rz,material=material,zorder=zorder,bounds=bounds,group=group)      
+        
 
     # -------------------------------------------------------------
     # CYLINDERS
@@ -580,9 +750,9 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         axis_range = cyl["range"]
         norm = cyl["norm"]
 
-        x = loc["x"] + dx
-        y = loc["y"] + dy
-        z = loc["z"] + dz
+        x = loc["x"] + aox
+        y = loc["y"] + aoy
+        z = loc["z"] + aoz
 
         rx = radius.get("x", 0)
         ry = radius.get("y", 0)
@@ -605,71 +775,402 @@ def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=N
         sim.setnamed(name, "z order", zorder)
 
         if group:
-            sim.addtogroup(group, name)
-  
+            sim.addtogroup(group)
+
+def radius_to_minmax_oneax(loc, rad):
+    """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
+    if isinstance(rad, (list, tuple)):
+        if len(rad) == 1:
+            rad = rad[0]
+        elif len(rad) == 2:
+            return rad
+    return(loc, [loc - rad, loc + rad])
+
+def radius_to_minmax(xyz, rx,ry,rz):
+    radii = [rx,ry,rz]
+    minmax    = []
+    for i,loc in enumerate(xyz):
+        locnew,mm = radius_to_minmax_oneax(loc,radii[i])
+        minmax.append(mm)
+    return(xyz,minmax)
 
 
+def span_to_minmax_oneax(loc, span):
+    """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
+    if isinstance(span, (list, tuple)):
+        if len(span) == 1:
+            span = span[0]
+        elif len(span) == 2:
+            locnew = np.mean(span)
+            return(locnew,span)
+    mm = [loc - span/2, loc + span/2]
+    
+    return(loc,mm)
+
+def span_to_minmax(xyz,Dx,Dy,Dz):
+    spans = [Dx,Dy,Dz]
+    xyzn      = []
+    minmax    = []
+    for i,loc in enumerate(xyz):
+        locnew,mm = span_to_minmax_oneax(loc,spans[i])
+        xyzn.append(locnew)
+        minmax.append(mm)
+    
+    return(xyzn,minmax)
+    
+
+def range_dict(xyz,xrange,yrange,zrange):
+    adict = dict(loc={},rng = {"x":xrange,"y":yrange,"z":zrange}) 
+    for i,dim in enumerate(["x","y","z"]):
+        loc            = xyz[i]
+
+        adict["loc"][dim], adict["rng"][dim] = span_to_minmax_oneax(loc, adict["rng"][dim]) 
+    return(adict)
+
+
+def determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True):
+    adict = range_dict(xyz, xrange, yrange, zrange)
+    
+    # Determine which dimensions have non-zero span
+    spans = {dim: adict["rng"][dim][1] - adict["rng"][dim][0] for dim in ["x","y","z"]}
+    nonzero = [d for d in spans if spans[d] > 0]
+    zero    = [d for d in spans if spans[d] == 0]
+
+    # Determine 2D vs 3D
+    if len(nonzero) not in [3,2]:
+        raise ValueError(f"Invalid span combination: zero spans in {zero}. Provide either all 3 spans (3D) or exactly one zero span (2D).")
+    if len(nonzero) == 3 and not allow3D:
+        raise ValueError("Attempted to set 3 dimensions when only two are allowed. Please provide exactly one zero span (2D).")
+    
+    if len(nonzero) == 3:
+        monitor_type = "3D"
+        
+    elif len(nonzero) == 2 and len(zero) == 1:
+        monitor_type = "2D"
+        for key,item in adict["rng"].items():
+            if min(item) == max(item):
+                normal = key
+        monitor_type = "2D "+normal.upper()+"-normal"
+    return(adict,monitor_type,[normal])
+        
+def L_addDFT(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds=None):
+    """
+    Add a 2D or 3D DFT monitor to the simulation.
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of the DFT monitor
+        group     : Optional parent group (currently not used)
+        xyz       : centre coordinates (tuple)
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True)
+    
+    # Create the DFT monitor
+    sim.adddftmonitor()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    sim.set("monitor type",monitor_type)
+    
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+    select_and_set_props(sim, None, prop_dict)    
+    if bounds:
+        bounds.append(adict["rng"])
+                
+def L_addmovie(sim, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds=None):
+    """
+    Add a 2D moviemonitor
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of  monitor
+        group     : format: "model::group1::group2"
+        xyz       : centre coordinates (tuple) - if using min/max, this can be anything
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    
+    # Create the movie monitor
+    sim.addmovie()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    
+    sim.set("monitor type",monitor_type)
+    
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+    select_and_set_props(sim, None, prop_dict)        
+    if bounds:
+        bounds.append(adict["rng"])
+     
+
+def L_addanalysis(sim, atype, name, group=None, xyz=(0,0,0), xrange=1, yrange=1, zrange=0,prop_dict={},bounds = None):
+    """
+    Add a 2D moviemonitor
+    
+    Two modes: span or range. You may provide either xrange=5 or xrange=[-2.5,2.5].
+    Parameters:
+        sim       : Lumerical simulation object
+        name      : Name of  monitor
+        group     : format: "model::group1::group2"
+        xyz       : centre coordinates (tuple) - if using min/max, this can be anything
+        xrange    : float or [min,max] for x
+        yrange    : float or [min,max] for y
+        zrange    : float or [min,max] for z
+    """
+    xyz = tuple(xyz)
+    adict,monitor_type,skip = determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=False)
+    
+    # Create the movie monitor
+    sim.addmovie()
+    sim.set("name",name)
+    sim.addtogroup(group)
+    
+    sim.set("monitor type",monitor_type)
+    
+    for key,item in adict["loc"].items():
+            sim.set(key,item)
+            
+    for key,item in adict["rng"].items():
+        if key not in skip:
+            sim.set(key+" min",item[0])
+            sim.set(key+" max",item[1])
+    
+    select_and_set_props(sim, None, prop_dict)
+    
+    if bounds:
+        bounds.append(adict["rng"])
+
+
+def get_material_list(sim,substr=None,legacy=False):
+    if not sim:
+        legacy=True
+        
+    if legacy:
+        Matlist = [ "Ag (Silver) - Johnson and Christy",
+                    "Al (Aluminium) - CRC",
+                    "Ag (Silver) - Palik (0-2um)",
+                    "W (Tungsten) - Palik",
+                    "InAs - Palik",
+                    "TiO2 (Titanium Dioxide) - Sarkar",
+                    "Cr (Chromium) - CRC",
+                    "5CB - Li",
+                    "Ge (Germanium) - Palik",
+                    "Si3N4 (Silicon Nitride) - Luke",
+                    "5PCH - Li",
+                    "TiO2 (Titanium Dioxide) - Kischkat,"
+                    "Ag (Silver) - CRC",
+                    "PEC (Perfect Electrical Conductor),"
+                    "Al2O3 - Palik",
+                    "Al (Aluminium) - Palik",
+                    "E44 - Li",
+                    "W (Tungsten) - CRC",
+                    "TiO2 (Titanium Dioxide) - Devore",
+                    "Si3N4 (Silicon Nitride) - Phillip",
+                    "Sn (Tin) - Palik",
+                    "Cr (Chromium) - Palik",
+                    "Fe (Iron) - Palik",
+                    "MLC-6608 - Li",
+                    "C (graphene) - Falkovsky (mid-IR)",
+                    "Pt (Platinum) - Palik",
+                    "Au (Gold) - CRC",
+                    "Si (Silicon) - Palik",
+                    "Fe (Iron) - CRC",
+                    "SiO2 (Glass) - Palik",
+                    "Si3N4 (Silicon Nitride) - Kischkat,"
+                    "Pd (Palladium) - Palik",
+                    "In (Indium) - Palik",
+                    "Ni (Nickel) - CRC",
+                    "MLC-9200-100 - Li",
+                    "InP - Palik",
+                    "MLC-9200-000 - Li",
+                    "Ni (Nickel) - Palik",
+                    "Cu (Copper) - CRC",
+                    "Ge (Germanium) - CRC",
+                    "etch",
+                    "Au (Gold) - Palik",
+                    "Ti (Titanium) - Palik",
+                    "TiN - Palik",
+                    "TiO2 (Titanium Dioxide) - Siefke",
+                    "Ti (Titanium) - CRC",
+                    "H2O (Water) - Palik",
+                    "Au (Gold) - Johnson and Christy",
+                    "GaAs - Palik",
+                    "V (Vanadium ) - CRC",
+                    "6241-000 - Li",
+                    "Cu (Copper) - Palik",
+                    "Ta (Tantalum) - CRC",
+                    "E7 - Li",
+                    "Rh (Rhodium) - Palik",
+                    "Ag (Silver) - Palik (1-10um)",
+                    "TL-216 - Li"]
+    else:
+        Matlist = sim.getmaterial().split("\n")
+        
+    if substr:
+        # 1. If substr is a str → convert to list
+        if isinstance(substr, str):
+            substr_list = [substr]
+        else:
+            # 2. If it's already a list or tuple → use as-is
+            substr_list = list(substr)
+
+        # 3. Apply AND-filter:
+        # Keep only materials that contain *all* substrings
+        def match_all(mat):
+            return all(s in mat for s in substr_list)
+
+        Matlist = [mat for mat in Matlist if match_all(mat)]
+
+    return(Matlist)
+
+def loaddata(filepath):
+    """
+    Load a 3-column material file (wl, n, k).
+    Accepts comma- or space-delimited formats automatically.
+    Returns wl, n, k as numpy arrays.
+    """
+
+    # genfromtxt automatically detects commas or whitespace
+    data = np.genfromtxt(
+        filepath,
+        comments="#",
+        delimiter=None,      # auto-detect
+        dtype=float,
+        invalid_raise=False  # tolerate stray commas at end
+    )
+
+    # Remove empty rows that load as NaN
+    data = data[~np.isnan(data).any(axis=1)]
+
+    if data.shape[1] < 3:
+        raise ValueError(f"{filepath} must contain at least 3 columns (wl, n, k).")
+    cc = constants.c
+    wl = np.array(data[:, 0])
+    freq = 2 * np.pi * cc / (wl*1e-6)  # rad/s
+    n  = np.array(data[:, 1])
+    k  = np.array(data[:, 2])
+    nik = n + 1j * k
+    data_2col = np.column_stack((freq, nik))
+    return wl, n, k,np.array(data_2col)
+
+def import_materials_from_folder(sim,path,extlist=[".csv",".txt"],mat_type="Sampled 3D data",overwrite=True):
+    filelist = [file for file in os.listdir(path) if any(ext in file for ext in extlist)]
+    for file in filelist:
+        fpath = os.path.join(path, file)
+        material_name = file.split(".")[0]
+        wl,n,k,data = loaddata(fpath)
+        
+        print(f"Importing material: {material_name}")
+
+        # --- Create a new material in the simulation ---
+        materiallist = sim.getmaterial().split("\n")
+        if material_name in materiallist and overwrite==False:
+            print(f"{material_name} already exists, skipping")
+            return
+        
+        if material_name in materiallist and overwrite==True:
+            sim.deletematerial(material_name)
+        newmat = sim.addmaterial(mat_type)                   # creates a plain material
+        sim.setmaterial(newmat,"name",material_name);
+        sim.setmaterial(material_name, mat_type.lower(),data)
+        
+        print(f"Loaded {material_name} ({len(wl)} points)")
 
 """
 HELPER SCRIPTS!!!
 SCRIPTS BELOW ARE USED TO VERIFY FUNCTIONALITY OF THE CODE ABOVE, SUCH AS MATPLOTLIB PLOTTING OF CUBES, CYLINDER NANOWIRES, AND MORE!
 """
-def plot_rounded_cuboid(A):
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
+# ---------- CYLINDERS ----------
+def check_ax(ax):
+    try:
+        bbox = ax.bbox
+    except Exception as e:
+        raise Exception("No axis provided") from e
+        
+def plot_cylinder(center, radius, height, ax=None, axis="z", resolution=20):
+    # axis-aligned cylinder
+    check_ax(ax)
+        
+    u = np.linspace(0, 2 * np.pi, resolution)
+    h = np.linspace(-height/2, height/2, 2)
+    U, H = np.meshgrid(u, h)
+    if axis == "x":
+        X = H + center["x"]
+        Y = radius["y"] * np.cos(U) + center["y"]
+        Z = radius["z"] * np.sin(U) + center["z"]
+    elif axis == "y":
+        X = radius["x"] * np.cos(U) + center["x"]
+        Y = H + center["y"]
+        Z = radius["z"] * np.sin(U) + center["z"]
+    else:  # z-axis
+        X = radius["x"] * np.cos(U) + center["x"]
+        Y = radius["y"] * np.sin(U) + center["y"]
+        Z = H + center["z"]
+    ax.plot_surface(X, Y, Z, color="green", alpha=0.6)
+    
+def plot_cube(cube,ax=None):
+    check_ax(ax)
+    rng = cube["range"]
+    x = [rng["xmin"], rng["xmax"]]
+    y = [rng["ymin"], rng["ymax"]]
+    z = [rng["zmin"], rng["zmax"]]
 
-    for cube in A.c_cubes:
-        rng = cube["range"]
-        x = [rng["xmin"], rng["xmax"]]
-        y = [rng["ymin"], rng["ymax"]]
-        z = [rng["zmin"], rng["zmax"]]
+    # Create 2D surfaces for each face
+    X, Y = np.meshgrid(x, y)
+    ax.plot_surface(X, Y, z[0]*np.ones_like(X), color="cyan", alpha=0.3)  # bottom
+    ax.plot_surface(X, Y, z[1]*np.ones_like(X), color="cyan", alpha=0.3)  # top
+
+    Y, Z = np.meshgrid(y, z)
+    ax.plot_surface(x[0]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # left
+    ax.plot_surface(x[1]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # right
+
+    X, Z = np.meshgrid(x, z)
+    ax.plot_surface(X, y[0]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # front
+    ax.plot_surface(X, y[1]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # back
     
-        # Create 2D surfaces for each face
-        X, Y = np.meshgrid(x, y)
-        ax.plot_surface(X, Y, z[0]*np.ones_like(X), color="cyan", alpha=0.3)  # bottom
-        ax.plot_surface(X, Y, z[1]*np.ones_like(X), color="cyan", alpha=0.3)  # top
+def plot_sphere(sphere,resolution=20,ax=None):
+    check_ax(ax)
+    u = np.linspace(0, 2 * np.pi, resolution)
+    v = np.linspace(0, np.pi, resolution)
+    cx, cy, cz = sphere["loc"]["x"], sphere["loc"]["y"], sphere["loc"]["z"]
+    rx, ry, rz = sphere["radius"]["x"], sphere["radius"]["y"], sphere["radius"]["z"]
+    X = rx * np.outer(np.cos(u), np.sin(v)) + cx
+    Y = ry * np.outer(np.sin(u), np.sin(v)) + cy
+    Z = rz * np.outer(np.ones_like(u), np.cos(v)) + cz
+    ax.plot_surface(X, Y, Z, color="red", alpha=0.6)
     
-        Y, Z = np.meshgrid(y, z)
-        ax.plot_surface(x[0]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # left
-        ax.plot_surface(x[1]*np.ones_like(Y), Y, Z, color="cyan", alpha=0.3)  # right
-    
-        X, Z = np.meshgrid(x, z)
-        ax.plot_surface(X, y[0]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # front
-        ax.plot_surface(X, y[1]*np.ones_like(X), Z, color="cyan", alpha=0.3)  # back
+def plot_rounded_cuboid(CG,ax=None):
+    check_ax(ax)
+    for cube in CG.c_cubes:
+        plot_cube(cube,ax=ax)
 
     # ---------- ROUNDING SPHERES ----------
-    u = np.linspace(0, 2 * np.pi, 20)
-    v = np.linspace(0, np.pi, 20)
-    for sphere in A.r_spheres:
-        cx, cy, cz = sphere["loc"]["x"], sphere["loc"]["y"], sphere["loc"]["z"]
-        rx, ry, rz = sphere["radius"]["x"], sphere["radius"]["y"], sphere["radius"]["z"]
-        X = rx * np.outer(np.cos(u), np.sin(v)) + cx
-        Y = ry * np.outer(np.sin(u), np.sin(v)) + cy
-        Z = rz * np.outer(np.ones_like(u), np.cos(v)) + cz
-        ax.plot_surface(X, Y, Z, color="red", alpha=0.6)
-
-    # ---------- CYLINDERS ----------
-    def plot_cylinder(center, radius, height, axis="z", resolution=20):
-        # axis-aligned cylinder
-        u = np.linspace(0, 2 * np.pi, resolution)
-        h = np.linspace(-height/2, height/2, 2)
-        U, H = np.meshgrid(u, h)
-        if axis == "x":
-            X = H + center["x"]
-            Y = radius["y"] * np.cos(U) + center["y"]
-            Z = radius["z"] * np.sin(U) + center["z"]
-        elif axis == "y":
-            X = radius["x"] * np.cos(U) + center["x"]
-            Y = H + center["y"]
-            Z = radius["z"] * np.sin(U) + center["z"]
-        else:  # z-axis
-            X = radius["x"] * np.cos(U) + center["x"]
-            Y = radius["y"] * np.sin(U) + center["y"]
-            Z = H + center["z"]
-        ax.plot_surface(X, Y, Z, color="green", alpha=0.6)
-
-    for cyl in A.r_cylinders:
-        plot_cylinder(cyl["loc"], cyl["radius"], cyl["height"], axis=cyl["norm"])
+    for sphere in CG.r_spheres:
+        plot_sphere(sphere,resolution=20,ax=ax)
+        
+    for cyl in CG.r_cylinders:
+        plot_cylinder(cyl["loc"], cyl["radius"], cyl["height"],ax=ax, axis=cyl["norm"])
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -680,8 +1181,12 @@ def plot_rounded_cuboid(A):
 # --- Example usage ---
 helper_functions = False
 if helper_functions:
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
     A = RoundedCuboid(rx=1, ry=1, rz=1, Dx=6, Dy=6, Dz=6, rx2=2, ry2=2, rz2=2)
-    plot_rounded_cuboid(A)
-           
-  
+    plot_rounded_cuboid(A,ax=ax)
+
+
+def plot_Nanowire(NWG):       
+    None
                                     
