@@ -30,6 +30,17 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import subprocess
 import tempfile
+import torch
+import glob
+import urlopen
+import cv2 as cv
+import sys 
+import PIL
+import kornia as K
+import kornia.feature as KF
+import ssl
+import certifi
+from matplotlib.patches import Rectangle
 
 def svg_to_pil(svgdrawing, inkscape_path, mode="L"):
     """
@@ -797,4 +808,371 @@ def export_svg_to_png(inkscape_path, svg_file, output_png, width=None, height=No
         cmd += ['--export-dpi=' + str(dpi)]
 
     subprocess.run(cmd)
+
+
+####
+"""
+STITCHING FUNCTIONS AND CODE FOR IMAGE MERGING
+"""
+def stitcher_add_rectangles(ax, centers, widths, heights, colours):
+    """
+    Overlay outline rectangles on an axis.
+    
+    Parameters:
+        ax : matplotlib.axes.Axes
+            Axis to draw on
+        centers : list of (x, y)
+            Centres of rectangles
+        widths : list or float
+            Width(s) of rectangles
+        heights : list or float
+            Height(s) of rectangles
+        colours : list
+            List of colours to cycle through
+    """
+    for i, (cx, cy) in enumerate(centers):
+        w = widths[i] if isinstance(widths, (list, np.ndarray)) else widths
+        h = heights[i] if isinstance(heights, (list, np.ndarray)) else heights
+        color = colours[i % len(colours)]
+        rect = Rectangle(
+            (cx - w/2, cy - h/2),
+            w, h,
+            edgecolor=color,
+            facecolor='none',
+            linewidth=2
+        )
+        ax.add_patch(rect)
+        
+def stitcher_enhance_for_matching(img):
+    img_uint8 = (img*255).astype(np.uint8)
+    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    img_eq = clahe.apply(img_uint8)
+    return img_eq.astype(np.float32)/255.0
+
+
+def stitcher_enforce_similarity(H_affine):
+    """
+    Given a 2x3 affine matrix, returns the nearest similarity transform:
+    translation + rotation + uniform scale, no shear.
+    """
+
+    A = H_affine[:, :2]     # 2×2 linear part
+    t = H_affine[:, 2:]     # 2×1 translation
+
+    # SVD decomposition A = U Σ V^T
+    U, S, Vt = np.linalg.svd(A)
+
+    # Uniform scale = average of the two singular values
+    scale = S.mean()
+
+    # Pure rotation matrix
+    R = U @ Vt
+
+    # Fix reflection if determinant is -1
+    if np.linalg.det(R) < 0:
+        U[:,-1] *= -1
+        R = U @ Vt
+
+    # Reconstruct similarity transform
+    A_sim = scale * R
+    H_sim = np.hstack([A_sim, t])
+
+    return H_sim.astype(np.float32)
+
+#Currenty unused, unfortunately
+def stitcher_refine_similarity_confident(mkpts0, mkpts1, H_init, min_inliers=10, max_error=3.0):
+    """
+    Refine an initial 2x3 transform H_init into a similarity transform.
+    Returns H_refined or None if refinement fails/confidence is too low.
+    """
+    # Estimate affine2D for similarity
+    H_affine, mask = cv.estimateAffine2D(mkpts1, mkpts0, method=cv.RANSAC, ransacReprojThreshold=max_error)
+
+    if H_affine is None:
+        return None
+
+    # Convert to similarity
+    H_sim = stitcher_enforce_similarity(H_affine)
+
+    # Compute inliers / reprojection error
+    mkpts1_proj = cv.transform(mkpts1.reshape(-1,1,2), H_sim)[:,0,:]
+    errors = np.linalg.norm(mkpts1_proj - mkpts0, axis=1)
+    inliers = np.sum(errors < max_error)
+
+    if inliers < min_inliers:
+        return None
+
+    return H_sim
+
+def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
+    """
+    farpic/nearpic can either be a filelist, or a glob string (no * needed). Choose what fits best
+    """
+    
+    #Determining if glob or filelist has been used.
+    if type(farpics) == str:
+        farpics = sorted(glob.glob(farpics+"*"))
+     
+    if type(nearpics) == str:
+        nearpics = sorted(glob.glob(nearpics+"*"))
+   
+    farpics_firstname  = farpics[0]
+    nearpics_firstname = nearpics[0]
+    
+    
+    IMGD     = dict(farpic = [],nearpic=[],filenames=[],sem_metadata=[])
+
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+    model = torch.hub.load('pytorch/vision:v0.15.2', 'resnet18', pretrained=True)
+    
+    plt.close("all")
+    plt.ion()
+    
+    
+    # ---- CONFIG ---- #
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Using device:", DEVICE)
+    
+    # Create LoFTR matcher
+    matcher = KF.LoFTR(pretrained='outdoor').to(DEVICE)
+    
+    
+    
+    # ---- LOAD AND PREPROCESS IMAGES ---- #
+    for i,f in enumerate(farpics):
+        farpic  = farpics[i]
+        nearpic = nearpics[i]
+        if "tif" in farpic:
+            img_orig = cv.imread(farpic)
+            img_proc, sem_metadata = SEM_Strip_Banner_And_Enhance(farpic, filterdict=dict(expand_range=False))
+            img_proc = np.asarray(img_proc)
+            
+            if img_proc is None:
+                continue
+            
+        if "tif" in nearpics[i]:
+            imgn_orig = cv.imread(nearpic)
+            imgn_proc, sem_metadata2 = SEM_Strip_Banner_And_Enhance(nearpic, filterdict=dict(expand_range=False))
+            sbimg =  SEM_Scalebar_Generator(imgn_proc, "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=sem_metadata2)
+            
+            sbimg = svg_to_pil(sbimg["svg"], inkscape_path) 
+                    
+        IMGD["farpic"].append(img_proc)
+        IMGD["nearpic"].append(sbimg)
+        IMGD["sem_metadata"].append(sem_metadata)
+        IMGD["filenames"].append(farpic)
+        
+    
+    
+        
+    # ---- ACCUMULATE AFFINE TRANSFORMS ---- #
+    H_list = [np.eye(2,3, dtype=np.float32)]  # store 2x3 matrices for warpAffine
+    
+    for i in range(len(IMGD["farpic"])-1):
+        img1 = enhance_for_matching(IMGD["farpic"][i])
+        img2 = enhance_for_matching(IMGD["farpic"][i+1])
+        
+        t1 = torch.from_numpy(img1).unsqueeze(0).unsqueeze(0).float().to(DEVICE)
+        t2 = torch.from_numpy(img2).unsqueeze(0).unsqueeze(0).float().to(DEVICE)
+        
+        with torch.no_grad():
+            out = matcher({"image0": t1, "image1": t2})
+            mkpts0 = out["keypoints0"].cpu().numpy()
+            mkpts1 = out["keypoints1"].cpu().numpy()
+        
+        print(f"Pair {i}-{i+1}: matches = {len(mkpts0)}")
+        
+        # Skip pairs with too few matches
+        if len(mkpts0) < 4:
+            print(f"Skipping pair {i}-{i+1}: insufficient matches")
+            H_list.append(H_list[-1].copy())
+            continue
+        
+        # Step 1: translation-only
+        H_translation, _ = cv.estimateAffinePartial2D(mkpts1, mkpts0, method=cv.RANSAC)
+        
+        if H_translation is None:
+            H_list.append(H_list[-1].copy())
+            continue
+        MIN_MATCHES_FOR_REFINEMENT = 10
+    
+        if len(mkpts0) < MIN_MATCHES_FOR_REFINEMENT:
+            H_final = H_translation  # safe fallback
+        else:
+            # try affine refinement
+            H_affine, mask = cv.estimateAffine2D(mkpts1, mkpts0, method=cv.RANSAC)
+            if H_affine is not None:
+                H_refined = stitcher_enforce_similarity(H_affine)
+                # accept only if it improves mean reprojection error
+                mkpts1_refined = cv.transform(mkpts1.reshape(-1,1,2), H_refined)[:,0,:]
+                errors_refined = np.linalg.norm(mkpts1_refined - mkpts0, axis=1)
+                mean_error_refined = errors_refined.mean()
+        
+                mkpts1_trans = cv.transform(mkpts1.reshape(-1,1,2), H_translation)[:,0,:]
+                errors_translation = np.linalg.norm(mkpts1_trans - mkpts0, axis=1)
+                mean_error_translation = errors_translation.mean()
+        
+                if mean_error_refined < mean_error_translation:
+                    # also check rotation magnitude
+                    angle = np.arctan2(H_refined[1,0], H_refined[0,0]) * 180/np.pi
+                    if abs(angle) < 5:  # arbitrary max rotation in degrees
+                        H_final = H_refined
+                    else:
+                        H_final = H_translation
+                else:
+                    H_final = H_translation
+            else:
+                H_final = H_translation
+        
+        # Accumulate in homogeneous coordinates
+        H_last_h = np.vstack([H_list[-1], [0,0,1]])
+        H_final_h = np.vstack([H_final, [0,0,1]])
+        H_accum_h = H_last_h @ H_final_h
+        H_list.append(H_accum_h[:2])
+    
+    # ---- BUILD PANORAMA CANVAS ---- #
+    all_corners = []
+    for img, H in zip(IMGD["farpic"], H_list):
+        h, w = img.shape
+        corners = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
+        warped = cv.transform(corners.reshape(-1,1,2), H)
+        all_corners.append(warped.reshape(-1,2))
+    
+    all_pts = np.vstack(all_corners)
+    x_min, y_min = np.floor(all_pts.min(axis=0)).astype(int)
+    x_max, y_max = np.ceil(all_pts.max(axis=0)).astype(int)
+    
+    W = x_max - x_min
+    Hh = y_max - y_min
+    print("Panorama size:", W, "x", Hh)
+    
+    h_img, w_img = IMGD["farpic"][-1].shape
+    square_size = int(min(h_img, w_img) * (scale2 / scale1))
+    
+    panorama_sum = np.zeros((Hh, W), dtype=np.float32)
+    panimg = PIL.Image.fromarray(panorama_sum)
+    weight_mask = np.zeros((Hh, W), dtype=np.float32)
+    # Compute square size from last image
+    
+    #We now take the IMGD["farpic"], and send them through the image enhancer with a filterdict.
+    filterdict = dict(brightness=1,contrast=1.1,sharpness=1.1,expand_range=True)
+    IMGD["farpic"] = [ANY_Image_Enhance(im,**filterdict) for im in IMGD["farpic"]]
+    sbimg =  SEM_Scalebar_Generator(IMGD["farpic"][-1], "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=IMGD["sem_metadata"][-1])
+    
+    IMGD["farpic"][-1] = svg_to_pil(sbimg["svg"], inkscape_path) 
+    
+    #%%
+    #Now we import and convert the matching farpic
+    
+    #%%
+    #Get the cmap we will use - this covers 20 distinct images!
+    tbc = get_tab20bc(grouping="pairs",output="list")[0::2] + get_tab20bc(grouping="pairs",output="list")[1::2]
+    
+    for img, H in zip(IMGD["farpic"], H_list):
+        if isinstance(img, PIL.Image.Image):
+           img = np.array(img)
+        H_h = np.vstack([H, [0,0,1]])
+        shift_h = np.eye(3, dtype=np.float32)
+        shift_h[0,2] = -x_min
+        shift_h[1,2] = -y_min
+        H_shift_h = shift_h @ H_h
+        H_shift = H_shift_h[:2]
+        
+        warped = cv.warpAffine(img, H_shift, (W,Hh))
+        mask = (warped>0).astype(np.float32)  # pixels that contribute
+        panorama_sum += warped * mask
+        weight_mask += mask
+    
+    
+    # Avoid division by zero
+    panorama_avg = panorama_sum / np.maximum(weight_mask, 1e-8)
+    
+    
+    if panorama_avg.shape[0] > panorama_avg.shape[1]:
+        #This means we have a vertical image, and therefore the panorama should cover 2 rows
+        rcstart = [0,1]
+        nrows = 2
+        ncols = int(np.ceil(len(IMGD["farpic"])/nrows))+1
+        ifrac = 2.5
+        Gspec = plt.GridSpec(nrows, ncols,width_ratios=[1/ifrac]+[(1-1/ifrac)/(ncols-1) for val in range(ncols-1)])  
+        PanGS = Gspec[:,0]
+    
+    
+    else:
+        #This means we have a horzontal image, and as such the panorama should cover 2 cols
+        rcstart = [1,0] 
+        ncols = 2
+        nrows = int(np.ceil(len(IMGD["farpic"])/ncols))+1
+        Gspec = plt.GridSpec(nrows, ncols,width_ratios=[0.3 for val in range(ncols)])  
+        PanGS = Gspec[0,:]
+    gslist = []
+    for n in range(rcstart[0],nrows):
+        for m in range(rcstart[1],ncols):
+            gslist.append(Gspec[n,m])    
+    
+    # Create figure
+    fig = plt.figure(figsize=(4 * ncols*1.5, 4 * nrows))
+    
+    # Create the panorama axis
+    ax_pan = fig.add_subplot(PanGS)
+    
+    # Create the image axes using your gslist
+    ax_ins = [fig.add_subplot(gs) for gs in gslist]
+    
+    fig.subplots_adjust(wspace=0, hspace=0)
+    #dwg = SEM_Scalebar_Generator(item["sourcepath"], svgpath, scalebar_style=scalebar_style,txt_style=txt_style, imcrop=item["imcrop"],resize=2,delta_offset=item["delta_offset"], crop_rescale=True,force_aspect=4/3,tweak_aspect=tweak_aspect,rotation=item["rotation"],filterdict=item["filterdict"],savefile=False)
+    
+    
+    figsolo, ax = plt.subplots(figsize=(12,10))
+    ax.imshow(panorama_avg, cmap='gray')
+    ax.set_axis_off()
+    ax.set_title("SEM Panorama (Weighted Average)")
+    
+    centers = []
+    for H in H_list:
+        H_h = np.vstack([H, [0,0,1]])
+        shift_h = np.eye(3, dtype=np.float32)
+        shift_h[0,2] = -x_min
+        shift_h[1,2] = -y_min
+        H_shift_h = shift_h @ H_h
+        center_img = np.array([[w_img/2, h_img/2]], dtype=np.float32).reshape(-1,1,2)
+        center_panorama = cv.perspectiveTransform(center_img, H_shift_h)
+        cx, cy = center_panorama[0,0]
+        centers.append((cx, cy))
+    
+    # Define rectangle sizes
+    w_rect = w_img * (scale1 / scale2)
+    h_rect = h_img * (scale1 / scale2)
+    
+    # Add rectangles
+    stitcher_add_rectangles(ax, centers, w_rect, h_rect, tbc)
+    
+    
+    #Put Together the composite
+    ax_pan.imshow(panorama_avg,cmap="gray")
+    ax_pan.set_axis_off()
+    for i,img in enumerate(IMGD["nearpic"]):
+        ax_ins[i].imshow(img, cmap='gray')
+        ax_ins[i].set_axis_off()
+        
+        # Add a colored rectangle around the image
+        rect = Rectangle(
+            (0, 0), img.width, img.height,               # x, y, width, height
+            linewidth=6,                # border thickness
+            edgecolor=tbc[i],         # border color from your list
+            facecolor='none'            # transparent fill
+        )
+        ax_ins[i].add_patch(rect)
+    
+    stitcher_add_rectangles(ax_pan, centers, w_rect, h_rect, tbc)
+    if filename == "Auto":
+        filename = "stitch_"+farpics_firstname+nearpics_firstname
+    if savefig == True:
+        fig.savefig(filename)
+    
+    plt.show()
+
+
+
+
 

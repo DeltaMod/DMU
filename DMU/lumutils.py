@@ -366,29 +366,142 @@ class Nanowire:
             }
             self.seed_list.append(s)
 
-def L_primitive(sim,primitive="rect", method="span", x=0,y=0,z=0, Dx=0, Dy=0, Dz=0,xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
+
+def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=None,Dz=None,rx=None,ry=None,rz=None,xmm=None,ymm=None,zmm=None):
+    """
+    This function works by taking a limited set of co-ordinates, and outputting the full set.
+    This means that if you provide: x,y,z and Dx,Dy,Rz, it will give you xyz = [x,y,z], Dxyz = [Dx,Dy,Dz], rxyz = [rx,ry,rz], mmxyz = [xmm,ymm,zmm]
+    How does it solve redundancy? Well, if you give it Dx and xmm, these will compete for space.
+    The solution is to always prefer Dx/rx outputs over min-max, unless not provided...
+    
+    If the MODE is set to "span", then we ignore mmxyz until the end, and calculate Dx/rx from whichever is not None. 
+    If both are provided, then we will raise an error - but continue as intended. Since if a sphere, rx will be used instead of Dx unless it doesn't exist, at which point it will be calculated 
+    if the MODE is set to "minmax", then we calculate Dx from mm
+    
+    What this func needs to cover:
+        x = None, and xmm is not -> calculate x from xmm
+        x = value, and xmm range does not match -> recalculate x from xmm
+    """    
+    xyz    = [x,y,z]
+    Dxyz   = [Dx,Dy,Dz]
+    rxyz   = [rx,ry,rz] 
+    mmxyz  = [xmm,ymm,zmm]
+    ## First check if this is a default generation, and produce defaults in that case.
+    for i,vals in enumerate(zip(xyz,Dxyz,rxyz,mmxyz)):
+        coord, D, r, mm = vals
+        if all(a == None for a in [coord,D,r,mm]):
+            xyz[i] = 0
+            Dxyz[i] = 1e-6
+            rxyz[i]  = Dxyz[i]/2 
+            mmxyz[i] = [-rxyz[i],rxyz[i]]
+        
+        if method == "span":
+            #Check if all span entries are none
+            if all (a == None for a in [D,r]):
+                #use min-max fallback, if it exists EVEN if mode is set to span.
+                if mmxyz[i] != None:
+                    Dxyz[i] = mmxyz[i][1] - mmxyz[i][0]; rxyz[i] = Dxyz[i]/2
+                    xyz[i] = np.mean(mmxyz[i])
+                #Else, set defaults for all values!
+                else:
+                    Dxyz[i] = 1e-6; rxyz[i] = Dxyz[i]/2; 
+                    if coord == None:
+                        xyz[i] = 0
+                    mmxyz[i] = [xyz[i]-rxyz[i],xyz[i]+rxyz[i]]
+            else:        
+                #Since not all values are none, we check first if r is none, and then alter r and D accordingly.
+                if r == None: rxyz[i] = D/2
+                if D == None: Dxyz[i] = r*2
+                if coord == None: xyz[i] = 0
+                #And now we alter the minmax values to match the mode
+                mmxyz[i] = [xyz[i]-rxyz[i],xyz[i]+rxyz[i]]
+                
+        if method == "minmax":
+            # Check if min-max is none
+            if mm == None:
+                # attempt to use span fallback
+                if not all(a == None for a in [D, r]):
+                    # prefer rx, since this is closer analogue to minmax and will work on spheres too
+                    if r == None: rxyz[i] = D/2
+                    if D == None: Dxyz[i] = r*2
+                    if coord == None: xyz[i] = 0
+
+                    mmxyz[i] = [xyz[i] - rxyz[i], xyz[i] + rxyz[i]]
+
+                # Else, set defaults
+                else:
+                    Dxyz[i] = 1e-6; rxyz[i] = Dxyz[i]/2; 
+                    if coord == None:
+                        xyz[i] = 0
+                    mmxyz[i] = [xyz[i]-rxyz[i],xyz[i]+rxyz[i]]
+
+            else:
+                # min-max single-handedly otherwise governs all parameter spaces
+                mmxyz[i] = mm
+                xyz[i]  = np.mean(mm)
+                Dxyz[i] = mm[1] - mm[0]
+                rxyz[i] = Dxyz[i] / 2
+    return(xyz,Dxyz,rxyz,mmxyz)
+                
+        
+        
+        
+    
+def L_primitive(sim,primitive="rect", method="span",x=0,y=0,z=0, Dx=None,rx=None,Dy=None,ry=None,Dz=None,rz=None,norm="z",xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
+    
+    #First we handle the alias case, since we don't want to run the function with illegitimate values.
+    #In this case, we want all primitives to have the same reasonable dimension of 1e-6 (where Dx = 2rx)
+    xyz,D,r,mm = coordinate_standardisation(method = method, x=x,y=y,z=z,Dx=Dx,Dy=Dy,Dz=Dz,rx=rx,ry=ry,rz=rz,xmm=xminmax,ymm=yminmax,zmm=zminmax)
+    axstr = ["x","y","z"]
+        
     if primitive == "sphere":
+        
         name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
+        for i,axs in enumerate(axstr):
+            sim.setnamed(name, axs, xyz[i])
+            sim.setnamed(name, "radius "+axs, r[i])
+
         if material: sim.setnamed(name, "material", material)
         sim.setnamed(name, "z order", zorder)
     
     if primitive == "rect":
         name = sim.addsphere()
-        sim.setnamed(name, "x", x)
-        sim.setnamed(name, "y", y)
-        sim.setnamed(name, "z", z)
-        sim.setnamed(name, "radius x", rx)
-        sim.setnamed(name, "radius y", ry)
-        sim.setnamed(name, "radius z", rz)
+        for i,axs in enumerate(axstr):
+            sim.setnamed(name, axs, xyz[i])
+            sim.setnamed(name, axs+" span", D[i])
         if material: sim.setnamed(name, "material", material)
         sim.setnamed(name, "z order", zorder)
-
+    
+    if primitive == "cylinder":
+        name = sim.addcylinder()
+        # Default orientation: along z
+        # axis_map defines which axis is the primary cylinder axis
+        axis_map = {"x": "X", "y": "Y", "z": "Z"}
+        rot_map  = {"x": [0, 1, 0], "y": [1, 0, 0], "z": [0, 0, 1]}
+        
+        primary_axis = axis_map.get(norm.lower(), "Z")  # fallback to z if unknown
+        rotation     = rot_map.get(norm.lower(), [0, 0, 1])
+        
+        # Set cylinder center
+        for i, axs in enumerate(["x", "y", "z"]):
+            sim.setnamed(name, axs, xyz[i])
+        
+        # Set cylinder radius and height
+        # Convention: radius = r perpendicular to axis, height = D along axis
+        # Map: primary axis gets D, other axes use radius
+        for i, axs in enumerate(["x", "y", "z"]):
+            if axs.lower() == norm.lower():
+                sim.setnamed(name, "height " + axs, D[i])
+            else:
+                sim.setnamed(name, "radius " + axs, r[i])
+        
+        # Set rotation
+        sim.setnamed(name, "primary axis", primary_axis)
+        sim.setnamed(name, "rotation", rotation)
+        
+        if material: sim.setnamed(name, "material", material)
+        sim.setnamed(name, "z order", zorder)
+        
 def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
     for sphere in NW.seed_list:
         name = sim.addsphere()
