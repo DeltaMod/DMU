@@ -927,17 +927,41 @@ def stitcher_refine_similarity_confident(mkpts0, mkpts1, H_init, min_inliers=10,
 
     return H_sim
 
-def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=None, matching_model=None):
+def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=None, matching_model=None, scalebar_style=None,txt_style=None, inkscape_path=r"C:\Program Files\Inkscape\bin\inkscape.exe"):
     """
     farpic/nearpic can either be a filelist, or a glob string (no * needed). Choose what fits best
     """
-    ### Initialise Default valiues for seam handling
+    ### Initialise Default values for seam handling, and scalebar styles.
+    scalebar_style_defaults = {"frame":True,
+                               "framepad":[30,2],
+                               "stroke_width":6,
+                               "stroke_style":"line",
+                               "bar_color":"white",
+                               "frame_color":"black",
+                               "frame_opacity":0.6,
+                               "location":"lower right",
+                               "location_padding":[0.03,0.05],
+                               "bar_ratio":[1/6*1.05,1/40]}
+
+    txt_style_defaults={"font_family":"Arial",
+                        "fontsize":"Auto",
+                        "font_weight":"normal",
+                        "font_style":"normal",
+                        "text_decoration":"none",
+                        "color":"white"}
+    
     seam_dict_defaults = dict(transition=400, gamma=3.0)
     seam_aliases = dict(transition=["transition"], gamma=["gamma"])
     if not seam_dict:
         seam_dict = {}
-    
-    seam_dict = kwarg_aliasing(seam_dict,seam_dict_defaults,seam_aliases)
+    if not txt_style:
+        txt_style = {}
+    if not scalebar_style:
+        scalebar_style= {}
+        
+    seam_dict      = kwarg_aliasing(seam_dict,seam_dict_defaults,aliases=seam_aliases)
+    scalebar_style = kwarg_aliasing(scalebar_style,seam_dict_defaults,aliases=None)
+    txt_style      = kwarg_aliasing(txt_style,seam_dict_defaults,aliases=None)
         
     #Determining if glob or filelist has been used.
     if type(farpics) == str:
@@ -949,12 +973,7 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
     farpics_firstname  = farpics[0]
     nearpics_firstname = nearpics[0]
     
-    
     IMGD     = dict(farpic = [],nearpic=[],filenames=[],sem_metadata_f=[],sem_metadata_c=[])
-    
-    
-    
-    # Use the user-provided model or default
     
     
     # ---- MODEL CONFIG ---- #
@@ -982,7 +1001,6 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
         farpic  = farpics[i]
         nearpic = nearpics[i]
         if "tif" in farpic:
-            img_orig = cv.imread(farpic)    
             img_proc, sem_metadata = SEM_Strip_Banner_And_Enhance(farpic, filterdict=dict(expand_range=False))
             img_proc = np.asarray(img_proc)
             
@@ -990,10 +1008,8 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
                 continue
             
         if "tif" in nearpics[i]:
-            imgn_orig = cv.imread(nearpic)
             imgn_proc, sem_metadata2 = SEM_Strip_Banner_And_Enhance(nearpic, filterdict=dict(expand_range=False))
             sbimg =  SEM_Scalebar_Generator(imgn_proc, "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=sem_metadata2)
-            
             sbimg = svg_to_pil(sbimg["svg"], inkscape_path) 
                     
         IMGD["farpic"].append(img_proc)
