@@ -9,6 +9,7 @@ try:
     # Importing plot tools 
     from . utils_utils import *
     from . plot_utils import *
+    from . utils import kwarg_aliasing 
     
 except:
     from custom_logger import get_custom_logger
@@ -16,6 +17,7 @@ except:
     # Importing plot tools 
     from utils_utils import *
     from plot_utils import *
+    from utils import kwarg_aliasing 
     print("Loading plot_utils packages locally, since root folder is the package folder")
 
     
@@ -36,8 +38,13 @@ import urlopen
 import cv2 as cv
 import sys 
 import PIL
-import kornia as K
-import kornia.feature as KF
+try:
+    import kornia as K
+    import kornia.feature as KF
+except ImportError:
+    raise ImportError(
+       "Torch and Kornia support requires `pip install DMU[alldeps]`")
+    
 import ssl
 import certifi
 from matplotlib.patches import Rectangle
@@ -267,6 +274,7 @@ def SEM_Strip_Banner_And_Enhance(image_path,filterdict={}):
 def SEM_get_metadata(image_path):
 
     with tifffile.TiffFile(image_path) as tif:
+        og_w,og_h = (tif.asarray.shape()[1], tif.asarray.shape()[0])
         sem_metadata = tif.sem_metadata
         if sem_metadata == None:
             
@@ -288,8 +296,35 @@ def SEM_get_metadata(image_path):
             pix_size_string = "ap_width"
         else:
             pix_size_string = "ap_pixel_size"
-    sem_metadata["pix_size_string"] = pix_size_string        
+    sem_metadata["pix_size_string"] = pix_size_string    
+    
+    ##While we're at it, we also calculate the pixel size in absolute units. We do this so we can reference it later in scaling topics. pix rescale does not need to exist here either.
+    OOM_raw = {"pm":1e-12,"nm":1e-9,"um":1e-6,'µm':1e-6,"mm":1e-3,"m":1e+0}
+    OOM = {normalize_unit_key(k): v for k,v in OOM_raw.items()}
+    #Find the scale parameters from the image in question: 
+    
+    if pix_size_string != "ap_width":
+        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]
+        
+    elif pix_size_string == "ap_width":
+        pix_size = sem_metadata[pix_size_string][1] * OOM[sem_metadata[pix_size_string][2]]/og_w
+      
+    sem_metadata["pix_size"] = pix_size      
     return(sem_metadata)
+
+
+def normalize_unit_key(s):
+    #This function fixes issues with how mu is displayed in certain contexts
+    if not isinstance(s, str):
+        return s
+    try:
+        # Decode from bytes in case of mojibake
+        s = s.encode('latin1').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    # Standardize common ASCII alternatives
+    s = s.replace('u', 'µ') if s.lower().startswith('um') else s
+    return s
             
 def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style={}, imcrop=[0,0,0,0], savefile=True, resize=None, 
                            remove_annotation=True, resampling="bicubic",force_aspect=False,delta_offset=[0,0],rotation=0,crop_rescale=True,tweak_aspect=[1,1],filterdict={},recalculate_stroke_width=True,
@@ -360,7 +395,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     pix_rescale = 1
     
     if type(image_path) == str:
-        print("WHAT ARE YOU DOING HERE?")
+
         if svg_output == "Auto":
             svg_output = image_path.split(".")[0]+"_anno.svg"
             
@@ -444,18 +479,6 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
     if recalculate_stroke_width:
         sbar["stroke_width"] *=im.width/1000 
     
-    def normalize_unit_key(s):
-        if not isinstance(s, str):
-            return s
-        try:
-            # Decode from bytes in case of mojibake
-            s = s.encode('latin1').decode('utf-8')
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            pass
-        # Standardize common ASCII alternatives
-        s = s.replace('u', 'µ') if s.lower().startswith('um') else s
-        return s
-
     txt_orig = txt.copy()
     sbar_orig = sbar.copy()
     
@@ -476,7 +499,7 @@ def SEM_Scalebar_Generator(image_path, svg_output, scalebar_style = {},txt_style
             L = pix_size/np.sin(rtilt)
             pix_size = L*np.cos(np.arcsin(np.cos(rrot)*np.sin(rtilt))) 
             #pix_size = np.sqrt(L**2*(np.cos(rrot)**2*np.cos(rtilt)**2 + np.sin(rrot)**2)) #L**2 - L**2*np.cos(rtilt)**2*np.sin(rrot)**2
-
+    
     #Define bar length and height. Note that setting the height to zero removes it
 
     sbar["bar_length_target"] = int(im.width*sbar["bar_ratio"][0]) * pix_size 
@@ -904,11 +927,18 @@ def stitcher_refine_similarity_confident(mkpts0, mkpts1, H_init, min_inliers=10,
 
     return H_sim
 
-def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
+def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=None, matching_model=None):
     """
     farpic/nearpic can either be a filelist, or a glob string (no * needed). Choose what fits best
     """
+    ### Initialise Default valiues for seam handling
+    seam_dict_defaults = dict(transition=400, gamma=3.0)
+    seam_aliases = dict(transition=["transition"], gamma=["gamma"])
+    if not seam_dict:
+        seam_dict = {}
     
+    seam_dict = kwarg_aliasing(seam_dict,seam_dict_defaults,seam_aliases)
+        
     #Determining if glob or filelist has been used.
     if type(farpics) == str:
         farpics = sorted(glob.glob(farpics+"*"))
@@ -920,22 +950,31 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
     nearpics_firstname = nearpics[0]
     
     
-    IMGD     = dict(farpic = [],nearpic=[],filenames=[],sem_metadata=[])
-
-    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
-    model = torch.hub.load('pytorch/vision:v0.15.2', 'resnet18', pretrained=True)
-    
-    plt.close("all")
-    plt.ion()
+    IMGD     = dict(farpic = [],nearpic=[],filenames=[],sem_metadata_f=[],sem_metadata_c=[])
     
     
-    # ---- CONFIG ---- #
+    
+    # Use the user-provided model or default
+    
+    
+    # ---- MODEL CONFIG ---- #
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device:", DEVICE)
     
-    # Create LoFTR matcher
-    matcher = KF.LoFTR(pretrained='outdoor').to(DEVICE)
-    
+    if matching_model is None:
+        matcher = KF.LoFTR(pretrained='outdoor').to(DEVICE)
+    else:
+        # Load a torch hub model by name
+        # example: matching_model = 'resnet18'
+        model_name = matching_model.lower()
+        if model_name == "resnet18":
+            ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+            matcher = torch.hub.load('pytorch/vision:v0.15.2', 'resnet18', pretrained=True).to(DEVICE)
+        else:
+            raise ValueError(f"Unknown matching_model '{matching_model}'")
+        
+    plt.close("all")
+    plt.ion()
     
     
     # ---- LOAD AND PREPROCESS IMAGES ---- #
@@ -943,7 +982,7 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
         farpic  = farpics[i]
         nearpic = nearpics[i]
         if "tif" in farpic:
-            img_orig = cv.imread(farpic)
+            img_orig = cv.imread(farpic)    
             img_proc, sem_metadata = SEM_Strip_Banner_And_Enhance(farpic, filterdict=dict(expand_range=False))
             img_proc = np.asarray(img_proc)
             
@@ -959,18 +998,17 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
                     
         IMGD["farpic"].append(img_proc)
         IMGD["nearpic"].append(sbimg)
-        IMGD["sem_metadata"].append(sem_metadata)
+        IMGD["sem_metadata_f"].append(sem_metadata)
+        IMGD["sem_metadata_c"].append(sem_metadata2)
         IMGD["filenames"].append(farpic)
         
-    
-    
-        
+          
     # ---- ACCUMULATE AFFINE TRANSFORMS ---- #
     H_list = [np.eye(2,3, dtype=np.float32)]  # store 2x3 matrices for warpAffine
     
     for i in range(len(IMGD["farpic"])-1):
-        img1 = enhance_for_matching(IMGD["farpic"][i])
-        img2 = enhance_for_matching(IMGD["farpic"][i+1])
+        img1 = stitcher_enhance_for_matching(IMGD["farpic"][i])
+        img2 = stitcher_enhance_for_matching(IMGD["farpic"][i+1])
         
         t1 = torch.from_numpy(img1).unsqueeze(0).unsqueeze(0).float().to(DEVICE)
         t2 = torch.from_numpy(img2).unsqueeze(0).unsqueeze(0).float().to(DEVICE)
@@ -1057,7 +1095,7 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
     #We now take the IMGD["farpic"], and send them through the image enhancer with a filterdict.
     filterdict = dict(brightness=1,contrast=1.1,sharpness=1.1,expand_range=True)
     IMGD["farpic"] = [ANY_Image_Enhance(im,**filterdict) for im in IMGD["farpic"]]
-    sbimg =  SEM_Scalebar_Generator(IMGD["farpic"][-1], "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=IMGD["sem_metadata"][-1])
+    sbimg =  SEM_Scalebar_Generator(IMGD["farpic"][-1], "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=IMGD["sem_metadata_f"][-1])
     
     IMGD["farpic"][-1] = svg_to_pil(sbimg["svg"], inkscape_path) 
     
@@ -1065,27 +1103,40 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True):
     #Now we import and convert the matching farpic
     
     #%%
-    #Get the cmap we will use - this covers 20 distinct images!
-    tbc = get_tab20bc(grouping="pairs",output="list")[0::2] + get_tab20bc(grouping="pairs",output="list")[1::2]
-    
+    tbc = dmp.get_tab20bc(grouping="pairs",output="list")[0::2]
+    warped_imgs = []
+    weights = []
+
+    TRANSITION = seam_dict["transition"]
+    gamma = seam_dict["gamma"]
+
     for img, H in zip(IMGD["farpic"], H_list):
         if isinstance(img, PIL.Image.Image):
-           img = np.array(img)
+            img = np.array(img)
+
         H_h = np.vstack([H, [0,0,1]])
         shift_h = np.eye(3, dtype=np.float32)
         shift_h[0,2] = -x_min
         shift_h[1,2] = -y_min
-        H_shift_h = shift_h @ H_h
-        H_shift = H_shift_h[:2]
-        
-        warped = cv.warpAffine(img, H_shift, (W,Hh))
-        mask = (warped>0).astype(np.float32)  # pixels that contribute
-        panorama_sum += warped * mask
-        weight_mask += mask
-    
-    
-    # Avoid division by zero
-    panorama_avg = panorama_sum / np.maximum(weight_mask, 1e-8)
+        H_shift = (shift_h @ H_h)[:2]
+
+        warped = cv.warpAffine(img, H_shift, (W, Hh))
+        mask = (warped > 0).astype(np.uint8)
+
+        dist = cv.distanceTransform(mask, cv.DIST_L2, 5)
+        dist = np.minimum(dist, TRANSITION) / TRANSITION
+        dist = dist ** gamma
+
+        warped_imgs.append(warped.astype(np.float32))
+        weights.append(dist.astype(np.float32))
+
+    weight_sum = np.sum(weights, axis=0) + 1e-8
+    weights = [w / weight_sum for w in weights]
+
+    panorama_avg = np.zeros_like(warped_imgs[0], dtype=np.float32)
+    for warped, w in zip(warped_imgs, weights):
+        panorama_avg += warped * w
+
     
     
     if panorama_avg.shape[0] > panorama_avg.shape[1]:

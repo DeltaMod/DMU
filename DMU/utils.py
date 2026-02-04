@@ -3850,6 +3850,35 @@ def Ideality_Factor_SeriesResistance(I,V,**kwargs):
 
     return({"n":popt[1],"par":popt,"covar":pcov,"V_new":V_new,"I_new":I_new,"V_fit":V_fit,"I_fit":I_fit,'V':V,'I':I,'V_data':V_data,"I_data":I_data,"shottky":shottky})
 
+def kwarg_aliasing(user_kwargs, defaults, aliases=None):
+    """
+    Normalise kwargs:
+    -user_kwargs = user_dict that contains any number of keys of any case
+    -defaults = complete default dict that includes default values
+    -aliases  = 
+    """
+    out = defaults.copy()
+
+    if aliases:
+        # Build reverse lookup: alias -> canonical key
+        alias_map = {
+            alias.lower(): key
+            for key, alias_list in aliases.items()
+            for alias in (alias_list + [key])
+        }
+    
+        for k, v in user_kwargs.items():
+            key = alias_map.get(k.lower())
+            if key is None:
+                logger.warning(f"Unknown keyword '{k}', ignoring it", RuntimeWarning)
+            else:
+                out[key] = v
+    else:
+        # No aliases; just merge
+        out.update(user_kwargs)
+    
+    return out
+
 def align_axis_zeros(axes):
 
     ylims_current = {}   #  Current ylims

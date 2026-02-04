@@ -73,7 +73,7 @@ def module_filter(modules,exceptions):
     return(list(modules))
         
 
-module_exceptions = [file.split(".py")[0].replace(os.path.join(target_folder,""),"") for file in filelist] + ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","pickle"]       
+module_exceptions = [file.split(".py")[0].replace(os.path.join(target_folder,""),"") for file in filelist] + ["mpl_toolkits","json","time","sys","os","tkinter","collections","csv","pickle","torch", "kornia", "torchvision"]       
 
 
 node_iter = ast.NodeVisitor()
@@ -91,7 +91,17 @@ with open("README.md", "r") as fh:
 
 installREQ = [module_filter(modules,module_exceptions)+["docutils>=0.3"]]
 installREQ = [[item for item in installREQ[0] if item not in ["logging"]]]
-
+extras_require = {  "torch": [
+                    "torch",
+                    "torchvision",
+                    "kornia",
+                    ],
+                "alldeps": [
+                    "torch",
+                    "torchvision",
+                    "kornia",
+                ],
+                }
 setup(
     name="DMU",
     version="0.4.0",
@@ -101,6 +111,7 @@ setup(
     # Project uses reStructuredText, so ensure that the docutils get
     # installed or upgraded on the target machine
     install_requires =installREQ,
+    extras_require   = extras_require,
     package_data={
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.json"],
