@@ -274,7 +274,7 @@ def SEM_Strip_Banner_And_Enhance(image_path,filterdict={}):
 def SEM_get_metadata(image_path):
 
     with tifffile.TiffFile(image_path) as tif:
-        og_w,og_h = (tif.asarray.shape()[1], tif.asarray.shape()[0])
+        og_w,og_h = (np.shape(tif.asarray())[1], np.shape(tif.asarray())[0])
         sem_metadata = tif.sem_metadata
         if sem_metadata == None:
             
@@ -971,8 +971,11 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
         nearpics = sorted(glob.glob(nearpics+"*"))
    
     farpics_firstname  = farpics[0]
-    nearpics_firstname = nearpics[0]
-    
+    if nearpics:
+        nearpics_firstname = nearpics[0]
+    else:
+        nearpics_firstname = ""
+        
     IMGD     = dict(farpic = [],nearpic=[],filenames=[],sem_metadata_f=[],sem_metadata_c=[])
     
     
@@ -999,19 +1002,23 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
     # ---- LOAD AND PREPROCESS IMAGES ---- #
     for i,f in enumerate(farpics):
         farpic  = farpics[i]
-        nearpic = nearpics[i]
+        
         if "tif" in farpic:
             img_proc, sem_metadata = SEM_Strip_Banner_And_Enhance(farpic, filterdict=dict(expand_range=False))
             img_proc = np.asarray(img_proc)
             
             if img_proc is None:
                 continue
+        
+        try:    
+            nearpic = nearpics[i]
+            if "tif" in nearpics[i]:
+                imgn_proc, sem_metadata2 = SEM_Strip_Banner_And_Enhance(nearpic, filterdict=dict(expand_range=False))
+                sbimg =  SEM_Scalebar_Generator(imgn_proc, "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=sem_metadata2)
+                sbimg = svg_to_pil(sbimg["svg"], inkscape_path) 
+        except:
+            imgn_proc = None; sem_metadata2 = None; sbimg = None; 
             
-        if "tif" in nearpics[i]:
-            imgn_proc, sem_metadata2 = SEM_Strip_Banner_And_Enhance(nearpic, filterdict=dict(expand_range=False))
-            sbimg =  SEM_Scalebar_Generator(imgn_proc, "temp.svg", scalebar_style=scalebar_style,txt_style=txt_style, remove_annotation=False, sem_metadata=sem_metadata2)
-            sbimg = svg_to_pil(sbimg["svg"], inkscape_path) 
-                    
         IMGD["farpic"].append(img_proc)
         IMGD["nearpic"].append(sbimg)
         IMGD["sem_metadata_f"].append(sem_metadata)
@@ -1021,7 +1028,7 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
           
     # ---- ACCUMULATE AFFINE TRANSFORMS ---- #
     H_list = [np.eye(2,3, dtype=np.float32)]  # store 2x3 matrices for warpAffine
-    
+  
     for i in range(len(IMGD["farpic"])-1):
         img1 = stitcher_enhance_for_matching(IMGD["farpic"][i])
         img2 = stitcher_enhance_for_matching(IMGD["farpic"][i+1])
@@ -1086,12 +1093,13 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
     
     # ---- BUILD PANORAMA CANVAS ---- #
     all_corners = []
+    
     for img, H in zip(IMGD["farpic"], H_list):
         h, w = img.shape
         corners = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
         warped = cv.transform(corners.reshape(-1,1,2), H)
         all_corners.append(warped.reshape(-1,2))
-    
+            
     all_pts = np.vstack(all_corners)
     x_min, y_min = np.floor(all_pts.min(axis=0)).astype(int)
     x_max, y_max = np.ceil(all_pts.max(axis=0)).astype(int)
@@ -1099,7 +1107,33 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
     W = x_max - x_min
     Hh = y_max - y_min
     print("Panorama size:", W, "x", Hh)
+    # ---- DETERMINE IMAGE CENTRES and square sizes ---- #
+    centers = []
+    for img, H in zip(IMGD["farpic"], H_list):
+        h_img, w_img = img.shape
     
+        H_h = np.vstack([H, [0, 0, 1]])
+    
+        shift_h = np.eye(3, dtype=np.float32)
+        shift_h[0, 2] = -x_min
+        shift_h[1, 2] = -y_min
+    
+        H_shift_h = shift_h @ H_h
+        center_img = np.array([[w_img / 2, h_img / 2]],dtype=np.float32).reshape(-1, 1, 2)
+    
+        center_panorama = cv.perspectiveTransform(center_img, H_shift_h)
+    
+        cx, cy = center_panorama[0, 0]
+        centers.append((cx, cy))
+        
+    scale_difference = [] 
+    for i,img in enumerate(IMGD["sem_metadata_f"]):
+        try:
+            scale_difference.append(IMGD["sem_metadata_c"][i]["pix_size"]/IMGD["sem_metadata_f"][i]["pix_size"])
+        except:
+            scale_difference.append(None)
+        
+            
     h_img, w_img = IMGD["farpic"][-1].shape
     square_size = int(min(h_img, w_img) * (scale2 / scale1))
     
@@ -1195,25 +1229,12 @@ def sem_stitcher(farpics,nearpics,filename="Auto",filesave = True, seam_dict=Non
     ax.set_axis_off()
     ax.set_title("SEM Panorama (Weighted Average)")
     
-    centers = []
-    for H in H_list:
-        H_h = np.vstack([H, [0,0,1]])
-        shift_h = np.eye(3, dtype=np.float32)
-        shift_h[0,2] = -x_min
-        shift_h[1,2] = -y_min
-        H_shift_h = shift_h @ H_h
-        center_img = np.array([[w_img/2, h_img/2]], dtype=np.float32).reshape(-1,1,2)
-        center_panorama = cv.perspectiveTransform(center_img, H_shift_h)
-        cx, cy = center_panorama[0,0]
-        centers.append((cx, cy))
-    
     # Define rectangle sizes
     w_rect = w_img * (scale1 / scale2)
     h_rect = h_img * (scale1 / scale2)
     
     # Add rectangles
     stitcher_add_rectangles(ax, centers, w_rect, h_rect, tbc)
-    
     
     #Put Together the composite
     ax_pan.imshow(panorama_avg,cmap="gray")
