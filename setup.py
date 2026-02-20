@@ -58,6 +58,7 @@ def visit_Import(node):
     for name in node.names:
         modules.add(name.name.split(".")[0])
 
+#We populate the node iter tree using this function.
 def visit_ImportFrom(node):
     # if node.module is missing it's a "from . import ..." statement
     # if level > 0 it's a "from .submodule import ..." statement
