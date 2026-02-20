@@ -67,7 +67,7 @@ def visit_ImportFrom(node):
 def module_filter(modules,exceptions):
     mod2 = list(modules)
     for module in mod2:
-         if module in []:
+         if module in exceptions:
              modules.remove(module)
 
     return(list(modules))
