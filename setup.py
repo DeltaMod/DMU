@@ -91,12 +91,7 @@ with open("README.md", "r") as fh:
 
 installREQ = [module_filter(modules,module_exceptions)+["docutils>=0.3"]]
 installREQ = [[item for item in installREQ[0] if item not in ["logging"]]]
-extras_require = {  "torch": [
-                    "torch",
-                    "torchvision",
-                    "kornia",
-                    ],
-                "alldeps": [
+extras_require = { "alldeps": [
                     "torch",
                     "torchvision",
                     "kornia",
@@ -104,7 +99,7 @@ extras_require = {  "torch": [
                 }
 setup(
     name="DMU",
-    version="0.4.0",
+    version="0.4.1",
     packages=find_packages(),
     scripts=[],
 
