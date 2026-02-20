@@ -99,7 +99,7 @@ extras_require = { "alldeps": [
                 }
 setup(
     name="DMU",
-    version="0.4.1",
+    version="0.4.2",
     packages=find_packages(),
     scripts=[],
 
