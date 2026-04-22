@@ -333,8 +333,8 @@ class RoundedCuboid:
 
 class Nanowire:
     def __init__(self,
-        radius,
-        length,
+        radius=0.1e-6,
+        length=3e-6,
         shape="circle",
         endcaps="both",          # "none", "top", "bottom", "both"
         cap_factor=0.5,          # squash factor for z-radius
@@ -352,7 +352,10 @@ class Nanowire:
         self.seed_rfactor = seed_rfactor
         self.shape = shape
         
-        # Storage (mirrors your RoundedCuboid structure)
+        self.recalculate()
+        
+    def recalculate(self):
+        # Storage
         self.core_cylinder = []
         self.endcaps_list = []
         self.seed_list = []
@@ -506,61 +509,53 @@ def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=
                 
         
     
-def L_primitive(sim,primitive="rect", method="span",x=0,y=0,z=0, Dx=None,rx=None,Dy=None,ry=None,Dz=None,rz=None,norm="z",xminmax = [0,0], yminmax=[0,0],zminmax = [0,0],material=None,zorder=0):
+def L_primitive(sim, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None):
     
-    #First we handle the alias case, since we don't want to run the function with illegitimate values.
-    #In this case, we want all primitives to have the same reasonable dimension of 1e-6 (where Dx = 2rx)
-    xyz,D,r,mm = coordinate_standardisation(method = method, x=x,y=y,z=z,Dx=Dx,Dy=Dy,Dz=Dz,rx=rx,ry=ry,rz=rz,xmm=xminmax,ymm=yminmax,zmm=zminmax)
-    axstr = ["x","y","z"]
-        
-    if primitive == "sphere":
-        
-        name = sim.addsphere()
-        for i,axs in enumerate(axstr):
-            sim.setnamed(name, axs, xyz[i])
-            sim.setnamed(name, "radius "+axs, r[i])
+    xyz, D, r, mm = coordinate_standardisation(method=method, x=x, y=y, z=z, Dx=Dx, Dy=Dy, Dz=Dz, rx=rx, ry=ry, rz=rz, xmm=xminmax, ymm=yminmax, zmm=zminmax)
+    axstr = ["x", "y", "z"]
 
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
+    if primitive == "sphere":
+        sim.addsphere()
+        for i, axs in enumerate(axstr):
+            sim.set(axs, xyz[i])
+        sim.set("radius",   r[0])
+        sim.set("radius 2", r[1])
+        sim.set("radius 3", r[2])
     
     if primitive == "rect":
-        name = sim.addsphere()
-        for i,axs in enumerate(axstr):
-            sim.setnamed(name, axs, xyz[i])
-            sim.setnamed(name, axs+" span", D[i])
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
+        sim.addrect()
+        for i, axs in enumerate(axstr):
+            sim.set(axs, xyz[i])
+            sim.set(axs + " span", D[i])
     
     if primitive == "cylinder":
-        name = sim.addcylinder()
-        # Default orientation: along z
-        # axis_map defines which axis is the primary cylinder axis
-        axis_map = {"x": "X", "y": "Y", "z": "Z"}
-        rot_map  = {"x": [0, 1, 0], "y": [1, 0, 0], "z": [0, 0, 1]}
+        sim.addcircle()
+        sim.set("first axis",  "x")
+        sim.set("second axis", "y")
+        sim.set("third axis",  "z")
+        xr, yr = 0, 0
+        if norm == "x": yr += 90
+        if norm == "y": xr += 90
+        sim.set("make ellipsoid", 1)
+        sim.set("x", xyz[0])
+        sim.set("y", xyz[1])
+        sim.set("z", xyz[2])
+        sim.set("radius",   r[0])
+        sim.set("radius 2", r[1])
+        sim.set("z span",   D[2])
+        sim.set("rotation 1", xr)
+        sim.set("rotation 2", yr)
+        sim.set("rotation 3", 0)
+    
+    if material: sim.set("material", material)
+    sim.set("override mesh order from material database", 1)
+    sim.set("mesh order", zorder)
         
-        primary_axis = axis_map.get(norm.lower(), "Z")  # fallback to z if unknown
-        rotation     = rot_map.get(norm.lower(), [0, 0, 1])
+    if name:
+        sim.set("name",name)
         
-        # Set cylinder center
-        for i, axs in enumerate(["x", "y", "z"]):
-            sim.setnamed(name, axs, xyz[i])
-        
-        # Set cylinder radius and height
-        # Convention: radius = r perpendicular to axis, height = D along axis
-        # Map: primary axis gets D, other axes use radius
-        for i, axs in enumerate(["x", "y", "z"]):
-            if axs.lower() == norm.lower():
-                sim.setnamed(name, "height " + axs, D[i])
-            else:
-                sim.setnamed(name, "radius " + axs, r[i])
-        
-        # Set rotation
-        sim.setnamed(name, "primary axis", primary_axis)
-        sim.setnamed(name, "rotation", rotation)
-        
-        if material: sim.setnamed(name, "material", material)
-        sim.setnamed(name, "z order", zorder)
-
+    if group:
+        sim.addtogroup(group)
 
 def get_minmax_items(xmm,ymm,zmm):
     return([["x","y","z"],["min","max"],[xmm,ymm,zmm]])
@@ -693,12 +688,36 @@ def L_primitive_old(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6
         
     if bounds:
         bounds.append(adict["rng"])
+def fix_single_or_nonstandard_rxkeys(dictitem):
+    newdict = dictitem.copy()
+    
+    if "radius" in dictitem.keys():
+        if type(dictitem["radius"]) != dict:
+            radius = dictitem["radius"]
+            newdict["radius"] = {"rx":radius,"ry":radius,"rz":radius}
+        else:
+            if "x" in dictitem["radius"].keys():
+                newdict["radius"]["rx"] = dictitem["radius"]["x"]
+                newdict["radius"]["ry"] = dictitem["radius"]["y"]
+                newdict["radius"]["rz"] = dictitem["radius"]["z"]
+    return(newdict)
+
+def L_nanowire(sim, NW, x=0,y=0,z=0, rotx=0,roty=0,rotz=0, name="Nanowire", mat = None, seed_mat = None, zorder=0, group=None):
+    if group:
         
-def L_nanowire(sim, NW, mat = None, seed_mat = None, zorder=0, axis_offset=(0,0,0),group=None):
     for sphere in NW.seed_list:
-        sim.addsphere()
+        sphere = fix_single_or_nonstandard_rxkeys(sphere)
+        L_primitive(sim,primitive="sphere",**sphere["loc"],**sphere["radius"],material=seed_mat,zorder=zorder+1,name="SeedSphere",group=group)
+    
+    for sphere in NW.endcaps_list:
+        sphere = fix_single_or_nonstandard_rxkeys(sphere)
+        L_primitive(sim,primitive="sphere",**sphere["loc"],**sphere["radius"],material=mat,zorder=zorder,name="EndcapSphere",group=group)
         
-            
+    for cylinder in NW.core_cylinder:
+        L_primitive(sim,primitive="cylinder",**cylinder["loc"],**cylinder["radius"],material=mat,zorder=zorder,nane="NWCoreCylinder",group=group)
+    
+    
+    
 def L_roundedcube(sim, RC, material=None, zorder=0, axis_offset=(0,0,0), group=None,bounds=None):
     """
     Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
