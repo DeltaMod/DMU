@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import lumapi
 import os
-import numpy as np
 #%%
 
 def select_and_set_props(sim, name, propdict):
@@ -704,7 +703,15 @@ def fix_single_or_nonstandard_rxkeys(dictitem):
 
 def L_nanowire(sim, NW, x=0,y=0,z=0, rotx=0,roty=0,rotz=0, name="Nanowire", mat = None, seed_mat = None, zorder=0, group=None):
     if group:
-        
+        if not name:
+            name = "Nanowire"
+    else:
+        if not name:
+            name = "Nanowire"
+        gdir = name
+    
+    create_groups_from_dict(sim, {"structure":[gdir]})
+
     for sphere in NW.seed_list:
         sphere = fix_single_or_nonstandard_rxkeys(sphere)
         L_primitive(sim,primitive="sphere",**sphere["loc"],**sphere["radius"],material=seed_mat,zorder=zorder+1,name="SeedSphere",group=group)
