@@ -43,13 +43,13 @@ try:
     from . plot_utils import *
     from . utils_utils import *
     
-except:
+except ImportError:
     from custom_logger import get_custom_logger
     logger = get_custom_logger("DMU_UTILS")
     # Importing plot tools 
     from plot_utils import *
     from utils_utils import *
-    print("Loading utils packages locally, since root folder is the package folder")
+    logger.info("Loading utils packages locally, since root folder is the package folder")
 
 #%%
         

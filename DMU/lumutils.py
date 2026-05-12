@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import lumapi
 import os
+from . import lumutils_helpers 
 #%%
 
 def select_and_set_props(sim, name, propdict):
@@ -507,6 +508,12 @@ def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=
     return(xyz,Dxyz,rxyz,mmxyz)
                 
         
+def get_simple_bounds(xyz,D):
+    """
+    This function assumes that you have used the coordinate_standardisation function, and therefore will accept xyz and D as the only input parameters
+    The output of this function will be a bounding box, which is just a list of co-ordinates of the 4 extreme corners of the object.
+    sbb = [(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z)]
+    """
     
 def L_primitive(sim, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None):
     
@@ -555,6 +562,8 @@ def L_primitive(sim, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx
         
     if group:
         sim.addtogroup(group)
+    
+    return()
 
 def get_minmax_items(xmm,ymm,zmm):
     return([["x","y","z"],["min","max"],[xmm,ymm,zmm]])
