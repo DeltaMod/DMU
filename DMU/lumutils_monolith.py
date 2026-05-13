@@ -508,12 +508,7 @@ def coordinate_standardisation(method = "span", x=None,y=None,z=None,Dx=None,Dy=
     return(xyz,Dxyz,rxyz,mmxyz)
                 
         
-def get_simple_bounds(xyz,D):
-    """
-    This function assumes that you have used the coordinate_standardisation function, and therefore will accept xyz and D as the only input parameters
-    The output of this function will be a bounding box, which is just a list of co-ordinates of the 4 extreme corners of the object.
-    sbb = [(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z),(x,y,z)]
-    """
+
     
 def L_primitive(sim, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None):
     
@@ -666,36 +661,7 @@ def quick_cylinder(sim, xyz,rx=1e-6,ry=1e-6,L=1e-6, xr=0,yr=0,zr=0, zorder=0, no
     if material: sim.set("material", material)
     sim.set("override mesh order from material database",1); 
     sim.set("mesh order",zorder);
-    
-def L_primitive_old(sim,primitive="rect",xyz=None, x=0,y=0,z=0, Dx=1e-6, Dy=1e-6, Dz=1e-6, xmm = None, ymm=None,zmm = None,
-                rx=1e-6, ry=1e-6, rz=1e-6, L=1e-6,xr=0,yr=0,zr=0,normal="z", material=None, zorder=0,bounds=None,name=None,group=None):
-    if not xyz:
-        xyz = (x,y,z)
-    
-    if primitive == "sphere":
-        quick_sphere(sim,xyz,rx,ry,rz,zorder=zorder,material=material)
-        xyz,minmax = radius_to_minmax(xyz, rx, ry, rz)
-        adict = range_dict(xyz, *minmax)
-        
-    if primitive == "rect":
-        if all(val == None for val in [xmm,ymm,zmm]):
-            xyz,minmax = span_to_minmax(xyz, Dx,Dy,Dz)
-        else:
-            
-            xyz,minmax = span_to_minmax(xyz, xmm,ymm,zmm)
-        
-        
-        quick_cuboid(sim,xyz,*minmax)
-        adict = range_dict(xyz, *minmax)
-    if primitive == "cylinder":
-        quick_cylinder(sim,xyz,rx=rx,ry=ry,L=L, xr=xr,yr=yr,zr=zr, zorder=zorder, normal=normal, material=material,name=name)
-        adict = aabb_of_rotated_cylinder(center=(0,0,0), rx=rx, ry=ry, length=L, xr=xr, yr=yr, zr=zr)     
-        
-    if group:
-        sim.addtogroup(group)
-        
-    if bounds:
-        bounds.append(adict["rng"])
+
 def fix_single_or_nonstandard_rxkeys(dictitem):
     newdict = dictitem.copy()
     

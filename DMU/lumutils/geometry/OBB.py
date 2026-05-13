@@ -5,15 +5,11 @@ Created on Tue May 12 11:53:59 2026
 @author: vidar
 """
 import numpy as np
-from scipy import constants
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import lumapi
-import os
-from ..custom_logger import get_custom_logger
-logger = get_custom_logger("DMU_LUMUTILS")
 
+from ...custom_logger import get_custom_logger
+logger = get_custom_logger("LMU_OBB")
+
+    
 
 class FDTD_SCENE:
     def __init__(self):

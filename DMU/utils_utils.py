@@ -2,14 +2,9 @@ import os
 #%% Importing and executing logging
 import logging
 
-try:
-    from . custom_logger import get_custom_logger
-    
-except:
-    from custom_logger import get_custom_logger
-    print("Loading utils-utils packages locally, since root folder is the package folder")
-    
+from . custom_logger import get_custom_logger
 logger = get_custom_logger("DMU_UTILSUTILS")
+
 #%%    
 def cprint(String,**kwargs):
     """

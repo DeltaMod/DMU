@@ -31,20 +31,14 @@ import csv
 import xlrd
 
 #%% Importing and executing logging
-import logging
-try:
-    from . custom_logger import get_custom_logger
 
-    # Importing plot tools 
-    from . utils_utils import *
+from . custom_logger import get_custom_logger
+logger = get_custom_logger("DMU_PLOTUTILS")
+
+# Importing plot tools
+from . utils_utils import *
     
-except:
-    from custom_logger import get_custom_logger
-    # Importing plot tools 
-    from utils_utils import *
-    print("Loading plot_utils packages locally, since root folder is the package folder")
 
-    logger = get_custom_logger("DMU_PLOTUTILS")
     
 class CustomFormatter(logging.Formatter):
 

@@ -36,3 +36,4 @@ def get_custom_logger(name, level=logging.DEBUG):
     logger.addHandler(ch)
 
     return logger
+

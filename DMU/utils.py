@@ -34,22 +34,11 @@ import pickle
 
 
 #%% Importing and executing logging
-import logging
-try:
-    from . custom_logger import get_custom_logger
-    logger = get_custom_logger("DMU_UTILS")
-    
-    # Importing plot tools 
-    from . plot_utils import *
-    from . utils_utils import *
-    
-except ImportError:
-    from custom_logger import get_custom_logger
-    logger = get_custom_logger("DMU_UTILS")
-    # Importing plot tools 
-    from plot_utils import *
-    from utils_utils import *
-    logger.info("Loading utils packages locally, since root folder is the package folder")
+from . custom_logger import get_custom_logger
+logger = get_custom_logger("DMU_UTILS")
+# Importing plot tools
+from . plot_utils import *
+from . utils_utils import *
 
 #%%
         

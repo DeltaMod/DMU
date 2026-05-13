@@ -1,0 +1,13 @@
+mat73
+h5py
+xlrd
+numpy
+matplotlib
+scipy
+natsort
+docutils>=0.3
+
+[alldeps]
+torch
+torchvision
+kornia
