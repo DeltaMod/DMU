@@ -231,6 +231,18 @@ def filter_maximal_paths(paths):
     return maximal
 
 class HelpersMixin:
+    
+    def set_mat_zorder_group_name(self,material,zorder,name,group):
+        if material: 
+            self.sim.set("material", material)
+        self.sim.set("override mesh order from material database", 1)
+        self.sim.set("mesh order", zorder)
+            
+        if name:
+            self.sim.set("name",name)    
+        if group:
+            self.sim.addtogroup(group)
+            
     def select_and_set_props(self, name, propdict):
         """
         If name=None, we assume it's already been selected in the scope, so you can use this after creation without passing a name

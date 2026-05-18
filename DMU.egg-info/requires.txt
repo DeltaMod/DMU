@@ -1,9 +1,9 @@
-mat73
-h5py
 xlrd
 numpy
 matplotlib
 scipy
+mat73
+h5py
 natsort
 docutils>=0.3
 

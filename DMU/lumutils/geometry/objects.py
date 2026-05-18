@@ -135,29 +135,29 @@ class RoundedCuboid:
         for i, axis in enumerate("xyz"):
             self.rr[axis] = list(self._fix_overlap_and_r2(r1_list[i], r2_list[i], D_list[i]))
         
+        self.recalculate()
+
+    def recalculate(self):
         self.base_corners = {}
         self.base_edges   = {}
-        
         self.corner_props = {}
-        self.edge_props = {}
-        self.core_props = {}
-        
-        self.Dx = Dx; self.Dy = Dy; self.Dz = Dz
-        
-        #Get base locations of all corners, generating the keys for future use
+        self.edge_props   = {}
+        self.core_props   = {}
+        self.r_spheres    = []
+        self.r_cylinders  = []
+        self.c_cubes      = []
+    
         self._get_base_corners()
-        #Get real locations of all corners and rounding radiuses.
         self._get_corner_props()
-        
-        #Get the base keys for edges, and generate keys for future use. Remember to use frozenset() when calling edge keys.
-        self._get_base_edges() 
-        
+        self._get_base_edges()
         self._get_edge_props()
-        
         self._get_core_props()
-        
         self._generate_primitives()
-
+    
+    def get_obb(self):
+        """Local-space OBB — centre at origin, spans are Dx/Dy/Dz."""
+        return OBB(center=[0, 0, 0], spans=[self.Dx, self.Dy, self.Dz])
+    
     def _fix_overlap_and_r2(self, r1, r2, D):
         # 1. assign r2 if missing
         if r2 is None:
@@ -338,17 +338,6 @@ class RoundedCuboid:
 # Mixin — attached to Scene, has access to self.sim
 # ------------------------------------------------------------------
 class ObjectsMixin(hlp.HelpersMixin):
-    
-    def _set_mat_zo_name_group(self,material,zorder,name,group):
-        if material: 
-            self.sim.set("material", material)
-        self.sim.set("override mesh order from material database", 1)
-        self.sim.set("mesh order", zorder)
-            
-        if name:
-            self.sim.set("name",name)    
-        if group:
-            self.sim.addtogroup(group)
             
     def add_primitive(self, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None,standalone=True):
         
@@ -387,7 +376,7 @@ class ObjectsMixin(hlp.HelpersMixin):
             self.sim.set("rotation 1", xr)
             self.sim.set("rotation 2", yr)
             self.sim.set("rotation 3", 0)
-        self._set_mat_zo_name_group(material, zorder, name, group)
+        self.set_mat_zorder_group_name(material, zorder, name, group)
         
         
         return()
@@ -443,7 +432,6 @@ class ObjectsMixin(hlp.HelpersMixin):
         for cyl in RC.r_cylinders:
             loc = cyl["loc"]
             radius = cyl["radius"]
-            axis_range = cyl["range"]
             norm = cyl["norm"]
 
             x = loc["x"] + aox
@@ -457,7 +445,7 @@ class ObjectsMixin(hlp.HelpersMixin):
             self.add_primitive(primitive="cylinder",xyz=(x,y,z), rx=rx, ry=ry, rz=rz,material=material,zorder=zorder,group=gdir,norm=norm,standalone=False)  
             scene_obj = SceneObject(RC, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
                                     name=name, group=gdir)
-            return self._register(scene_obj)
+        return self._register(scene_obj)
     
     def add_nanowire(self, nw, x=0, y=0, z=0, rx=0, ry=0, rz=0,
                      material=None, seed_material=None,
