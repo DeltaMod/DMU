@@ -89,7 +89,7 @@ class Nanowire:
 
 
 class RoundedCuboid:
-    def __init__(self, rx=0, ry=0, rz=0, Dx=1, Dy=1, Dz=1, rx2=None, ry2=None, rz2=None):
+    def __init__(self, rrx=0, rry=0, rrz=0, Dx=1, Dy=1, Dz=1, rrx2=None, rry2=None, rrz2=None):
         """
         x1,y2,z2 ----> o--------o <- x2,y2,z2
                       /        /|                         xy2
@@ -104,12 +104,12 @@ class RoundedCuboid:
         
         Rounding Radius Explanation:
             
-        Rounding radius can be different for the normal axis of planes with shared normals. So the zy plane can have different rx values, but not different ry and rz values.
-        To make this easier, we will run rounding as a "per exception": rx/ry/rz are FOR ALL, and then you can elect to set rx2/ry2/rz2
+        Rounding radius can be different for the normal axis of planes with shared normals. So the zy plane can have different rrx values, but not different rry and rrz values.
+        To make this easier, we will run rounding as a "per exception": rrx/rry/rrz are FOR ALL, and then you can elect to set rrx2/rry2/rrz2
         Examples: 
-            I want rx1 == rx2: set rx = value, and ignore rx2
-            I want rx1 = val, and rx2 = 0: Set rx = value, and rx2=0
-            I want rx1 = 0.5 and rx2 = 1, you just set rx=0.5 and rx2=1.  
+            I want rrx1 == rrx2: set rrx = value, and ignore rrx2
+            I want rrx1 = val, and rrx2 = 0: Set rrx = value, and rrx2=0
+            I want rrx1 = 0.5 and rrx2 = 1, you just set rrx=0.5 and rrx2=1.  
             
         This way, we can also remove planes completely for FLAT faces (if you want to make plus symbols or something)
         
@@ -117,19 +117,19 @@ class RoundedCuboid:
 
         Dx/Dy/Dz Explanation:
         This represents the TOTAL bounds of the object. This means that the rounding radius of any corner cannot exceed D/2, since then 2r == D
-        If greater, then the sphere will clip out of the opposite side. Note, this also means that rx1 can be small, while rx2 can be D/2.
+        If greater, then the sphere will clip out of the opposite side. Note, this also means that rrx1 can be small, while rrx2 can be D/2.
         
         We build objects by doing:
-            rx1 -> Dxp -> rx2 (where Dxp = Dx-(rx1+rx2))
-            This naturally also means that rx1+rx2 !> Dx
-            But you can have: Dx = 100, rx1 = 5, Dxp = 45, rx2 = 50 and the maths will still work out! 
+            rrx1 -> Dxp -> rrx2 (where Dxp = Dx-(rrx1+rrx2))
+            This naturally also means that rrx1+rrx2 !> Dx
+            But you can have: Dx = 100, rrx1 = 5, Dxp = 45, rrx2 = 50 and the maths will still work out! 
         """
         
-        #Fix rx/ry/rz overlap, maximum permitted is D/2. After this, you might as well make a custom shape from spheres instead.
+        #Fix rrx/rry/rrz overlap, maximum permitted is D/2. After this, you might as well make a custom shape from spheres instead.
         
-        #Assign new r2 values if not assigned, then fix the r_overlap. We will do a rudimentary check to see if rounding can be ratiod, since if r1 = 1.5r2, then r1 should equal D/2, and r2 = D/(2*1.5) 
-        r1_list  = [rx,  ry,  rz]
-        r2_list  = [rx2, ry2, rz2]
+        #Assign new r2 values if not assigned, then fix the r_overlap. We will do a rudimentarry check to see if rounding can be ratiod, since if r1 = 1.5r2, then r1 should equal D/2, and r2 = D/(2*1.5) 
+        r1_list  = [rrx,  rry,  rrz]
+        r2_list  = [rrx2, rry2, rrz2]
         D_list   = [Dx,  Dy,  Dz]
         self.rr = {}
         for i, axis in enumerate("xyz"):
@@ -190,7 +190,7 @@ class RoundedCuboid:
         for xi,x_coord in enumerate((-1, 1)):
             for yi,y_coord in enumerate((-1, 1)):
                 for zi,z_coord in enumerate((-1, 1)):
-                    self.base_corners[(x_coord, y_coord, z_coord)] = {"rr":{"rx": self.rr["x"][xi], "ry": self.rr["y"][yi], "rz": self.rr["z"][zi]},
+                    self.base_corners[(x_coord, y_coord, z_coord)] = {"rr":{"rrx": self.rr["x"][xi], "rry": self.rr["y"][yi], "rrz": self.rr["z"][zi]},
                                                                        "loc":{"x":x_coord,"y":y_coord,"z":z_coord}}
     def _get_base_edges(self):
         corners = list(self.corner_props.keys())
@@ -210,12 +210,12 @@ class RoundedCuboid:
     def _get_corner_props(self):
         for xi,yi,zi in self.base_corners.keys():
             
-            x = xi*self.Dx/2 - xi*self.base_corners[(xi,yi,zi)]["rr"]["rx"]
-            y = yi*self.Dy/2 - yi*self.base_corners[(xi,yi,zi)]["rr"]["ry"]
-            z = zi*self.Dz/2 - zi*self.base_corners[(xi,yi,zi)]["rr"]["rz"]
+            x = xi*self.Dx/2 - xi*self.base_corners[(xi,yi,zi)]["rr"]["rrx"]
+            y = yi*self.Dy/2 - yi*self.base_corners[(xi,yi,zi)]["rr"]["rry"]
+            z = zi*self.Dz/2 - zi*self.base_corners[(xi,yi,zi)]["rr"]["rrz"]
             
             
-            self.corner_props[(xi,yi,zi)] = {"rr":{"x": self.base_corners[(xi,yi,zi)]["rr"]["rx"], "y": self.base_corners[(xi,yi,zi)]["rr"]["ry"], "z": self.base_corners[(xi,yi,zi)]["rr"]["rz"]},             
+            self.corner_props[(xi,yi,zi)] = {"rr":{"x": self.base_corners[(xi,yi,zi)]["rr"]["rrx"], "y": self.base_corners[(xi,yi,zi)]["rr"]["rry"], "z": self.base_corners[(xi,yi,zi)]["rr"]["rrz"]},             
                                              "loc":{"x":x,"y":y,"z":z}}
 
     def _get_edge_props(self):
@@ -269,9 +269,9 @@ class RoundedCuboid:
             rr = props["rr"]
             if any(rr[ax] == 0 for ax in "xyz"):
                 continue
-            entry = {"loc": props["loc"].copy(), "radius": rr.copy()}
-            if entry not in self.r_spheres:
-                self.r_spheres.append(entry)
+            entrry = {"loc": props["loc"].copy(), "radius": rr.copy()}
+            if entrry not in self.r_spheres:
+                self.r_spheres.append(entrry)
         
         
        # ----------- CYLINDERS -----------
@@ -299,7 +299,7 @@ class RoundedCuboid:
             # perpendicular radii
             radius = {ax: rr[ax] for ax in "xyz" if ax != norm}
         
-            entry = {
+            entrry = {
                 "norm": norm,
                 "loc": center,
                 "radius": radius,
@@ -307,8 +307,8 @@ class RoundedCuboid:
             }
         
             # avoid duplicates
-            if entry not in self.r_cylinders:
-                self.r_cylinders.append(entry)
+            if entrry not in self.r_cylinders:
+                self.r_cylinders.append(entrry)
     
         # ----------- CORE CUBES -----------
         for norm, cubes in self.core_props.items():
@@ -338,7 +338,22 @@ class RoundedCuboid:
 # Mixin — attached to Scene, has access to self.sim
 # ------------------------------------------------------------------
 class ObjectsMixin(hlp.HelpersMixin):
-            
+    """
+    Do I want to do this for primitives or not? I could either do this, or add it as an easier means to get and set props after creation?
+    Tough choice tbh
+    props = sim.getnamed("object_name", "?")
+    # or if already selected:
+    props = sim.get("?")
+    
+    def get_all_props(self, name=None):
+    if name:
+        self.sim.select(name)
+    prop_names = self.sim.get("?")  # returns newline-separated string or list depending on version
+    if isinstance(prop_names, str):
+        prop_names = [p for p in prop_names.strip().split("\n") if p]
+    
+    return {prop: self.sim.get(prop) for prop in prop_names}
+    """        
     def add_primitive(self, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None,standalone=True):
         
         xyz, D, r, mm = hlp.coordinate_standardisation(method=method, x=x, y=y, z=z, Dx=Dx, Dy=Dy, Dz=Dz, rx=rx, ry=ry, rz=rz, xmm=xminmax, ymm=yminmax, zmm=zminmax)
@@ -363,9 +378,8 @@ class ObjectsMixin(hlp.HelpersMixin):
             self.sim.set("first axis",  "x")
             self.sim.set("second axis", "y")
             self.sim.set("third axis",  "z")
-            xr, yr = 0, 0
-            if norm == "x": yr += 90
-            if norm == "y": xr += 90
+            if norm == "x": ry += 90
+            if norm == "y": rx += 90
             self.sim.set("make ellipsoid", 1)
             self.sim.set("x", xyz[0])
             self.sim.set("y", xyz[1])
@@ -373,9 +387,11 @@ class ObjectsMixin(hlp.HelpersMixin):
             self.sim.set("radius",   r[0])
             self.sim.set("radius 2", r[1])
             self.sim.set("z span",   D[2])
-            self.sim.set("rotation 1", xr)
-            self.sim.set("rotation 2", yr)
-            self.sim.set("rotation 3", 0)
+            self.sim.set("rotation 1", rx)
+            self.sim.set("rotation 2", ry)
+            self.sim.set("rotation 3", rz)
+        
+        self.set_loc_rot(xyz,r)
         self.set_mat_zorder_group_name(material, zorder, name, group)
         
         

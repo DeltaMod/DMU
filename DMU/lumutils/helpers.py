@@ -292,5 +292,34 @@ class HelpersMixin:
                 self.sim.set("name", "analysis_setter")
                 self.sim.addtogroup(path)
                 self.sim.delete()
-
     
+    def set_obj_props(self,setprops):
+        """
+        setprops is a dict that contains "key":value for a variety of named parameters of the SELECTED object. 
+        This will be invoked at the END of the function, meaning that you can provide a setprops dict instead of x=,y=,z etc
+        The order of the entries is their order of execution, meaning if you want to set a rotation, you must provide primary axis 
+        Example:
+            setprops = {"x":1,"y":1,"z":1,"first axis":x,"second axis":y,"third axis":"z",...}
+            
+        Note that if you use **setprops then x,y,z will not be processed a second time, as they will take over from the normal function.
+        """
+        for setprop,val in setprops.items():
+            self.sim.set(setprop,val)
+            
+    def set_named(self,name,setnamed):
+        """
+        setnamed is a dict that contains "key":value for a variety of named parameters of a NAMED object (struct/analysis, you name it). 
+        This will be invoked at the END of the function, meaning that you can provide a setnamed dict instead of x=,y=,z etc
+        The order of the entries is their order of execution, meaning if you want to set a rotation, you must provide primary axis 
+        Example:
+            setnamed = {"x":1,"y":1,"z":1,"first axis":x,"second axis":y,"third axis":"z",...}
+            
+        Note that if you use **setnamed then x,y,z will not be processed a second time, as they will take over from the normal function.
+        """
+        for setname,val in setnamed.items():
+            self.sim.setnamed(name, setname, val)
+        
+    def set_loc_rot(self,xyz,r):
+        self.sim.set("x",xyz[0])
+        self.sim.set("x",xyz[0])
+        self.sim.set("x",xyz[0])
