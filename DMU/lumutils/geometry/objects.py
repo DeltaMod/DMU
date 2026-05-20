@@ -89,7 +89,8 @@ class Nanowire:
 
 
 class RoundedCuboid:
-    def __init__(self, rrx=0, rry=0, rrz=0, Dx=1, Dy=1, Dz=1, rrx2=None, rry2=None, rrz2=None):
+    def __init__(self, Dx=1e-6, Dy=1e-6, Dz=1e-6, 
+                 rrx=1e-7, rry=1e-7, rrz=1e-7, rrx2=None, rry2=None, rrz2=None):
         """
         x1,y2,z2 ----> o--------o <- x2,y2,z2
                       /        /|                         xy2
@@ -354,7 +355,12 @@ class ObjectsMixin(hlp.HelpersMixin):
     
     return {prop: self.sim.get(prop) for prop in prop_names}
     """        
-    def add_primitive(self, primitive="rect", method="span", x=0, y=0, z=0, Dx=None, rx=None, Dy=None, ry=None, Dz=None, rz=None, norm="z", xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], material=None, zorder=0,name=None,group=None,standalone=True):
+    def add_primitive(self, primitive="rect", method="span", 
+                      x=0, y=0, z=0, 
+                      Dx=None, Dy=None, Dz=None, 
+                      rx=None, ry=None,  rz=None, norm="z", 
+                      xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], 
+                      material=None, zorder=0,name=None,group=None,standalone=True):
         
         xyz, D, r, mm = hlp.coordinate_standardisation(method=method, x=x, y=y, z=z, Dx=Dx, Dy=Dy, Dz=Dz, rx=rx, ry=ry, rz=rz, xmm=xminmax, ymm=yminmax, zmm=zminmax)
         axstr = ["x", "y", "z"]
@@ -397,7 +403,7 @@ class ObjectsMixin(hlp.HelpersMixin):
         
         return()
     
-    def add_roundedcube(self, RC, name="RoundedCube", material=None, zorder=0, axis_offset=(0,0,0), group=None,bounds=None):
+    def add_roundedcube(self, RC, x=0, y=0, z=0, rx = 0, ry = 0, rz = 0, axis_offset = (0,0,0), name="RoundedCube", material=None, zorder=0, group=None):
         """
         Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
         
@@ -405,7 +411,8 @@ class ObjectsMixin(hlp.HelpersMixin):
         RC: RoundedCuboid instance
         material: Lumerical material string
         zorder: drawing order
-        axis_offset: (dx, dy, dz)
+        axis_offset = (dx,dy,dz), moves the local origin so that rotations can be done geometrically around the centre.
+        x,y,z = location of the object relative to the local centre defined by the axis offset in 3d space.
         group: name of group to insert objects into (string)
         """
         aox, aoy, aoz = axis_offset
@@ -418,14 +425,14 @@ class ObjectsMixin(hlp.HelpersMixin):
         # -------------------------------------------------------------
         for cube in RC.c_cubes:
             cube_range = cube["range"]
-            x = (cube_range["xmin"] + cube_range["xmax"]) / 2 + aox
-            y = (cube_range["ymin"] + cube_range["ymax"]) / 2 + aoy
-            z = (cube_range["zmin"] + cube_range["zmax"]) / 2 + aoz
+            xx = (cube_range["xmin"] + cube_range["xmax"]) / 2 + aox 
+            yy = (cube_range["ymin"] + cube_range["ymax"]) / 2 + aoy 
+            zz = (cube_range["zmin"] + cube_range["zmax"]) / 2 + aoz 
             Dx = cube_range["xmax"] - cube_range["xmin"]
             Dy = cube_range["ymax"] - cube_range["ymin"]
             Dz = cube_range["zmax"] - cube_range["zmin"]
 
-            self.add_primitive(primitive="rect",xyz=(x,y,z), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=gdir,standalone=False)        
+            self.add_primitive(primitive="rect",xyz=(xx,yy,zz), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=gdir,standalone=False)        
 
         # -------------------------------------------------------------
         # SPHERES
@@ -434,12 +441,12 @@ class ObjectsMixin(hlp.HelpersMixin):
             loc = sphere["loc"]
             radius = sphere["radius"]
 
-            x = loc["x"] + aox
-            y = loc["y"] + aoy
-            z = loc["z"] + aoz
+            xx = loc["x"] + aox 
+            yy = loc["y"] + aoy 
+            zz = loc["z"] + aoz 
 
-            rx, ry, rz = radius["x"], radius["y"], radius["z"]
-            self.add_primitive(primitive="sphere",xyz=(x,y,z), rx=rx, ry=ry, rz=rz,material=material,zorder=zorder,group=gdir,standalone=False)      
+            rcx, rcy, rcz = radius["x"], radius["y"], radius["z"]
+            self.add_primitive(primitive="sphere",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=gdir,standalone=False)      
             
 
         # -------------------------------------------------------------
@@ -450,27 +457,28 @@ class ObjectsMixin(hlp.HelpersMixin):
             radius = cyl["radius"]
             norm = cyl["norm"]
 
-            x = loc["x"] + aox
-            y = loc["y"] + aoy
-            z = loc["z"] + aoz
+            xx = loc["x"] + aox 
+            yy = loc["y"] + aoy 
+            zz = loc["z"] + aoz 
 
-            rx = radius.get("x", 0)
-            ry = radius.get("y", 0)
-            rz = radius.get("z", 0)
+            rcx = radius.get("x", 0)
+            rcy = radius.get("y", 0)
+            rcz = radius.get("z", 0)
             
-            self.add_primitive(primitive="cylinder",xyz=(x,y,z), rx=rx, ry=ry, rz=rz,material=material,zorder=zorder,group=gdir,norm=norm,standalone=False)  
-            scene_obj = SceneObject(RC, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
+            self.add_primitive(primitive="cylinder",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=gdir,norm=norm,standalone=False)  
+        
+        scene_obj = SceneObject(RC, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,axis_offset=axis_offset,
                                     name=name, group=gdir)
         return self._register(scene_obj)
     
-    def add_nanowire(self, nw, x=0, y=0, z=0, rx=0, ry=0, rz=0,
+    def add_nanowire(self, nw, x=0, y=0, z=0, rx=0, ry=0, rz=0, axis_offset=(0,0,0),
                      material=None, seed_material=None,
                      zorder=0, name="Nanowire", group=None):
 
         gdir = group if group else name
         self.create_groups_from_dict( {"structure": [gdir]})
-
-        offset = {"x": x, "y": y, "z": z}
+        aox, aoy, aoz = axis_offset
+        offset = {"x": aox, "y": aoy, "z": aoz}
 
         for sphere in nw.seed_list:
             sphere = hlp.fix_single_or_nonstandard_rxkeys(sphere)
@@ -493,7 +501,7 @@ class ObjectsMixin(hlp.HelpersMixin):
                         zorder=zorder, name="NWCoreCylinder", group=gdir,standalone=False)
 
         scene_obj = SceneObject(nw, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
-                                name=name, group=gdir)
+                                name=name, group=gdir, axis_offset=axis_offset)
         return self._register(scene_obj)
                 
     
