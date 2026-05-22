@@ -29,6 +29,7 @@ class Scene(ObjectsMixin,
     # ------------------------------------------------------------------
     def _register(self, scene_obj):
         """Add a SceneObject to the scene registry. Called internally by mixins."""
+        scene_obj.sim = self.sim
         self.objects.append(scene_obj)
         return scene_obj
 

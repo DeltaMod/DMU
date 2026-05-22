@@ -19,7 +19,22 @@ class Nanowire:
                  seed="none",
                  seed_rfactor=0.1,
                  seed_z_offset=0.1):
-
+        """
+        inputs:
+            radius       : Radius of the nanowire, can be symmetric (scalar) or provided as a float (radx,rady) or a dict ["x":1e-7,"y":1e-7]
+            length       : Length of the nanowire (Scalar) 
+            shape        : For now, only circle is accepted - but square should also be an option later.                      
+            endcaps      : "both|top|bottom" 
+            cap_factor   : How smushed the z-axis of the spherical endcap is. (Scalar) Default is .5.
+            seed         : "bottom|top|both"
+            seed_rfactor : describes the shrink ratio of the seed radius. If set to 0.9, then the radius is 90% of the nanowire radius.
+            seed_z_offset: range of [-1,1]. This should be a "sink" ratio where -1 is fully inside (-r), and 1 fully outside (r) ("balanced like a ball on top") and 0 is perfectly centered inside the flat part of the nanowire cylinder ends.
+        """
+        if len(radius)    == 1:
+            self.radius   = {"x":radius,"y":radius}
+        elif type(radius) in [tuple,list]:
+            self.radius   = {"x":radius[0],"y":radius[1]}
+            
         self.radius       = radius
         self.length       = length
         self.shape        = shape
@@ -53,7 +68,7 @@ class Nanowire:
     def _make_cylinder(self):
         cyl = {
             "loc":    {"x": 0, "y": 0, "z": self.length / 2},
-            "radius": {"x": self.radius, "y": self.radius, "z": self.length / 2},
+            "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": self.length / 2},
             "range":  {"zmin": -self.length / 2, "zmax": self.length / 2},
             "norm":   [0, 0, 1]
         }
@@ -62,27 +77,26 @@ class Nanowire:
     def _make_endcaps(self):
         if self.endcaps not in ("bottom", "top", "both") or self.shape != "circle":
             return
-        r  = self.radius
-        rz = r * self.cap_factor
+        rz = (self.radius["x"]+self.radius["y"])/2 * self.cap_factor
         if self.endcaps in ("bottom", "both"):
             self.endcaps_list.append({"loc": {"x": 0, "y": 0, "z": -self.length / 2},
-                                      "radius": {"x": r, "y": r, "z": rz}})
+                                      "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": rz}})
         if self.endcaps in ("top", "both"):
             self.endcaps_list.append({"loc": {"x": 0, "y": 0, "z":  self.length / 2},
-                                      "radius": {"x": r, "y": r, "z": rz}})
+                                      "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": rz}})
 
     def _make_seeds(self):
         if self.seed not in ("bottom", "top", "both"):
             return
-        seed_rz = self.radius * self.seed_rfactor
+        seed_rx,seed_ry,seed_rz = [self.radius["x"] * self.seed_rfactor, self.radius["y"] * self.seed_rfactor,(self.radius["x"] + self.radius["y"])/2* self.seed_rfactor]
         if self.seed in ("bottom", "both"):
             self.seed_list.append({"loc": {"x": 0, "y": 0,
-                                           "z": -self.length / 2 - self.seed_rfactor * self.radius},
-                                   "radius": {"x": seed_rz, "y": seed_rz, "z": seed_rz}})
+                                           "z": -self.length / 2 + self.seed_z_offset * self.radius},
+                                   "radius": {"x": seed_rx, "y": seed_ry, "z": seed_rz}})
         if self.seed in ("top", "both"):
             self.seed_list.append({"loc": {"x": 0, "y": 0,
                                            "z":  self.length / 2 + self.seed_rfactor * self.radius},
-                                   "radius": {"x": seed_rz, "y": seed_rz, "z": seed_rz}})
+                                   "radius": {"x": seed_rx, "y": seed_ry, "z": seed_rz}})
 
     def __repr__(self):
         return f"Nanowire(r={self.radius:.2e}, L={self.length:.2e})"
@@ -360,7 +374,7 @@ class ObjectsMixin(hlp.HelpersMixin):
                       Dx=None, Dy=None, Dz=None, 
                       rx=None, ry=None,  rz=None, norm="z", 
                       xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], 
-                      material=None, zorder=0,name=None,group=None,standalone=True):
+                      material=None, zorder=0,name=None,group=None,fullpath=None,standalone=True,axis_offset=(0,0,0)):
         
         xyz, D, r, mm = hlp.coordinate_standardisation(method=method, x=x, y=y, z=z, Dx=Dx, Dy=Dy, Dz=Dz, rx=rx, ry=ry, rz=rz, xmm=xminmax, ymm=yminmax, zmm=zminmax)
         axstr = ["x", "y", "z"]
@@ -400,10 +414,18 @@ class ObjectsMixin(hlp.HelpersMixin):
         self.set_loc_rot(xyz,r)
         self.set_mat_zorder_group_name(material, zorder, name, group)
         
-        
+        pathdict   = self.resolve_fullpath(name,group=group,fullpath=fullpath) 
+        name, group, fullpath = [pathdict["name"],pathdict["group"], pathdict["fullpath"]]
+        self.create_groups_from_dict( {"structure": [fullpath]})
+        if standalone:
+            primitive_dict = {"primitive":primitive, "method" : method, "construction":{"xyz":xyz, "D":D, "rot":r, "mm":mm }}
+            scene_obj = SceneObject(primitive_dict, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
+                                    pathdict=pathdict, axis_offset=axis_offset)
+            return self._register(scene_obj)
         return()
     
-    def add_roundedcube(self, RC, x=0, y=0, z=0, rx = 0, ry = 0, rz = 0, axis_offset = (0,0,0), name="RoundedCube", material=None, zorder=0, group=None):
+    def add_roundedcube(self, RC, x=0, y=0, z=0, rx = 0, ry = 0, rz = 0, axis_offset = (0,0,0), 
+                        name="RoundedCube", group=None, fullpath = None, material=None, zorder=0):
         """
         Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
         
@@ -416,8 +438,10 @@ class ObjectsMixin(hlp.HelpersMixin):
         group: name of group to insert objects into (string)
         """
         aox, aoy, aoz = axis_offset
-        gdir = group if group else name
-        self.create_groups_from_dict( {"structure": [gdir]})
+        
+        pathdict   = self.resolve_fullpath(name,group=group,fullpath=fullpath) 
+        name, group, fullpath = [pathdict["name"],pathdict["group"], pathdict["fullpath"]]
+        self.create_groups_from_dict( {"structure": [fullpath]})
             
 
         # -------------------------------------------------------------
@@ -432,7 +456,7 @@ class ObjectsMixin(hlp.HelpersMixin):
             Dy = cube_range["ymax"] - cube_range["ymin"]
             Dz = cube_range["zmax"] - cube_range["zmin"]
 
-            self.add_primitive(primitive="rect",xyz=(xx,yy,zz), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=gdir,standalone=False)        
+            self.add_primitive(primitive="rect",xyz=(xx,yy,zz), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=fullpath,standalone=False)        
 
         # -------------------------------------------------------------
         # SPHERES
@@ -446,7 +470,7 @@ class ObjectsMixin(hlp.HelpersMixin):
             zz = loc["z"] + aoz 
 
             rcx, rcy, rcz = radius["x"], radius["y"], radius["z"]
-            self.add_primitive(primitive="sphere",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=gdir,standalone=False)      
+            self.add_primitive(primitive="sphere",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,standalone=False)      
             
 
         # -------------------------------------------------------------
@@ -465,43 +489,43 @@ class ObjectsMixin(hlp.HelpersMixin):
             rcy = radius.get("y", 0)
             rcz = radius.get("z", 0)
             
-            self.add_primitive(primitive="cylinder",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=gdir,norm=norm,standalone=False)  
+            self.add_primitive(primitive="cylinder",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,norm=norm,standalone=False)  
         
         scene_obj = SceneObject(RC, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,axis_offset=axis_offset,
-                                    name=name, group=gdir)
+                                    pathdict=pathdict)
         return self._register(scene_obj)
     
     def add_nanowire(self, nw, x=0, y=0, z=0, rx=0, ry=0, rz=0, axis_offset=(0,0,0),
                      material=None, seed_material=None,
-                     zorder=0, name="Nanowire", group=None):
-
-        gdir = group if group else name
-        self.create_groups_from_dict( {"structure": [gdir]})
+                     zorder=0, name="Nanowire", group=None,fullpath=None):
+       
+        pathdict   = self.resolve_fullpath(name,group=group,fullpath=fullpath) 
+        name, group, fullpath = [pathdict["name"],pathdict["group"], pathdict["fullpath"]]
+        self.create_groups_from_dict( {"structure": [fullpath]})
+        
         aox, aoy, aoz = axis_offset
         offset = {"x": aox, "y": aoy, "z": aoz}
 
         for sphere in nw.seed_list:
-            sphere = hlp.fix_single_or_nonstandard_rxkeys(sphere)
             loc = {k: v + offset[k] for k, v in sphere["loc"].items()}
-            self.add_primitive( primitive="sphere", **loc,
+            self.add_primitive(primitive="sphere", **loc,
                         **sphere["radius"], material=seed_material,
-                        zorder=zorder + 1, name="SeedSphere", group=gdir,standalone=False)
+                        zorder=zorder + 1, name="SeedSphere", group=fullpath,standalone=False)
 
         for sphere in nw.endcaps_list:
-            sphere = hlp.fix_single_or_nonstandard_rxkeys(sphere)
             loc = {k: v + offset[k] for k, v in sphere["loc"].items()}
             self.add_primitive(primitive="sphere", **loc,
                         **sphere["radius"], material=material,
-                        zorder=zorder, name="EndcapSphere", group=gdir,standalone=False)
+                        zorder=zorder, name="EndcapSphere", group=fullpath,standalone=False)
 
         for cyl in nw.core_cylinder:
             loc = {k: v + offset[k] for k, v in cyl["loc"].items()}
             self.add_primitive(primitive="cylinder", **loc,
                         **cyl["radius"], material=material,
-                        zorder=zorder, name="NWCoreCylinder", group=gdir,standalone=False)
+                        zorder=zorder, name="NWCoreCylinder", group=fullpath,standalone=False)
 
         scene_obj = SceneObject(nw, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
-                                name=name, group=gdir, axis_offset=axis_offset)
+                                pathdict=pathdict, axis_offset=axis_offset)
         return self._register(scene_obj)
                 
     

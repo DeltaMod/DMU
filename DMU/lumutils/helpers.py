@@ -131,20 +131,6 @@ def aabb_of_rotated_cylinder(center, rx, ry, length, xr, yr, zr):
 
     return({"rng":{"x":[xmin, xmax], "y":[ymin, ymax], "z":[zmin, zmax]}})
 
-def fix_single_or_nonstandard_rxkeys(dictitem):
-    newdict = dictitem.copy()
-
-    if "radius" in dictitem.keys():
-        if type(dictitem["radius"]) != dict:
-            radius = dictitem["radius"]
-            newdict["radius"] = {"rx":radius,"ry":radius,"rz":radius}
-        else:
-            if "x" in dictitem["radius"].keys():
-                newdict["radius"]["rx"] = dictitem["radius"]["x"]
-                newdict["radius"]["ry"] = dictitem["radius"]["y"]
-                newdict["radius"]["rz"] = dictitem["radius"]["z"]
-    return(newdict)
-
 def radius_to_minmax_oneax(loc, rad):
     """Returns [min,max] of a span, or [min,max] if span is already [min,max]"""
     if isinstance(rad, (list, tuple)):
@@ -252,6 +238,38 @@ class HelpersMixin:
         for key, item in propdict.items():
             self.sim.set(key,item)
 
+    def resolve_fullpath(name, group=None, fullpath=None):
+        """
+        Sorts out what the user intended for the input. Resolves down fullpath-> name,group,fullpath or figures out which combination of group and name was used.
+        Resolve the lumapi fullpath for a structure group.
+        If fullpath is provided, then name and group are ignored.
+            name="Name", group = None outputs "Name"
+            name="Name", group="Group1::Group2") outputs "Group1::Group2::Name"
+    
+        Output: PathDict = {"name":name,"group":group,"fullpath":fullpath}
+        """
+        if fullpath:
+            composite = fullpath.split("::") 
+            name = composite[-1]
+            if len(composite) == 1:
+                group = None
+            else:
+                group = "::".join(composite[:-1])
+            return({"name":name,"group":group,"fullpath":fullpath})
+        
+        if group:
+            if not name:
+                raise NameError("name field has been intentionally left blank, use fullpath = instead of group if you want this syntax.")
+            
+            fullpath = "::".join([group,name])
+            return({"name":name,"group":group,"fullpath":fullpath})
+        
+        if name:
+            fullpath = name
+            return({"name":name,"group":group,"fullpath":fullpath})
+        
+        raise NameError("At least one of name, group, or fullpath must be provided.")
+
     def create_groups_from_dict(self, grouplist):
         """
         Create structure and analysis groups in Lumerical without checking for existence.
@@ -323,3 +341,53 @@ class HelpersMixin:
         self.sim.set("x",xyz[0])
         self.sim.set("x",xyz[0])
         self.sim.set("x",xyz[0])
+    
+    #%% OBB HELPERS
+    def get_monitor_bounds(self, dim="3d", normal="z", 
+                           padding=0,
+                           xpad=None, ypad=None, zpad=None,
+                           transform_coords="local"):
+        """
+        Calculate monitor bounds from OBB, with optional padding.
+        
+        padding      : scalar, symmetric additive on all non-normal axes
+        xpad/ypad/zpad: scalar → symmetric [-v,+v], list → asymmetric [min,max]
+                       normal axis pad is ignored
+        transform_coords: "local" → bounds relative to OBB centre
+                          "world" → absolute world bounds from OBB aabb
+        dim          : "2d" → normal axis collapsed to OBB centre
+                       "3d" → all axes have extent
+        normal       : "x"|"y"|"z", only relevant for dim="2d"
+        """
+        
+        def resolve_pad(pad):
+            """Scalar → [-v,+v], list/tuple → as-is"""
+            if pad is None:
+                return [0, 0]
+            if isinstance(pad, (list, tuple)):
+                return pad
+            return [-pad, +pad]
+    
+        pads = {"x": resolve_pad(xpad), 
+                "y": resolve_pad(ypad), 
+                "z": resolve_pad(zpad)}
+    
+        if transform_coords == "local":
+            mn = self.obb.center - self.obb.spans / 2
+            mx = self.obb.center + self.obb.spans / 2
+        else:
+            mn, mx = self.obb.aabb
+    
+        axes = ["x", "y", "z"]
+        bounds = {}
+        for i, ax in enumerate(axes):
+            if dim == "2d" and ax == normal:
+                centre = (mn[i] + mx[i]) / 2
+                bounds[ax] = [centre, centre]
+            else:
+                bounds[ax] = [
+                    mn[i] - padding + pads[ax][0],
+                    mx[i] + padding + pads[ax][1]
+                ]
+    
+        return bounds
