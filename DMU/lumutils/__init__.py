@@ -1,11 +1,19 @@
+# lumutils/__init__.py
+# Group1 Imports - no local deps
 from .helpers import *
-from .SCENE import *
-from .scene_object import *
+from .geometry.OBB import OBB
+
+# Group2 Imports - depends on Group1
+from .scene_object import SceneObject
+
+# Group3 Imports - depends on Groups1+2
 from .geometry import *
-# analysis and SCENE only if lumapi is available
+from .data import *
+
+# Group4 Imports - Only ran when lumapi is needed
 try:
     import lumapi
     from .analysis import *
-    from .SCENE import *
+    from .SCENE import Scene
 except ImportError:
     pass
