@@ -1,4 +1,4 @@
-# lumutils/objects/nanowire.py
+# lumutils/objects/objects.py
 import numpy as np
 from ..geometry.OBB import OBB
 from ..scene_object import SceneObject
