@@ -12,9 +12,7 @@ from .analysis import *
 from .data import *
 from .helpers import *
 
-class Scene(ObjectsMixin,
-            HelpersMixin,
-            AnalysisMixin):
+class Scene(ObjectsMixin, AnalysisMixin, HelpersMixin):
     """
     Wrapper around a lumapi sim session.
     Owns all SceneObjects and exposes aggregate bounds.
