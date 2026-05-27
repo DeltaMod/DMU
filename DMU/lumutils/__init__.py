@@ -1,5 +1,6 @@
-from .geometry import *
 from .helpers import *
+from .SCENE import *
+from .scene_object import *
 from .geometry import *
 # analysis and SCENE only if lumapi is available
 try:

@@ -3155,7 +3155,8 @@ def Keithley_xls_read(directory,**kwargs):
                 
                 cols["Time"] = np.linspace(0,stats["Npts"][main_col]*stats["Time Per Point"],stats["Npts"][main_col])
                                 
-                
+                if type(stats["VStep"][main_col]) == str:
+                    stats["VStep"][main_col] = float(stats["VStep"][main_col])
                 if stats["FBSweep"][main_col] == True and stats['Npts'][main_col] == 2*(1+int(abs(stats["VStart"][main_col] - stats["VStop"][main_col])/abs(stats["VStep"][main_col]))):
                     sweep_indices = [0,int(stats['Npts'][main_col]/2),stats['Npts'][main_col]]
                 else:
