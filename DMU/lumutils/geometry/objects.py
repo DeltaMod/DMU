@@ -98,7 +98,7 @@ class Nanowire:
                                    "radius": {"rx": seed_rx, "ry": seed_ry, "rz": seed_rz}})
         if self.seed in ("top", "both"):
             self.seed_list.append({"loc": {"x": 0, "y": 0,
-                                           "z":  self.length / 2 + self.seed_rfactor * seed_rz},
+                                           "z":  self.length / 2 + self.seed_z_offset * seed_rz},
                                    "radius": {"rx": seed_rx, "ry": seed_ry, "rz": seed_rz}})
 
     def __repr__(self):
@@ -449,6 +449,11 @@ class ObjectsMixin(hlp.HelpersMixin):
 
         if primitive == "sphere":
             self.sim.addsphere()
+            geo = SphereGeo(
+            rx=props.pop("x span") / 2,
+            ry=props.pop("y span") / 2,
+            rz=props.pop("z span") / 2
+            )
             for ax, key in zip(("x","y","z"), ("radius","radius 2","radius 3")):
                 props[key] = props.pop(f"{ax} span") / 2
 
