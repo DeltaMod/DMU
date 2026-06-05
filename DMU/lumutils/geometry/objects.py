@@ -31,12 +31,15 @@ class Nanowire:
             seed_rfactor : describes the shrink ratio of the seed radius. If set to 0.9, then the radius is 90% of the nanowire radius.
             seed_z_offset: range of [-1,1]. This should be a "sink" ratio where -1 is fully inside (-r), and 1 fully outside (r) ("balanced like a ball on top") and 0 is perfectly centered inside the flat part of the nanowire cylinder ends.
         """
-        if len(radius)    == 1:
-            self.radius   = {"x":radius,"y":radius}
-        elif type(radius) in [tuple,list]:
-            self.radius   = {"x":radius[0],"y":radius[1]}
-            
-        self.radius       = radius
+        if isinstance(radius, (int, float)):
+            self.radius = {"rx": radius, "ry": radius}
+        elif isinstance(radius, (tuple, list)):
+            self.radius = {"rx": radius[0], "ry": radius[1]}
+        elif isinstance(radius, dict):
+            self.radius = radius
+        else:
+            raise TypeError(f"radius must be scalar, tuple, or dict, got {type(radius)}")
+    
         self.length       = length
         self.shape        = shape
         self.endcaps      = endcaps
@@ -59,48 +62,47 @@ class Nanowire:
         Compute local-space OBB (centre at origin).
         Nanowire is always along Z in local space.
         """
-        xy_span = self.radius * 2
-        # endcaps add cap_factor*radius beyond each end
-        cap_ext = self.radius * self.cap_factor if self.endcaps != "none" else 0
-        z_span  = self.length + 2 * cap_ext
-        return OBB(center=[0, 0, 0], spans=[xy_span, xy_span, z_span])
+        rx = self.radius["rx"]
+        ry = self.radius["ry"]
+        cap_ext = max(rx, ry) * self.cap_factor if self.endcaps != "none" else 0
+        return OBB(center=[0,0,0], spans=[rx*2, ry*2, self.length + 2*cap_ext])
 
     # --- geometry builders unchanged from your original ---
     def _make_cylinder(self):
         cyl = {
             "loc":    {"x": 0, "y": 0, "z": self.length / 2},
-            "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": self.length / 2},
+            "radius": {"rx": self.radius["rx"], "ry": self.radius["ry"], "rz": self.length / 2},
             "range":  {"zmin": -self.length / 2, "zmax": self.length / 2},
-            "norm":   [0, 0, 1]
+            "norm":   "z"
         }
         self.core_cylinder.append(cyl)
 
     def _make_endcaps(self):
         if self.endcaps not in ("bottom", "top", "both") or self.shape != "circle":
             return
-        rz = (self.radius["x"]+self.radius["y"])/2 * self.cap_factor
+        rz = (self.radius["rx"]+self.radius["ry"])/2 * self.cap_factor
         if self.endcaps in ("bottom", "both"):
             self.endcaps_list.append({"loc": {"x": 0, "y": 0, "z": -self.length / 2},
-                                      "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": rz}})
+                                      "radius": {"rx": self.radius["rx"], "ry": self.radius["ry"], "rz": rz}})
         if self.endcaps in ("top", "both"):
             self.endcaps_list.append({"loc": {"x": 0, "y": 0, "z":  self.length / 2},
-                                      "radius": {"x": self.radius["x"], "y": self.radius["y"], "z": rz}})
+                                      "radius": {"rx": self.radius["rx"], "ry": self.radius["ry"], "rz": rz}})
 
     def _make_seeds(self):
         if self.seed not in ("bottom", "top", "both"):
             return
-        seed_rx,seed_ry,seed_rz = [self.radius["x"] * self.seed_rfactor, self.radius["y"] * self.seed_rfactor,(self.radius["x"] + self.radius["y"])/2* self.seed_rfactor]
+        seed_rx,seed_ry,seed_rz = [self.radius["rx"] * self.seed_rfactor, self.radius["ry"] * self.seed_rfactor,(self.radius["rx"] + self.radius["ry"])/2* self.seed_rfactor]
         if self.seed in ("bottom", "both"):
             self.seed_list.append({"loc": {"x": 0, "y": 0,
-                                           "z": -self.length / 2 + self.seed_z_offset * self.radius},
-                                   "radius": {"x": seed_rx, "y": seed_ry, "z": seed_rz}})
+                                           "z": -self.length / 2 + self.seed_z_offset * seed_rz},
+                                   "radius": {"rx": seed_rx, "ry": seed_ry, "rz": seed_rz}})
         if self.seed in ("top", "both"):
             self.seed_list.append({"loc": {"x": 0, "y": 0,
-                                           "z":  self.length / 2 + self.seed_rfactor * self.radius},
-                                   "radius": {"x": seed_rx, "y": seed_ry, "z": seed_rz}})
+                                           "z":  self.length / 2 + self.seed_rfactor * seed_rz},
+                                   "radius": {"rx": seed_rx, "ry": seed_ry, "rz": seed_rz}})
 
     def __repr__(self):
-        return f"Nanowire(r={self.radius:.2e}, L={self.length:.2e})"
+        return f"Nanowire(rx={self.radius['rx']:.2e}, ry={self.radius['ry']:.2e}, L={self.length:.2e})"
 
 
 class RoundedCuboid:
@@ -147,6 +149,10 @@ class RoundedCuboid:
         r1_list  = [rrx,  rry,  rrz]
         r2_list  = [rrx2, rry2, rrz2]
         D_list   = [Dx,  Dy,  Dz]
+        
+        self.Dx = Dx  
+        self.Dy = Dy
+        self.Dz = Dz
         self.rr = {}
         for i, axis in enumerate("xyz"):
             self.rr[axis] = list(self._fix_overlap_and_r2(r1_list[i], r2_list[i], D_list[i]))
@@ -206,7 +212,7 @@ class RoundedCuboid:
         for xi,x_coord in enumerate((-1, 1)):
             for yi,y_coord in enumerate((-1, 1)):
                 for zi,z_coord in enumerate((-1, 1)):
-                    self.base_corners[(x_coord, y_coord, z_coord)] = {"rr":{"rrx": self.rr["x"][xi], "rry": self.rr["y"][yi], "rrz": self.rr["z"][zi]},
+                    self.base_corners[(x_coord, y_coord, z_coord)] = {"rr":{"rx": self.rr["x"][xi], "ry": self.rr["y"][yi], "rz": self.rr["z"][zi]},
                                                                        "loc":{"x":x_coord,"y":y_coord,"z":z_coord}}
     def _get_base_edges(self):
         corners = list(self.corner_props.keys())
@@ -226,12 +232,12 @@ class RoundedCuboid:
     def _get_corner_props(self):
         for xi,yi,zi in self.base_corners.keys():
             
-            x = xi*self.Dx/2 - xi*self.base_corners[(xi,yi,zi)]["rr"]["rrx"]
-            y = yi*self.Dy/2 - yi*self.base_corners[(xi,yi,zi)]["rr"]["rry"]
-            z = zi*self.Dz/2 - zi*self.base_corners[(xi,yi,zi)]["rr"]["rrz"]
+            x = xi*self.Dx/2 - xi*self.base_corners[(xi,yi,zi)]["rr"]["rx"]
+            y = yi*self.Dy/2 - yi*self.base_corners[(xi,yi,zi)]["rr"]["ry"]
+            z = zi*self.Dz/2 - zi*self.base_corners[(xi,yi,zi)]["rr"]["rz"]
             
             
-            self.corner_props[(xi,yi,zi)] = {"rr":{"x": self.base_corners[(xi,yi,zi)]["rr"]["rrx"], "y": self.base_corners[(xi,yi,zi)]["rr"]["rry"], "z": self.base_corners[(xi,yi,zi)]["rr"]["rrz"]},             
+            self.corner_props[(xi,yi,zi)] = {"rr":{"rx": self.base_corners[(xi,yi,zi)]["rr"]["rx"], "ry": self.base_corners[(xi,yi,zi)]["rr"]["ry"], "rz": self.base_corners[(xi,yi,zi)]["rr"]["rz"]},             
                                              "loc":{"x":x,"y":y,"z":z}}
 
     def _get_edge_props(self):
@@ -250,9 +256,9 @@ class RoundedCuboid:
             rr_edge = {}
             for axis in "xyz":
                 if axis == normal_axis:
-                    rr_edge[axis] = None
+                    rr_edge[f"r{axis}"] = None
                 else:
-                    rr_edge[axis] = rr_corner[axis]
+                    rr_edge[f"r{axis}"] = rr_corner[f"r{axis}"]
     
             # Store in edge_props
             self.edge_props[(c1, c2)] = {
@@ -283,7 +289,7 @@ class RoundedCuboid:
          
         for corner, props in self.corner_props.items():
             rr = props["rr"]
-            if any(rr[ax] == 0 for ax in "xyz"):
+            if any(rr[f"r{ax}"] == 0 for ax in "xyz"):
                 continue
             entrry = {"loc": props["loc"].copy(), "radius": rr.copy()}
             if entrry not in self.r_spheres:
@@ -300,20 +306,22 @@ class RoundedCuboid:
                 continue
         
             # find cylinder axis (where radius is None)
-            norm = next(ax for ax, v in rr.items() if v is None)
-        
+            norm = next(ax[1] for ax, v in rr.items() if v is None)  # "rx"→"x" etc.
+            
             # skip if any non-axis radius is zero
-            if any(rr[ax] == 0 for ax in "xyz" if ax != norm):
+            if any(rr[f"r{ax}"] == 0 for ax in "xyz" if ax != norm):
                 continue
-        
-            # compute cylinder center
-            center = {ax: 0.5 * (loc0[i] + loc1[i]) for i, ax in enumerate("xyz")}
-        
+            
+                
+            ax_idx = {"x": 0, "y": 1, "z": 2}
             # compute cylinder height along norm axis
-            height = abs(loc1["xyz".index(norm)] - loc0["xyz".index(norm)])
+            height = abs(loc1[ax_idx[norm]] - loc0[ax_idx[norm]])
+            # compute cylinder center
+            center = {ax: 0.5 * (loc0[ax_idx[ax]] + loc1[ax_idx[ax]]) for ax in "xyz"}
         
             # perpendicular radii
-            radius = {ax: rr[ax] for ax in "xyz" if ax != norm}
+            radius = {f"r{ax}": rr[f"r{ax}"] for ax in "xyz" if ax != norm}
+        
         
             entrry = {
                 "norm": norm,
@@ -350,6 +358,50 @@ class RoundedCuboid:
     def __repr__(self):
         return f"RoundedCuboidRadii({self.corner_props})"
     
+class RectGeo:
+    def __init__(self, Dx, Dy, Dz):
+        self.Dx = Dx
+        self.Dy = Dy
+        self.Dz = Dz
+
+    def get_obb(self):
+        return OBB(center=[0, 0, 0], spans=[self.Dx, self.Dy, self.Dz])
+
+    def __repr__(self):
+        return f"RectGeo(Dx={self.Dx:.2e}, Dy={self.Dy:.2e}, Dz={self.Dz:.2e})"
+
+
+class SphereGeo:
+    def __init__(self, rx, ry, rz):
+        self.rx = rx
+        self.ry = ry
+        self.rz = rz
+
+    def get_obb(self):
+        return OBB(center=[0, 0, 0], spans=[self.rx*2, self.ry*2, self.rz*2])
+
+    def __repr__(self):
+        return f"SphereGeo(rx={self.rx:.2e}, ry={self.ry:.2e}, rz={self.rz:.2e})"
+
+
+class CylinderGeo:
+    def __init__(self, rx, ry, rz, norm="z"):
+        # rx/ry/rz are the three semi-axes; norm is the length axis
+        # the two non-norm axes are radii, norm axis is half-length
+        self.rx   = rx
+        self.ry   = ry
+        self.rz   = rz
+        self.norm = norm
+
+    def get_obb(self):
+        # spans = diameter on radial axes, full length on norm axis
+        ax_idx = {"x": 0, "y": 1, "z": 2}
+        spans  = [self.rx*2, self.ry*2, self.rz*2]
+        # norm axis span is already length (rz passed as half-length from _make_cylinder)
+        return OBB(center=[0, 0, 0], spans=spans)
+
+    def __repr__(self):
+        return f"CylinderGeo(rx={self.rx:.2e}, ry={self.ry:.2e}, rz={self.rz:.2e}, norm={self.norm!r})"   
 # ------------------------------------------------------------------
 # Mixin — attached to Scene, has access to self.sim
 # ------------------------------------------------------------------
@@ -434,13 +486,13 @@ class ObjectsMixin(hlp.HelpersMixin):
             scene_obj = SceneObject(
                 geo=None,
                 x=props["x"], y=props["y"], z=props["z"],
-                rx=rx_, ry=ry_, rz=rz_,
+                rotx=rx_, roty=ry_, rotz=rz_,
                 pathdict=pathdict,
                 axis_offset=axis_offset
             )
             return self._register(scene_obj)
     
-    def add_roundedcube(self, RC, x=0, y=0, z=0, rx = 0, ry = 0, rz = 0, axis_offset = (0,0,0), 
+    def add_roundedcube(self, RC, x=0, y=0, z=0, rotx = 0, roty = 0, rotz = 0, axis_offset = (0,0,0), 
                         name="RoundedCube", group=None, fullpath = None, material=None, zorder=0):
         """
         Instantiate a RoundedCuboid in a Lumerical simulation using lumapi.
@@ -472,7 +524,7 @@ class ObjectsMixin(hlp.HelpersMixin):
             Dy = cube_range["ymax"] - cube_range["ymin"]
             Dz = cube_range["zmax"] - cube_range["zmin"]
 
-            self.add_primitive(primitive="rect",xyz=(xx,yy,zz), Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=fullpath,standalone=False)        
+            self.add_primitive(primitive="rect",x=xx,y=yy,z=zz, Dx=Dx, Dy=Dy, Dz=Dz,material=material,zorder=zorder,group=fullpath,standalone=False)        
 
         # -------------------------------------------------------------
         # SPHERES
@@ -485,8 +537,8 @@ class ObjectsMixin(hlp.HelpersMixin):
             yy = loc["y"] + aoy 
             zz = loc["z"] + aoz 
 
-            rcx, rcy, rcz = radius["x"], radius["y"], radius["z"]
-            self.add_primitive(primitive="sphere",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,standalone=False)      
+            rcx, rcy, rcz = radius["rx"], radius["ry"], radius["rz"]
+            self.add_primitive(primitive="sphere",x=xx,y=yy,z=zz, rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,standalone=False)      
             
 
         # -------------------------------------------------------------
@@ -501,17 +553,17 @@ class ObjectsMixin(hlp.HelpersMixin):
             yy = loc["y"] + aoy 
             zz = loc["z"] + aoz 
 
-            rcx = radius.get("x", 0)
-            rcy = radius.get("y", 0)
-            rcz = radius.get("z", 0)
+            rcx = radius.get("rx", 0)
+            rcy = radius.get("ry", 0)
+            rcz = radius.get("rz", 0)
             
-            self.add_primitive(primitive="cylinder",xyz=(xx,yy,zz), rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,norm=norm,standalone=False)  
+            self.add_primitive(primitive="cylinder",x=xx,y=yy,z=zz, rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,norm=norm,standalone=False)  
         
-        scene_obj = SceneObject(RC, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,axis_offset=axis_offset,
+        scene_obj = SceneObject(RC, x=x, y=y, z=z, rotx=rotx, roty=roty, rotz=rotz,axis_offset=axis_offset,
                                     pathdict=pathdict)
         return self._register(scene_obj)
     
-    def add_nanowire(self, nw, x=0, y=0, z=0, rx=0, ry=0, rz=0, axis_offset=(0,0,0),
+    def add_nanowire(self, nw, x=0, y=0, z=0, rotx=0, roty=0, rotz=0, axis_offset=(0,0,0),
                      material=None, seed_material=None,
                      zorder=0, name="Nanowire", group=None,fullpath=None):
        
@@ -540,7 +592,7 @@ class ObjectsMixin(hlp.HelpersMixin):
                         **cyl["radius"], material=material,
                         zorder=zorder, name="NWCoreCylinder", group=fullpath,standalone=False)
 
-        scene_obj = SceneObject(nw, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
+        scene_obj = SceneObject(nw, x=x, y=y, z=z, rotx=rotx, roty=roty, rotz=rotz,
                                 pathdict=pathdict, axis_offset=axis_offset)
         return self._register(scene_obj)
                 

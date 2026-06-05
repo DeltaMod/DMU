@@ -40,7 +40,10 @@ class Scene(ObjectsMixin, AnalysisMixin, HelpersMixin):
         Aggregate world-space AABB over all registered objects.
         Returns (min (3,), max (3,)).
         """
-        objects = [o for o in self.objects if o.kind in include]
+    
+        objects = [o for o in self.objects 
+                   if o.kind in include 
+                   and not o.exclude_from_bounds]
         if not objects:
             raise ValueError("No matching objects in scene.")
         all_min = np.array([o.obb.aabb_min for o in objects])
