@@ -2,6 +2,7 @@
 # Group1 Imports - no local deps
 from .helpers import *
 from .geometry.OBB import OBB
+from .defaults import get_default_prop_dicts
 
 # Group2 Imports - depends on Group1
 from .scene_object import SceneObject

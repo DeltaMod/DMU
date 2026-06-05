@@ -3,6 +3,7 @@ import numpy as np
 from ..scene_object import SceneObject
 from ..geometry.OBB import OBB
 from .. import helpers as hlp
+from ..defaults import DEFAULTS_GEOMETRY, DEFAULTS_FDTD, DEFAULTS_MONITOR
 
 class AnalysisMixin(hlp.HelpersMixin):
     

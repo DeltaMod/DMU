@@ -3,9 +3,10 @@ import numpy as np
 from ..geometry.OBB import OBB
 from ..scene_object import SceneObject
 from .. import helpers as hlp
+from .. import defaults as dflt
 
 from ...custom_logger import get_custom_logger
-
+_S = object()
 logger = get_custom_logger("DMU_NANOWIRE")
 
 
@@ -369,60 +370,75 @@ class ObjectsMixin(hlp.HelpersMixin):
     
     return {prop: self.sim.get(prop) for prop in prop_names}
     """        
-    def add_primitive(self, primitive="rect", method="span", 
-                      x=0, y=0, z=0, 
-                      Dx=None, Dy=None, Dz=None, 
-                      rx=None, ry=None,  rz=None, norm="z", 
-                      xminmax=[0,0], yminmax=[0,0], zminmax=[0,0], 
-                      material=None, zorder=0,name=None,group=None,fullpath=None,standalone=True,axis_offset=(0,0,0)):
+    def add_primitive(self, primitive="rect",
+                  x=_S, y=_S, z=_S,
+                  Dx=_S, Dy=_S, Dz=_S,
+                  rx=_S, ry=_S, rz=_S,
+                  rotx=_S, roty=_S, rotz=_S,
+                  norm="z",
+                  material=None, zorder=0,
+                  name=None, group=None, fullpath=None,
+                  standalone=True, axis_offset=(0,0,0),
+                  prop_dict=None, **geo):
         
-        xyz, D, r, mm = hlp.coordinate_standardisation(method=method, x=x, y=y, z=z, Dx=Dx, Dy=Dy, Dz=Dz, rx=rx, ry=ry, rz=rz, xmm=xminmax, ymm=yminmax, zmm=zminmax)
-        axstr = ["x", "y", "z"]
+        defaults = dflt.get_default_prop_dicts()[dflt._get_primitive_mapping()[primitive]]
+        
+        props = hlp.resolve_and_merge(
+        defaults, prop_dict,
+        explicit={"x": x, "y": y, "z": z,
+                  "Dx": Dx, "Dy": Dy, "Dz": Dz,
+                  "rx": rx, "ry": ry, "rz": rz,
+                  "rotx": rotx, "roty": roty, "rotz": rotz},
+        geo=geo
+        )
+        
+        rot = hlp._extract_rotation(props)  # always pop from props
+        rx_, ry_, rz_ = rot
 
         if primitive == "sphere":
             self.sim.addsphere()
-            for i, axs in enumerate(axstr):
-                self.sim.set(axs, xyz[i])
-            self.sim.set("radius",   r[0])
-            self.sim.set("radius 2", r[1])
-            self.sim.set("radius 3", r[2])
-        
-        if primitive == "rect":
+            for ax, key in zip(("x","y","z"), ("radius","radius 2","radius 3")):
+                props[key] = props.pop(f"{ax} span") / 2
+
+        elif primitive == "rect":
             self.sim.addrect()
-            for i, axs in enumerate(axstr):
-                self.sim.set(axs, xyz[i])
-                self.sim.set(axs + " span", D[i])
-        
-        if primitive == "cylinder":
+
+        elif primitive == "cylinder":
             self.sim.addcircle()
-            self.sim.set("first axis",  "x")
-            self.sim.set("second axis", "y")
-            self.sim.set("third axis",  "z")
-            if norm == "x": ry += 90
-            if norm == "y": rx += 90
-            self.sim.set("make ellipsoid", 1)
-            self.sim.set("x", xyz[0])
-            self.sim.set("y", xyz[1])
-            self.sim.set("z", xyz[2])
-            self.sim.set("radius",   r[0])
-            self.sim.set("radius 2", r[1])
-            self.sim.set("z span",   D[2])
-            self.sim.set("rotation 1", rx)
-            self.sim.set("rotation 2", ry)
-            self.sim.set("rotation 3", rz)
-        
-        self.set_loc_rot(xyz,r)
-        self.set_mat_zorder_group_name(material, zorder, name, group)
-        
-        pathdict   = self.resolve_fullpath(name,group=group,fullpath=fullpath) 
-        name, group, fullpath = [pathdict["name"],pathdict["group"], pathdict["fullpath"]]
-        self.create_groups_from_dict( {"structure": [fullpath]})
+            props["make ellipsoid"] = 1
+            radial = [ax for ax in ("x","y","z") if ax != norm]
+            props["radius"]   = props.pop(f"{radial[0]} span") / 2
+            props["radius 2"] = props.pop(f"{radial[1]} span") / 2
+            if norm == "x": ry_ += 90
+            if norm == "y": rx_ += 90
+
+        # If not standalone, rotation goes back into props for set_obj_props
+        if not standalone:
+            props["first axis"]  = "x"; props["rotation 1"] = rx_
+            props["second axis"] = "y"; props["rotation 2"] = ry_
+            props["third axis"]  = "z"; props["rotation 3"] = rz_
+
+        pathdict = self.resolve_fullpath(name, group=group, fullpath=fullpath)
+        self.create_groups_from_dict({"structure": [pathdict["fullpath"]]})
+        props["name"] = pathdict["name"]
+        props["mesh order"] = zorder
+        if material:
+            props["material"] = material
+            props["override mesh order from material database"] = 1
+        if group:
+            self.sim.addtogroup(pathdict["group"])
+
+        self.set_obj_props(props)
+
         if standalone:
-            primitive_dict = {"primitive":primitive, "method" : method, "construction":{"xyz":xyz, "D":D, "rot":r, "mm":mm }}
-            scene_obj = SceneObject(primitive_dict, x=x, y=y, z=z, rx=rx, ry=ry, rz=rz,
-                                    pathdict=pathdict, axis_offset=axis_offset)
+            scene_obj = SceneObject(
+                geo=None,
+                x=props["x"], y=props["y"], z=props["z"],
+                rx=rx_, ry=ry_, rz=rz_,
+                pathdict=pathdict,
+                axis_offset=axis_offset
+            )
             return self._register(scene_obj)
-        return()
     
     def add_roundedcube(self, RC, x=0, y=0, z=0, rx = 0, ry = 0, rz = 0, axis_offset = (0,0,0), 
                         name="RoundedCube", group=None, fullpath = None, material=None, zorder=0):
