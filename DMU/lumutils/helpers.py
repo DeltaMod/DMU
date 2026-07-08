@@ -1,4 +1,8 @@
 import numpy as np 
+_S = object() #Add sentinel object for empty fields
+from ..custom_logger import get_custom_logger
+logger = get_custom_logger("DLUM_HELPERS")
+from . import defaults as dflt
 
 def are_all_dict_values_type(d,ttype=None):
     if isinstance(d, dict):  # If d is a dictionary, check all values
@@ -214,7 +218,148 @@ def filter_maximal_paths(paths):
     for p in paths_sorted:
         if not any(other.startswith(p + "::") for other in maximal):
             maximal.append(p)
-    return maximal
+    return maximal        
+    
+##########################
+#%% GEOMETRY HELPERS!!!###
+##########################
+
+def _resolve_geometry(explicit: dict, geo: dict) -> dict:
+    """
+    Resolves all geometry inputs into a canonical flat dict of Lumerical keys.
+
+    Priority (highest → lowest):
+      explicit kwargs  >  geo kwargs  >  nothing (key absent, defaults fill later)
+
+    Position/span resolution per axis:
+      - xmm / (xmin+xmax)  →  centre + span  (min/max discarded after)
+      - Dx / rx            →  span (Dx preferred over rx if both given)
+      - x                  →  centre
+     Shorthands accepted:
+        xyz=(x,y,z)         Dxyz=(Dx,Dy,Dz)      radxyz=(rx,ry,rz)
+        rotxyz=(rx,ry,rz)   xmm=(lo,hi)           xmin+xmax
+        rotx/roty/rotz      Dx/Dy/Dz              rx/ry/rz
+    
+    Rotation:
+      rotxyz=(a,b,c) or rotx/roty/rotz  →  "first axis":"x","rotation 1":a, etc.
+      Axes are always x/y/z in order.
+    
+    Output keys are always Lumerical strings:
+        "x","y","z"  /  "x span","y span","z span"  /  "rotation 1" etc.
+    """
+    out = {}
+
+    #### Unpack tuple shorthands from geo ####
+    _unpack = [
+       ("xyz",    "xyz",               ("x",   "y",   "z"  )),
+       ("Dxyz",   "Dxyz",              ("Dx",  "Dy",  "Dz" )),
+       ("radxyz", "radxyz",            ("rx",  "ry",  "rz" )),
+       ("rotxyz", "rotxyz",            ("rotx","roty","rotz")),
+    ]
+    for key, _, targets in _unpack:
+        if key in geo:
+            for t, v in zip(targets, geo.pop(key)):
+                geo.setdefault(t, v)
+    
+    for ax in ("x", "y", "z"):
+        if f"{ax}mm" in geo:
+            lo, hi = geo.pop(f"{ax}mm")
+            geo.setdefault(f"{ax}min", lo)
+            geo.setdefault(f"{ax}max", hi)
+    
+    #### Merge explicit on top explicit kwargs beat geo kwargs, sentinels excluded ####
+    merged = {**geo, **{k: v for k, v in explicit.items() if v is not _S}}
+
+    # ── Per-axis position + span resolution ──────────────────────────────────
+    for ax in ("x", "y", "z"):
+        centre = merged.get(ax)
+        D      = merged.get(f"D{ax}")
+        r      = merged.get(f"r{ax}")
+        lo     = merged.get(f"{ax}min")
+        hi     = merged.get(f"{ax}max")
+
+        if (D is not None or r is not None) and (lo is not None or hi is not None):
+            logger.warn(
+                f"Both span and min/max provided for {ax!r} — using span.",
+                UserWarning, stacklevel=3
+            )
+            lo = hi = None
+
+        if lo is not None and hi is not None:
+            out[ax]          = (lo + hi) / 2
+            out[f"{ax} span"] = hi - lo
+        else:
+            if D is not None:
+                out[f"{ax} span"] = D
+            elif r is not None:
+                out[f"{ax} span"] = r * 2
+            if centre is not None:
+                out[ax] = centre
+
+    # ── Rotation ─────────────────────────────────────────────────────────────
+    _rot_map = (
+        ("rotx", "first axis",  "x", "rotation 1"),
+        ("roty", "second axis", "y", "rotation 2"),
+        ("rotz", "third axis",  "z", "rotation 3"),
+    )
+    for short, axis_key, axis_val, rot_key in _rot_map:
+        angle = merged.get(short)
+        if angle is not None:
+            out[axis_key] = axis_val
+            out[rot_key]  = angle
+
+    return out
+
+
+#### prop_dict cleaner ####
+
+def _clean_prop_dict(prop_dict: dict, resolved_geo: dict) -> dict:
+    """
+    Remove from prop_dict any geometry keys that are already covered by
+    resolved_geo, to prevent stale min/max conflicting with resolved span.
+    Non-geometry keys pass through untouched.
+    """
+    # Which lumerical geo keys did we actually resolve?
+    covered = set(resolved_geo.keys())
+    # If we resolved x span, also evict x min/x max (and vice versa)
+    for ax in ("x", "y", "z"):
+        if f"{ax} span" in covered:
+            covered |= {f"{ax} min", f"{ax} max"}
+        if f"{ax} min" in covered or f"{ax} max" in covered:
+            covered |= {f"{ax} span"}
+
+    return {k: v for k, v in prop_dict.items() if k not in covered}
+
+
+#### Main merge entry point ####
+
+def resolve_and_merge(defaults: dict, prop_dict: dict | None,
+                      explicit: dict, geo: dict) -> dict:
+    """
+    Produces the final flat Lumerical property dict.
+
+    Priority: explicit kwargs > prop_dict > defaults
+    Geometry in prop_dict is evicted where explicit/geo kwargs cover the same axis.
+    """
+    prop_dict   = prop_dict or {}
+    resolved    = _resolve_geometry(explicit, geo)
+    clean_props = _clean_prop_dict(prop_dict, resolved)
+
+    return {**defaults, **clean_props, **resolved}
+
+#### Since rotations should not be set on object instancing, it must be removed from the dict and passed elsewhere
+
+def _extract_rotation(props: dict) -> tuple:
+    """
+    Pops rotation keys from props and returns (rx, ry, rz).
+    Also pops reference to first axis / second axis / third axis. 
+    """
+    r1 = props.pop("rotation 1", 0)
+    r2 = props.pop("rotation 2", 0)
+    r3 = props.pop("rotation 3", 0)
+    for k in ("first axis", "second axis", "third axis"):
+        props.pop(k, None)
+    return (r1, r2, r3)
 
 class HelpersMixin:
     
@@ -339,8 +484,8 @@ class HelpersMixin:
         
     def set_loc_rot(self,xyz,r):
         self.sim.set("x",xyz[0])
-        self.sim.set("x",xyz[0])
-        self.sim.set("x",xyz[0])
+        self.sim.set("y",xyz[1])
+        self.sim.set("z",xyz[2])
     
     #%% OBB HELPERS
     def get_monitor_bounds(self, dim="3d", normal="z", 

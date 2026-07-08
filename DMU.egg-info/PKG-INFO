@@ -13,11 +13,11 @@ Classifier: Development Status :: 2 - Pre-Alpha
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: xlrd
-Requires-Dist: numpy
 Requires-Dist: matplotlib
-Requires-Dist: scipy
-Requires-Dist: mat73
 Requires-Dist: h5py
+Requires-Dist: numpy
+Requires-Dist: mat73
+Requires-Dist: scipy
 Requires-Dist: natsort
 Requires-Dist: docutils>=0.3
 Provides-Extra: alldeps

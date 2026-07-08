@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+
+# lumutils/geometry/OBB.py
 """
 Created on Tue May 12 11:53:59 2026
 
@@ -52,11 +53,6 @@ class OBB:
         center = (mn + mx) / 2
         spans  = mx - mn  
         return cls(center, spans)
-
-    @classmethod
-    def from_vertices(cls, vertices):
-        """Same as from_points — alias for the 8-vertex cube format you had."""
-        return cls.from_points(vertices)
 
     # ------------------------------------------------------------------
     # Transformations (all return self for chaining)
@@ -133,7 +129,7 @@ class OBB:
 
     def contains_point(self, point):
         p = np.asarray(point, dtype=float) - self.center
-        local = self.axes @ p
+        local = self.axes.T @ p  # project onto local axes (columns)
         return bool(np.all(np.abs(local) <= self.spans / 2))
 
     def intersects(self, other):

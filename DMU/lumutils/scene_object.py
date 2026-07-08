@@ -7,7 +7,9 @@ class SceneObject:
     Wrapper around a geometry object (Nanowire, RoundedCuboid, etc.)
     Holds world-space position and orientation, and owns the world-space OBB.
     """
-    def __init__(self, geo, x=0, y=0, z=0, rx=0, ry=0, rz=0, pathdict=None, kind="geometry", axis_offset=(0,0,0)):
+    def __init__(self, geo, x=0, y=0, z=0, rotx=0, roty=0, rotz=0, 
+                 pathdict=None, kind="geometry", axis_offset=(0,0,0),
+                 exclude_from_bounds=False, max_bounds=None):
         self.geo    = geo
         if not pathdict:
             self.name, self.group, self.fullpath = ["Group",None,"Group"]
@@ -17,7 +19,7 @@ class SceneObject:
 
         self.kind   = kind   # ["geometry"|"analysis"]
         self.pos    = np.array([x, y, z], dtype=float)
-        self.rot    = np.array([rx, ry, rz], dtype=float)  # degrees, Euler XYZ
+        self.rot    = np.array([rotx, roty, rotz], dtype=float)  # degrees, Euler XYZ
         self.axis_offset = np.array(axis_offset, dtype=float)
         self.obb  = self._compute_obb()
         
@@ -26,7 +28,7 @@ class SceneObject:
         if not hasattr(self, "sim"):
             raise RuntimeError(f"SceneObject '{self.name}' has no sim reference — was it registered with a Scene?")
     
-        selected = self.sim.getAllSelectedObjects()()
+        selected = self.sim.getAllSelectedObjects()
         if len(selected) == 1 and selected[0]["name"] == self.name: ####WARNING!!! CHECK IF THIS OUTPUT IS FULLPATH, OR JUST THE NAME OF THE STRUCT - 
             return True
         
@@ -34,6 +36,8 @@ class SceneObject:
         self.sim.select(self.fullpath)
         return False
     def _compute_obb(self):
+        if self.geo is None:
+            return OBB(center=self.pos, spans=[0, 0, 0])  # placeholder until geo wrappers exist
         obb = self.geo.get_obb()                    # local space, centred at origin
         obb.translate(self.axis_offset)             # shift pivot in local space
         obb.translate(self.pos)                     # apply world position
@@ -41,31 +45,31 @@ class SceneObject:
             obb.rotate_euler(*self.rot)
         return obb
 
-    def move_to(self, x=None, y=None, z=None):
-        """Update world position and recompute OBB. Position is in x,y,z coordinates"""
-        if x is not None: self.pos[0] = x
-        if y is not None: self.pos[1] = y
-        if z is not None: self.pos[2] = z
+    def translate(self, x=None, y=None, z=None, dx=None, dy=None, dz=None):
+        """
+        Translates the object and updates bounds. 
+        Absolute (x/y/z) sets position, relative (dx/dy/dz) shifts it from the current position.
+        If both are provided for a single axis, the absolute is applied first, then the relative.
+        e.g. translate(x=6, dx=0.5) → pos = 6.5. 
+        You only need to provide the dimension you intend to move.
+        """
+        for i, (abs_val, rel_val) in enumerate(zip((x, y, z), (dx, dy, dz))):
+            if abs_val is not None:
+                self.pos[i] = abs_val
+            if rel_val is not None:
+                self.pos[i] += rel_val
         self.obb = self._compute_obb()
         return self
     
-    def move_by(self, dx=None, dy=None, dz=None):
-        """Update world position and recompute OBB. Position is in x,y,z coordinates"""
-        if dx is not None: self.pos[0] += dx
-        if dy is not None: self.pos[1] += dy
-        if dz is not None: self.pos[2] += dz
-        self.obb = self._compute_obb()
-        return self
-    
-    def rotate(self, rx=0, ry=0, rz=0):
+    def rotate(self, rotx=0, roty=0, rotz=0):
         """Cumulative rotation in degrees."""
-        self.rot += np.array([rx, ry, rz])
+        self.rot += np.array([rotx, roty, rotz])
         self.obb = self._compute_obb()
         return self
 
-    def set_rotation(self, rx=0, ry=0, rz=0):
+    def set_rotation(self, rotx=0, roty=0, rotz=0):
         """Absolute rotation in degrees."""
-        self.rot = np.array([rx, ry, rz])
+        self.rot = np.array([rotx, roty, rotz])
         self.obb = self._compute_obb()
         return self
     
