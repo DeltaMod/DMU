@@ -1,6 +1,11 @@
 
 from matplotlib import pyplot as plt
-## for Palatino and other serif fonts use:
+
+#%% Checking platform to avoid font family issues. IMPORTANT!!! You must install liberation sans if on linux
+import platform
+fontfamily = "Arial" if platform.system() == "Windows" else "Liberation Sans"
+
+#%% for Palatino and other serif fonts use:
 def DEF_BBOX(style="default",bboxstyle="default"):
     
     stylelist = ["default","WideNarrow","TwoWide","PP1_Wide","PP2_4by3","PP3_4by4","PP4_WideTall"]  
@@ -123,7 +128,7 @@ def graph_style(*var):
                     'axes.formatter.use_mathtext':True,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
-                    'font.family': 'Arial',
+                    'font.family': fontfamily,
                     'font.size': bigfont,
                     'xtick.minor.visible':True,
                     'ytick.minor.visible':True,
@@ -172,7 +177,7 @@ def graph_style(*var):
                     'axes.formatter.use_mathtext':True,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
-                    'font.family': 'Arial',
+                    'font.family': fontfamily,
             		'font.size': bigfont,
                     'figure.dpi':200,   
             		'figure.figsize':[4*4,3*4],
@@ -218,7 +223,7 @@ def graph_style(*var):
                         'axes.formatter.use_mathtext':True,
                         'text.usetex': False,
                         #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
-                        'font.family': 'Arial',
+                        'font.family': fontfamily,
                 		'font.size': bigfont,
                         'figure.dpi':200,   
                 		'figure.figsize':[4*4,4*4],
@@ -264,7 +269,7 @@ def graph_style(*var):
                     'axes.formatter.use_mathtext':True,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
-                    'font.family': 'Arial',
+                    'font.family': fontfamily,
                     'font.size': bigfont,
                     'xtick.minor.visible':True,
                     'ytick.minor.visible':True,
@@ -305,4 +310,64 @@ def graph_style(*var):
                     'figure.autolayout':False,
                     'figure.constrained_layout.use':False
                     })
+        
+    elif style == "STD_4By3":
+        titlefont = 15
+        bigfont = 14
+        mediumfont = 12
+        
+        plt.rcParams.update({
+                    'axes.formatter.use_mathtext': True,
+                    'text.usetex': False,
+                    'font.family': fontfamily,
+                    
+                    # 1. Physical Dimensions (Clean 4:3 Aspect Ratio)
+                    'figure.figsize': [6, 4.5],      # 6 inches wide, 4.5 inches tall
+                    'figure.dpi': 300,               # High density (Yields exactly 1800 x 1350 pixels)
+                    
+                    # 2. Clean Font Sizes
+                    'font.size': bigfont,                 
+                    'xtick.labelsize': mediumfont,
+                    'ytick.labelsize': mediumfont,           
+                    'legend.fontsize': mediumfont,           
+                    'legend.title_fontsize': bigfont,     
+                    'figure.titlesize': titlefont,
+                    
+                    # 3. Standard Linewidths and Markers
+                    'lines.linewidth': 1.5,
+                    'lines.markeredgewidth': 1.5,
+                    'lines.markersize': 5,
+                    'axes.linewidth': 1.0,           # Standard edge thickness
+                    
+                    # 4. Clean Tick Dimensions and Padding
+                    'xtick.major.size': 4,           # Clean standard major tick length
+                    'xtick.minor.size': 2.5,         # Clean standard minor tick length
+                    'xtick.major.width': 1.2,        # Clean standard major tick width
+                    'xtick.minor.width': 0.8,        # Clean standard minor tick width
+                    'xtick.major.pad': 4,            # Clean standard pad spacing
+                    'xtick.minor.pad': 4,
+                    'xtick.minor.visible': True,
+                    
+                    'ytick.major.size': 4,
+                    'ytick.minor.size': 2.5,
+                    'ytick.major.width': 1.2,
+                    'ytick.minor.width': 0.8,
+                    'ytick.major.pad': 4,
+                    'ytick.minor.pad': 4,
+                    'ytick.minor.visible': True,
+                    
+                    # 5. Legend Structural Padding (Kept intact)
+                    'legend.borderpad': 0.4,
+                    'legend.labelspacing': 0.4,
+                    'legend.handlelength': 1.25,
+                    'legend.handleheight': 0.7,
+                    'legend.handletextpad': 0.5,
+                    'legend.borderaxespad': 0.5,
+                    'legend.columnspacing': 1.0, 
+                    
+                    'axes.grid': False,
+                    'axes.axisbelow': True,
+                    'figure.autolayout': False,
+                    'figure.constrained_layout.use': False
+                })
         

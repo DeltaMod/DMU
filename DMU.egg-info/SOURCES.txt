@@ -7,6 +7,7 @@ DMU/graph_styles.py
 DMU/lumutils_helpers.py
 DMU/lumutils_monolith.py
 DMU/plot_utils.py
+DMU/sem_stitcher_UI.py
 DMU/sem_tools.py
 DMU/utils.py
 DMU/utils_utils.py
@@ -17,6 +18,7 @@ DMU.egg-info/requires.txt
 DMU.egg-info/top_level.txt
 DMU/lumutils/SCENE.py
 DMU/lumutils/__init__.py
+DMU/lumutils/defaults.py
 DMU/lumutils/helpers.py
 DMU/lumutils/scene_object.py
 DMU/lumutils/analysis/FDTD.py

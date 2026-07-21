@@ -1,5 +1,5 @@
-xlrd
 matplotlib
+xlrd
 h5py
 numpy
 mat73

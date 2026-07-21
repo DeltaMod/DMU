@@ -12,8 +12,8 @@ Classifier: Operating System :: OS Independent
 Classifier: Development Status :: 2 - Pre-Alpha
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: xlrd
 Requires-Dist: matplotlib
+Requires-Dist: xlrd
 Requires-Dist: h5py
 Requires-Dist: numpy
 Requires-Dist: mat73
