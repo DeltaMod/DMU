@@ -65,6 +65,7 @@ import numpy as np
 os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtCore import Qt
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyBboxPatch
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -182,17 +183,70 @@ def save_folder_list(folders):
 
 HEADER_BG = QtGui.QColor("#c8c8c8")
 
+class EditableParamRow(QtWidgets.QWidget):
+    def __init__(self, label, default_value, param_name, parent=None):
+        super().__init__(parent)
+        self.param_name = param_name
+        self.default_value = default_value
+        self.parent_window = parent
+        
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        
+        # Label
+        self.label = QtWidgets.QLabel(label)
+        self.label.setFixedWidth(80)
+        layout.addWidget(self.label)
+        
+        # Editable field
+        self.line_edit = QtWidgets.QLineEdit()
+        self.line_edit.setText(str(default_value))
+        self.line_edit.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self.line_edit)
+        
+        # Reset button
+        self.reset_btn = QtWidgets.QPushButton("⟳")
+        self.reset_btn.setFixedWidth(30)
+        self.reset_btn.setToolTip("Reset to default")
+        self.reset_btn.clicked.connect(self._reset_to_default)
+        layout.addWidget(self.reset_btn)
+    
+    def _on_text_changed(self, text):
+        try:
+            # Try to parse as float
+            value = float(text)
+            # Update the parent's attribute
+            setattr(self.parent_window, self.param_name, value)
+            # Trigger a refresh if needed
+            if hasattr(self.parent_window, '_on_param_changed'):
+                self.parent_window._on_param_changed()
+        except ValueError:
+            # Invalid input - you might want to highlight the field
+            pass
+    
+    def _reset_to_default(self):
+        self.line_edit.setText(str(self.default_value))
+        # Ensure the value is updated
+        setattr(self.parent_window, self.param_name, float(self.default_value))
+        if hasattr(self.parent_window, '_on_param_changed'):
+            self.parent_window._on_param_changed()
+    
+    def get_value(self):
+        try:
+            return float(self.line_edit.text())
+        except ValueError:
+            return self.default_value
 
 class MainWindow(QtWidgets.QMainWindow):
-
+    #Defaults:
     BASE_FIGSIZE = (7.0, 6.0)
     COMMENT_WIDTH_FACTOR = 1.3
-    FIGURE_DPI = 100
+    FIGURE_DPI = 200
 
     SAVE_WIDTH_IN = 10.0
     SAVE_HEIGHT_IN = 6.0
     SAVE_DPI = 300
-
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PalmSens Data Browser")
@@ -207,9 +261,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_filename: Optional[str] = None
         
         #plotting parameters:
-        self.current_fig_xwidth = 
-        self.current_fig_ywidth = 
-        self.current_fig_dpi    = 200
+        
+        self.EDIT_FIGSIZE_X = 10.0
+        self.EDIT_FIGSIZE_Y = 6.0 
+        self.EDIT_COMMENT_WIDTH_FACTOR = 1.3
+        self.EDIT_FIGURE_DPI = 200
+        self.EDIT_TOGGLE_STRETCH = False
+        
         self.current_state: CurveState = CurveState()
         self.raw_xy_list = []       # [(x, y), ...] one per curve in the current measurement, cached on plot
         self.span_selector = None
@@ -219,7 +277,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._restore_folders()
-
+        # Load saved parameters
+        self._load_session_parameters()
     # -- UI construction ----------------------------------------------------
 
     def _build_ui(self):
@@ -275,12 +334,72 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_right_column(self):
         col = QtWidgets.QVBoxLayout()
-
+        
+        # FIGURE DISPLAY PARAMETERS
+        fig_display_label = QtWidgets.QLabel("Figure Display Parameters")
+        fig_display_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        col.addWidget(fig_display_label)
+        
+        self.ui_toggle_stretchplot = QtWidgets.QPushButton("Fill Axes")
+        self.ui_toggle_stretchplot.setCheckable(True)
+        self.ui_toggle_stretchplot.toggled.connect(self._toggle_stretchplot)
+        col.addWidget(self.ui_toggle_stretchplot)
+        
+        # Editable parameters
+        self.figsize_row = EditableParamRow(
+            "Fig size:", self.BASE_FIGSIZE[0], "EDIT_FIGSIZE", self
+        )
+        col.addWidget(self.figsize_row)
+        
+        # Add width factor row
+        self.width_factor_row = EditableParamRow(
+            "Width factor:", self.COMMENT_WIDTH_FACTOR, "EDIT_COMMENT_WIDTH_FACTOR", self
+        )
+        col.addWidget(self.width_factor_row)
+        
+        # Add DPI row
+        self.dpi_row = EditableParamRow(
+            "Figure DPI:", self.FIGURE_DPI, "EDIT_FIGURE_DPI", self
+        )
+        col.addWidget(self.dpi_row)
+        
+        # Separator
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        col.addWidget(line)
+        
+        # Save parameters label
+        save_label = QtWidgets.QLabel("Save Parameters")
+        save_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        col.addWidget(save_label)
+        
+        # Save parameters
+        self.save_width_row = EditableParamRow(
+            "Save W:", self.SAVE_WIDTH_IN, "EDIT_FIGSIZE_X", self
+        )
+        col.addWidget(self.save_width_row)
+        
+        self.save_height_row = EditableParamRow(
+            "Save H:", self.SAVE_HEIGHT_IN, "EDIT_FIGSIZE_Y", self
+        )
+        col.addWidget(self.save_height_row)
+        
+        self.save_dpi_row = EditableParamRow(
+            "Save DPI:", self.EDIT_FIGURE_DPI, "EDIT_FIGURE_DPI", self
+        )
+        col.addWidget(self.save_dpi_row)
+        
+        # Separator
+        line2 = QtWidgets.QFrame()
+        line2.setFrameShape(QtWidgets.QFrame.HLine)
+        col.addWidget(line2)
+        
+        # Original UI elements
         col.addWidget(QtWidgets.QLabel("Background ranges"))
         self.range_list = QtWidgets.QListWidget()
         self.range_list.currentRowChanged.connect(self._on_range_row_changed)
         col.addWidget(self.range_list)
-
+        
         range_btn_row = QtWidgets.QHBoxLayout()
         self.add_range_btn = QtWidgets.QPushButton("+")
         self.add_range_btn.setCheckable(True)
@@ -290,25 +409,25 @@ class MainWindow(QtWidgets.QMainWindow):
         range_btn_row.addWidget(self.add_range_btn)
         range_btn_row.addWidget(remove_range_btn)
         col.addLayout(range_btn_row)
-
+        
         self.fit_bg_btn = QtWidgets.QPushButton("Fit from selection")
         self.fit_bg_btn.clicked.connect(self._fit_background)
         col.addWidget(self.fit_bg_btn)
-
+        
         self.remove_bg_toggle = QtWidgets.QPushButton("Remove background")
         self.remove_bg_toggle.setCheckable(True)
         self.remove_bg_toggle.toggled.connect(self._toggle_remove_background)
         col.addWidget(self.remove_bg_toggle)
-
+        
         self.comment_toggle = QtWidgets.QPushButton("Plot with comment")
         self.comment_toggle.setCheckable(True)
         self.comment_toggle.toggled.connect(self._toggle_comment)
         col.addWidget(self.comment_toggle)
-
+        
         save_btn = QtWidgets.QPushButton("Save figure")
         save_btn.clicked.connect(self._save_figure)
         col.addWidget(save_btn)
-
+        
         col.addStretch(1)
         return col
 
@@ -428,6 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if comment:
             w = w * self.COMMENT_WIDTH_FACTOR
         self.fig.set_size_inches(w, h)
+        self.fig.set_dpi(self.FIGURE_DPI)
 
     def _refresh_plot(self):
         # Drop any stale SpanSelector before tearing down its axes - leaving
@@ -634,11 +754,77 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_state.remove_background = checked
         self._save_state()
         self._refresh_plot()
-
+    
+    def _toggle_stretchplot(self, checked):
+        self.EDIT_TOGGLE_STRETCH = checked
+        self._refresh_plot()
+        
     def _toggle_comment(self, checked):
         self.show_comment = checked
         self._refresh_plot()
+    
+    # -- Selecting, editing and restoring text entry fields ---
+    
+    def _on_param_changed(self):
+        """Called when any parameter is changed - updates the plot if needed"""
+        # Update the figure size and DPI
+        self.BASE_FIGSIZE = self.figsize_row.get_value(), self.figsize_row.get_value()
+        self.COMMENT_WIDTH_FACTOR = self.width_factor_row.get_value()
+        self.FIGURE_DPI = self.dpi_row.get_value()
+        
+        # Update save parameters
+        self.SAVE_WIDTH_IN = self.save_width_row.get_value()
+        self.SAVE_HEIGHT_IN = self.save_height_row.get_value()
+        self.EDIT_FIGURE_DPI = self.save_dpi_row.get_value()
+        
+        # Refresh the plot with new parameters
+        self._refresh_plot()
+        
+        # Save the parameters to the session
+        self._save_session_parameters()
+    def _load_session_parameters(self):
+        """Load saved parameter values from the session config"""
+        PARAMS_CONFIG_PATH = Path.home() / ".config" / "palmsens_gui" / "params.json"
+        if PARAMS_CONFIG_PATH.exists():
+            try:
+                with open(PARAMS_CONFIG_PATH) as f:
+                    params = json.load(f)
+                
+                # Update the parameters
+                if 'EDIT_COMMENT_WIDTH_FACTOR' in params:
+                    self.COMMENT_WIDTH_FACTOR = params['EDIT_COMMENT_WIDTH_FACTOR']
+                if 'EDIT_FIGURE_DPI' in params:
+                    self.FIGURE_DPI = params['EDIT_FIGURE_DPI']
+                if 'EDIT_FIGSIZE_X' in params:
+                    self.SAVE_WIDTH_IN = params['EDIT_FIGSIZE_X']
+                if 'EDIT_FIGSIZE_Y' in params:
+                    self.SAVE_HEIGHT_IN = params['EDIT_FIGSIZE_Y']
 
+                    
+                # Update the line edits if they exist
+                if hasattr(self, 'figsize_row'):
+                    self.figsize_row.line_edit.setText(str(self.BASE_FIGSIZE[0]))
+                    self.width_factor_row.line_edit.setText(str(self.COMMENT_WIDTH_FACTOR))
+                    self.dpi_row.line_edit.setText(str(self.FIGURE_DPI))
+                    self.save_width_row.line_edit.setText(str(self.SAVE_WIDTH_IN))
+                    self.save_height_row.line_edit.setText(str(self.SAVE_HEIGHT_IN))
+                    self.save_dpi_row.line_edit.setText(str(self.EDIT_FIGURE_DPI))
+            except Exception as e:
+                print(f"Error loading parameters: {e}")
+    def _save_session_parameters(self):
+        """Save the current parameter values to the session config"""
+        params = {
+            'EDIT_COMMENT_WIDTH_FACTOR': self.COMMENT_WIDTH_FACTOR,
+            'EDIT_FIGSIZE_X': self.EDIT_FIGSIZE_X,
+            'EDIT_FIGSIZE_Y': self.EDIT_FIGSIZE_Y,
+            'EDIT_FIGURE_DPI': self.EDIT_FIGURE_DPI
+        }
+        
+        # Save to a separate config file
+        PARAMS_CONFIG_PATH = Path.home() / ".config" / "palmsens_gui" / "params.json"
+        PARAMS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(PARAMS_CONFIG_PATH, "w") as f:
+            json.dump(params, f, indent=2)
     # -- Export -----------------------------------------------------------
 
     def _save_figure(self):
@@ -653,8 +839,8 @@ class MainWindow(QtWidgets.QMainWindow):
         on_screen_dpi = self.fig.get_dpi()
 
         self.fig.set_size_inches(self.SAVE_WIDTH_IN, self.SAVE_HEIGHT_IN)
-        self.fig.set_dpi(self.SAVE_DPI)
-        self.fig.savefig(path, dpi=self.SAVE_DPI)
+        self.fig.set_dpi(self.EDIT_FIGURE_DPI)
+        self.fig.savefig(path, dpi=self.EDIT_FIGURE_DPI)
 
         self.fig.set_size_inches(on_screen_size)
         self.fig.set_dpi(on_screen_dpi)
