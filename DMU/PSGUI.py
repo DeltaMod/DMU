@@ -53,6 +53,7 @@ import numpy as np
 os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtGui import QPixmap, QPainter
 from PyQt5.QtCore import Qt
 import matplotlib as mpl
 from matplotlib.figure import Figure
@@ -167,6 +168,37 @@ def save_folder_list(folders):
 
 
 # ---------------------------------------------------------------------------
+# rcParams override file: a dedicated, explicit "startup defaults" layer.
+# Separate from session.json (which just remembers raw EDIT_* field values) -
+# this file is only ever written by the "Save" button on the Display tab,
+# only ever re-applied to the running session by "Load", and only ever
+# cleared by "Reset". It is loaded automatically once at startup so that
+# whatever was last explicitly saved here becomes the new baseline on top of
+# get_rcparam_defaults().
+# ---------------------------------------------------------------------------
+
+RCPARAMS_OVERRIDE_PATH = Path.home() / ".config" / "palmsens_gui" / "rcparams_override.json"
+
+
+def load_rcparams_override():
+    if RCPARAMS_OVERRIDE_PATH.exists():
+        with open(RCPARAMS_OVERRIDE_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_rcparams_override(overrides: dict):
+    RCPARAMS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(RCPARAMS_OVERRIDE_PATH, "w") as f:
+        json.dump(overrides, f, indent=2, default=str)
+
+
+def delete_rcparams_override():
+    if RCPARAMS_OVERRIDE_PATH.exists():
+        RCPARAMS_OVERRIDE_PATH.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -178,6 +210,7 @@ class EditableParamRow(QtWidgets.QWidget):
         self.param_name = param_name
         self._default_value = default_value
         self.parent_window = parent
+        self._is_updating = False  # Flag to prevent recursive updates
         
         # Create layout FIRST
         layout = QtWidgets.QHBoxLayout(self)
@@ -192,6 +225,12 @@ class EditableParamRow(QtWidgets.QWidget):
         self.line_edit = QtWidgets.QLineEdit()
         self.line_edit.setText(str(default_value))
         self.line_edit.textChanged.connect(self._on_text_changed)
+        
+        # Add validator to only allow numbers (optional but helpful)
+        validator = QtGui.QDoubleValidator()
+        validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
+        self.line_edit.setValidator(validator)
+        
         layout.addWidget(self.line_edit)
         
         # Reset button
@@ -202,12 +241,28 @@ class EditableParamRow(QtWidgets.QWidget):
         layout.addWidget(self.reset_btn)
     
     def _on_text_changed(self, text):
+        """Only update if the text is valid and not empty"""
+        if self._is_updating:
+            return
+        
+        # Skip empty strings
+        if not text or text.strip() == "":
+            return
+        
         try:
+            # Try to convert to float
             value = float(text)
+            
+            # Check for special cases like NaN, Inf
+            if not np.isfinite(value):
+                return
+            
+            # Update the parent
             setattr(self.parent_window, self.param_name, value)
             if hasattr(self.parent_window, '_on_param_changed'):
                 self.parent_window._on_param_changed()
         except ValueError:
+            # Invalid input - do nothing
             pass
     
     def _reset_to_default(self):
@@ -236,6 +291,32 @@ class EditableParamRow(QtWidgets.QWidget):
             setattr(self.parent_window, self.param_name, float(self._default_value))
             if hasattr(self.parent_window, '_on_param_changed'):
                 self.parent_window._on_param_changed()
+# Add this at the top with other constants
+class BgRemovalMode:
+    LINEAR = 0           # Linear fit across selected ranges
+    POLY = 1             # Polynomial fit (user-selectable degree)
+    SPLINE = 2           # Spline interpolation through selected points
+    REGION_DELETE = 3    # Delete data in selected regions entirely
+    CONNECT_END = 4      # Connect end of one range to start of next with straight line
+    SMOOTH = 5           # Smooth interpolation through selected points
+
+@dataclass
+class CurveState:
+    """Per-measurement, saved to disk."""
+    bg_ranges: list = field(default_factory=list)       # [[xmin, xmax], ...]
+    fit_coeffs: Optional[list] = None                    # one np.polyfit()-style list per curve, or None per curve
+    remove_background: bool = False
+    bg_removal_mode: int = 0  # Default to LINEAR
+    poly_degree: int = 2      # For POLY mode
+    spline_smoothing: float = 0.0  # For SPLINE mode
+    
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d):
+        known = {f.name for f in dataclass_fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
         
 class MultiParamRow(QtWidgets.QWidget):
     def __init__(self, headers, row_labels, param_names, parent=None):
@@ -244,6 +325,7 @@ class MultiParamRow(QtWidgets.QWidget):
         self.param_names = param_names
         self.row_labels = row_labels
         self.headers = headers
+        self._is_updating = False  # Add this flag
         
         # Don't call _load_defaults_from_parent here - do it later
         self.default_values = {}
@@ -284,6 +366,12 @@ class MultiParamRow(QtWidgets.QWidget):
                 if parent and hasattr(parent, param_name):
                     line_edit.setText(str(getattr(parent, param_name)))
                 line_edit.textChanged.connect(self._on_text_changed)
+                
+                # Add validator
+                validator = QtGui.QDoubleValidator()
+                validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
+                line_edit.setValidator(validator)
+                
                 layout.addWidget(line_edit, row_idx + 1, col_idx * 2 + 1)
                 self.line_edits[param_name] = line_edit
                 
@@ -308,35 +396,73 @@ class MultiParamRow(QtWidgets.QWidget):
                     self.default_values[param_name] = getattr(self.parent_window, default_name)
     
     def _on_text_changed(self):
-        """Called when any text changes"""
+        """Called when any text changes - only update if all values are valid"""
+        if self._is_updating:
+            return
+        
+        # Check that ALL entries are valid before updating
+        all_valid = True
         for param_name, line_edit in self.line_edits.items():
+            text = line_edit.text()
+            if not text or text.strip() == "":
+                all_valid = False
+                break
             try:
+                value = float(text)
+                if not np.isfinite(value):
+                    all_valid = False
+                    break
+            except ValueError:
+                all_valid = False
+                break
+        
+        if not all_valid:
+            return
+        
+        # All entries are valid, update them
+        try:
+            for param_name, line_edit in self.line_edits.items():
                 value = float(line_edit.text())
                 setattr(self.parent_window, param_name, value)
-            except ValueError:
-                pass
-        # Trigger refresh once after updating all
-        if hasattr(self.parent_window, '_on_param_changed'):
-            self.parent_window._on_param_changed()
+            
+            # Trigger refresh once after updating all
+            if hasattr(self.parent_window, '_on_param_changed'):
+                self.parent_window._on_param_changed()
+        except ValueError:
+            pass
     
     def _reset_to_default(self, param_name):
         """Reset a specific entry to its default value"""
-        if param_name in self.default_values:
-            default_value = self.default_values[param_name]
-            self.line_edits[param_name].setText(str(default_value))
-            setattr(self.parent_window, param_name, float(default_value))
-            if hasattr(self.parent_window, '_on_param_changed'):
-                self.parent_window._on_param_changed()
+        if self._is_updating:
+            return
+        
+        self._is_updating = True
+        try:
+            if param_name in self.default_values:
+                default_value = self.default_values[param_name]
+                self.line_edits[param_name].setText(str(default_value))
+                setattr(self.parent_window, param_name, float(default_value))
+                if hasattr(self.parent_window, '_on_param_changed'):
+                    self.parent_window._on_param_changed()
+        finally:
+            self._is_updating = False
     
     def reload_defaults(self):
         """Reload defaults and reset all entries to their defaults"""
-        self._load_defaults_from_parent()
-        for param_name, default_value in self.default_values.items():
-            if param_name in self.line_edits:
-                self.line_edits[param_name].setText(str(default_value))
-                setattr(self.parent_window, param_name, float(default_value))
-        if hasattr(self.parent_window, '_on_param_changed'):
-            self.parent_window._on_param_changed()
+        if self._is_updating:
+            return
+        
+        self._is_updating = True
+        try:
+            self._load_defaults_from_parent()
+            for param_name, default_value in self.default_values.items():
+                if param_name in self.line_edits:
+                    self.line_edits[param_name].setText(str(default_value))
+                    setattr(self.parent_window, param_name, float(default_value))
+            if hasattr(self.parent_window, '_on_param_changed'):
+                self.parent_window._on_param_changed()
+        finally:
+            self._is_updating = False
     
     def get_values(self):
         """Return dictionary of current values"""
@@ -350,9 +476,16 @@ class MultiParamRow(QtWidgets.QWidget):
     
     def set_values(self, values_dict):
         """Set values from dictionary"""
-        for param_name, value in values_dict.items():
-            if param_name in self.line_edits:
-                self.line_edits[param_name].setText(str(value))
+        if self._is_updating:
+            return
+        
+        self._is_updating = True
+        try:
+            for param_name, value in values_dict.items():
+                if param_name in self.line_edits:
+                    self.line_edits[param_name].setText(str(value))
+        finally:
+            self._is_updating = False
                 
 class MainWindow(QtWidgets.QMainWindow):
     
@@ -398,8 +531,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.UI_ONLY_DEFAULTS = {
             'EDIT_COMMENT_WIDTH_FACTOR': 1.3,
             'EDIT_COMMENT_HEADER_SIZE': 14.0,
-            'EDIT_COMMENT_BODY_SIZE': 12.0,
+            'EDIT_COMMENT_BODY_SIZE': 8,
             'EDIT_TOGGLE_STRETCH': 0,
+            'EDIT_SHOW_COMMENT': False,  
+             #Window Persistance
+            'EDIT_WINDOW_WIDTH': 1300,
+            'EDIT_WINDOW_HEIGHT': 800,
+            'EDIT_WINDOW_X': 0,
+            'EDIT_WINDOW_Y': 0,
         }
         
         
@@ -411,10 +550,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.selected_range_index: Optional[int] = None  # row currently highlighted in the range list
         
         # Initialize all EDIT_* variables from UI_CONFIG_MAP
-        self._init_edit_variables()
+        self._init_session_variables()
         
-        # User rcParams overrides (loaded from session)
-        self._user_rcparams = {}
+        # User rcParams overrides - loaded from the dedicated override file
+        # (see RCPARAMS_OVERRIDE_PATH), not from session.json. This is the
+        # "startup defaults" layer managed by the Save/Load/Reset buttons.
+        self._user_rcparams = load_rcparams_override()
+        self._sync_edit_vars_from_rcparams(self._user_rcparams)
         self._apply_all_rcparams()
         
         self._build_ui()
@@ -423,6 +565,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_session_parameters()
         # Apply initial figure size after UI is built  # Added
         self._apply_figsize(self.show_comment)  # Added
+        self._update_canvas_size_policy()
         self._refresh_plot()  # Added (or call after everything is loaded)
     
     def get_default_for_edit(self,edit_name):
@@ -446,19 +589,25 @@ class MainWindow(QtWidgets.QMainWindow):
             return value[index]
         return value
     
-    def _init_edit_variables(self):
+    def _init_session_variables(self):
         """Initialize all EDIT_* variables from rcParams or UI_ONLY_DEFAULTS"""
-        # 1. Initialize rcParam-linked variables from UI_RCPCONFIG_MAP
+        # Initialize rcParam-linked variables from UI_RCPCONFIG_MAP
         for edit_name in self.UI_RCPCONFIG_MAP.keys():
             default_value = self.get_default_for_edit(edit_name)
             if default_value is not None:
+                # Set both the EDIT_* and DEFAULT_EDIT_* variables
                 setattr(self, edit_name, default_value)
+                setattr(self, f"DEFAULT_{edit_name}", default_value)
             else:
                 setattr(self, edit_name, 0)
+                setattr(self, f"DEFAULT_{edit_name}", 0)
         
-        # 2. Initialize UI-only variables from UI_ONLY_DEFAULTS
+        # Initialize UI-only variables from UI_ONLY_DEFAULTS
         for edit_name, default_value in self.UI_ONLY_DEFAULTS.items():
             setattr(self, edit_name, default_value)
+            setattr(self, f"DEFAULT_{edit_name}", default_value)
+        
+
                 
     def _apply_all_rcparams(self):
         """Apply rcParams in order: defaults -> UI -> user overrides"""
@@ -555,7 +704,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fig = Figure(figsize=(self.EDIT_FIGSIZE_X, self.EDIT_FIGSIZE_Y), dpi=self.EDIT_FIGURE_DPI)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.display_stack.addWidget(self.canvas)  # Index 0
+
+        # canvas_container centers the canvas when it's given a fixed size
+        # (Scale to Fit mode). A QStackedWidget always forces its *page*
+        # widget to fill the whole stack area, so letterboxing has to be
+        # done one level in, via this wrapper's centered layout - the
+        # canvas itself is the thing we fix the size of, the container just
+        # provides the centering.
+        self.canvas_container = QtWidgets.QWidget()
+        canvas_container_layout = QtWidgets.QVBoxLayout(self.canvas_container)
+        canvas_container_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_container_layout.setAlignment(Qt.AlignCenter)
+        canvas_container_layout.addWidget(self.canvas)
+        self.display_stack.addWidget(self.canvas_container)  # Index 0
         
         # --- Image label (for Real Size mode) ---
         self.image_label = QtWidgets.QLabel()
@@ -585,7 +746,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_advanced_tab()
         col.addStretch(1)
         return col
-    
+
     def _build_fitting_tab(self):
         """Build the Fitting tab with background range controls"""
         tab = QtWidgets.QWidget()
@@ -606,6 +767,44 @@ class MainWindow(QtWidgets.QMainWindow):
         range_btn_row.addWidget(self.add_range_btn)
         range_btn_row.addWidget(remove_range_btn)
         layout.addLayout(range_btn_row)
+        
+        # Background removal mode
+        mode_label = QtWidgets.QLabel("Background Removal Mode:")
+        layout.addWidget(mode_label)
+        
+        self.bg_mode_combo = QtWidgets.QComboBox()
+        self.bg_mode_combo.addItems([
+            "Linear Fit",
+            "Polynomial Fit",
+            "Spline Interpolation",
+            "Delete Regions",
+            "Connect Region Ends"
+        ])
+        self.bg_mode_combo.currentIndexChanged.connect(self._on_bg_mode_changed)
+        layout.addWidget(self.bg_mode_combo)
+        
+        # Polynomial degree (only for POLY mode)
+        poly_layout = QtWidgets.QHBoxLayout()
+        poly_layout.addWidget(QtWidgets.QLabel("Polynomial Degree:"))
+        self.poly_degree_spin = QtWidgets.QSpinBox()
+        self.poly_degree_spin.setRange(1, 10)
+        self.poly_degree_spin.setValue(2)
+        self.poly_degree_spin.valueChanged.connect(self._on_poly_degree_changed)
+        poly_layout.addWidget(self.poly_degree_spin)
+        poly_layout.addStretch()
+        layout.addLayout(poly_layout)
+        
+        # Spline smoothing (only for SPLINE mode)
+        spline_layout = QtWidgets.QHBoxLayout()
+        spline_layout.addWidget(QtWidgets.QLabel("Spline Smoothing:"))
+        self.spline_smoothing_spin = QtWidgets.QDoubleSpinBox()
+        self.spline_smoothing_spin.setRange(0, 1)
+        self.spline_smoothing_spin.setSingleStep(0.01)
+        self.spline_smoothing_spin.setValue(0.0)
+        self.spline_smoothing_spin.valueChanged.connect(self._on_spline_smoothing_changed)
+        spline_layout.addWidget(self.spline_smoothing_spin)
+        spline_layout.addStretch()
+        layout.addLayout(spline_layout)
         
         self.fit_bg_btn = QtWidgets.QPushButton("Fit from selection")
         self.fit_bg_btn.clicked.connect(self._fit_background)
@@ -705,6 +904,40 @@ class MainWindow(QtWidgets.QMainWindow):
         reset_all_btn.clicked.connect(self._reset_all_parameters)
         layout.addWidget(reset_all_btn)
         
+        # Separator
+        line3 = QtWidgets.QFrame()
+        line3.setFrameShape(QtWidgets.QFrame.HLine)
+        layout.addWidget(line3)
+        
+        # rcParam override file handling
+        rcparam_label = QtWidgets.QLabel("RC Param Handling")
+        rcparam_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(rcparam_label)
+        
+        rcparam_hint = QtWidgets.QLabel(
+            "Save: write current settings as the file that loads on every "
+            "launch. Load: re-apply that saved file now. Reset: delete it "
+            "and go back to the defaults hardcoded in the script."
+        )
+        rcparam_hint.setWordWrap(True)
+        rcparam_hint.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(rcparam_hint)
+        
+        rcparam_btn_row = QtWidgets.QHBoxLayout()
+        save_rc_btn = QtWidgets.QPushButton("Save")
+        save_rc_btn.setToolTip("Save current rcParams as the startup override file")
+        save_rc_btn.clicked.connect(self._save_rcparam_overrides)
+        load_rc_btn = QtWidgets.QPushButton("Load")
+        load_rc_btn.setToolTip("Reload the saved override file into this session")
+        load_rc_btn.clicked.connect(self._load_rcparam_overrides)
+        reset_rc_btn = QtWidgets.QPushButton("Reset")
+        reset_rc_btn.setToolTip("Delete the override file and revert to code defaults")
+        reset_rc_btn.clicked.connect(self._reset_rcparam_overrides)
+        rcparam_btn_row.addWidget(save_rc_btn)
+        rcparam_btn_row.addWidget(load_rc_btn)
+        rcparam_btn_row.addWidget(reset_rc_btn)
+        layout.addLayout(rcparam_btn_row)
+        
         layout.addStretch(1)
         self.tab_widget.addTab(tab, "Display")    
     #
@@ -785,23 +1018,43 @@ class MainWindow(QtWidgets.QMainWindow):
         if payload is None:
             return  # header row - not selectable, but guard anyway
         file_path, file_index, meas_index = payload
-
+    
         if self.current_file_path != file_path:
             self.DATA = load_session_file(Path(file_path))
             self.current_file_path = file_path
-
+    
         self.current_file_index = file_index
         self.current_meas_index = meas_index
         self.current_filename = Path(file_path).name
-
+    
         store = StateStore(self.current_folder)
         key = state_key(self.current_filename, meas_index)
         self.current_state = store.load(key)
-
+    
+        # Update UI to reflect loaded state
         self.remove_bg_toggle.blockSignals(True)
         self.remove_bg_toggle.setChecked(self.current_state.remove_background)
         self.remove_bg_toggle.blockSignals(False)
-
+        
+        # Update background removal mode combo box
+        self.bg_mode_combo.blockSignals(True)
+        self.bg_mode_combo.setCurrentIndex(self.current_state.bg_removal_mode)
+        self.bg_mode_combo.blockSignals(False)
+        
+        # Update polynomial degree spin box
+        self.poly_degree_spin.blockSignals(True)
+        self.poly_degree_spin.setValue(self.current_state.poly_degree)
+        self.poly_degree_spin.blockSignals(False)
+        
+        # Update spline smoothing spin box
+        self.spline_smoothing_spin.blockSignals(True)
+        self.spline_smoothing_spin.setValue(self.current_state.spline_smoothing)
+        self.spline_smoothing_spin.blockSignals(False)
+        
+        # Show/hide controls based on mode
+        self.poly_degree_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.POLY)
+        self.spline_smoothing_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.SPLINE)
+    
         self.selected_range_index = None
         self._refresh_range_list()
         self._refresh_plot()
@@ -821,18 +1074,31 @@ class MainWindow(QtWidgets.QMainWindow):
     
     # -- Plotting -------------------------------------------------------------
     def _render_figure_to_pixmap(self):
-        """Render the current figure to a QPixmap at full DPI"""
-        from PyQt5.QtGui import QPixmap, QPainter
+        """Render the current figure to a QPixmap at the specified DPI"""
         
-        # Get the figure size in pixels
-        width = int(self.fig.get_figwidth() * self.fig.get_dpi())
-        height = int(self.fig.get_figheight() * self.fig.get_dpi())
+        # CRITICAL: Ensure figure is properly sized for export
+        fig_w = self.EDIT_FIGSIZE_X
+        fig_h = self.EDIT_FIGSIZE_Y
+        if self.show_comment:
+            fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
         
-        # Create a pixmap at the exact figure size
+        self.fig.set_size_inches(fig_w, fig_h)
+        self.fig.set_dpi(self.EDIT_FIGURE_DPI)
+        
+        # Apply tight_layout for the export
+        if self.show_comment:
+            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
+        else:
+            self.fig.tight_layout(pad=0.8)
+        
+        # Render at full resolution
+        width = int(fig_w * self.EDIT_FIGURE_DPI)
+        height = int(fig_h * self.EDIT_FIGURE_DPI)
+        
+        # Use the canvas's renderer for proper rendering
         pixmap = QPixmap(width, height)
         pixmap.fill(Qt.transparent)
         
-        # Render the figure using the canvas
         painter = QPainter(pixmap)
         self.fig.canvas.render(painter)
         painter.end()
@@ -857,11 +1123,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 spine.set_color('black')
                 
     def _cycle_stretch_mode(self):
-        """Cycle through the 3 stretch modes"""
+        """Cycle through the 3 stretch modes with proper cleanup"""
         self.EDIT_TOGGLE_STRETCH = (self.EDIT_TOGGLE_STRETCH + 1) % 3
         self._update_button_text()
-        self._update_display_mode()
+        
+        # Clear any stale image or canvas artifacts
+        if self.EDIT_TOGGLE_STRETCH == 2:
+            # Switch to Real Size mode - disable selector if active
+            if self.span_selector is not None:
+                self.span_selector.disconnect_events()
+                self.span_selector = None
+                self.add_range_btn.setChecked(False)
+            self.image_label.clear()
+        else:
+            # Switch to Stretch/Scale mode
+            self.image_label.clear()
+            if self.EDIT_TOGGLE_STRETCH == 1:
+                self._apply_scale_to_fit_canvas_size()
+        
+        self._update_canvas_size_policy()
         self._refresh_plot()
+        self._save_session_parameters()  # Save the mode state
     
     def _update_display_mode(self):
         """Switch between canvas and image display"""
@@ -900,7 +1182,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _toggle_comment(self, checked):
         self.show_comment = checked
         self._refresh_plot()
-        
+        #Save comment state to preserve it between sessions
+        self._save_session_parameters()  
+    
+    def closeEvent(self, event):
+        """Save session when closing the window"""
+        self._save_session_parameters()
+        event.accept()    
     def _apply_figsize(self, comment: bool):
         # Skip if in Real Size mode so that the preview for the saved figure can be seen
         if self.EDIT_TOGGLE_STRETCH == 2:
@@ -912,33 +1200,210 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fig.set_size_inches(w, h)
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
     
+    def _apply_scale_to_fit_canvas_size(self):
+        """Resize the canvas widget so it preserves the figure's own aspect ratio"""
+        if not hasattr(self, "display_stack"):
+            return
+        container_size = self.display_stack.size()
+        avail_w = max(container_size.width() - 20, 1)
+        avail_h = max(container_size.height() - 20, 1)
     
+        fig_w = self.EDIT_FIGSIZE_X
+        fig_h = self.EDIT_FIGSIZE_Y
+        if self.show_comment:
+            fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
+        
+        # Get the actual figure size in pixels at current DPI
+        dpi = self.EDIT_FIGURE_DPI
+        actual_w = fig_w * dpi
+        actual_h = fig_h * dpi
+        
+        # Calculate scaling to fit within container
+        scale_w = avail_w / actual_w if actual_w > 0 else 1
+        scale_h = avail_h / actual_h if actual_h > 0 else 1
+        scale = min(scale_w, scale_h, 1.0)  # Don't scale up beyond 1x
+        
+        new_w = int(actual_w * scale)
+        new_h = int(actual_h * scale)
+        
+        self.canvas.setFixedSize(max(new_w, 1), max(new_h, 1))
+    def _on_bg_mode_changed(self, index):
+        """Handle background removal mode change"""
+        self.current_state.bg_removal_mode = index
+        self._save_state()
+        self._refresh_plot()
+        
+        # Show/hide relevant controls
+        self.poly_degree_spin.setVisible(index == BgRemovalMode.POLY)
+        self.spline_smoothing_spin.setVisible(index == BgRemovalMode.SPLINE)
+    
+    def _on_poly_degree_changed(self, value):
+        """Handle polynomial degree change"""
+        self.current_state.poly_degree = value
+        self._save_state()
+        self._refresh_plot()
+    
+    def _on_spline_smoothing_changed(self, value):
+        """Handle spline smoothing change"""
+        self.current_state.spline_smoothing = value
+        self._save_state()
+        self._refresh_plot()
+        
     def _update_canvas_size_policy(self):
         """Update canvas size policy based on current mode"""
-        if self.EDIT_TOGGLE_STRETCH == 2:
-            # Fixed size - canvas will not stretch
-            self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-            # Get the container layout to center the canvas
-            if hasattr(self, 'canvas_container'):
-                layout = self.canvas_container.layout()
-                layout.setAlignment(Qt.AlignCenter)
-        else:
-            # Expanding - canvas fills the container
+        if self.EDIT_TOGGLE_STRETCH == 0:
+            # Stretch to Fit - canvas fills the available area, no letterboxing
+            self.canvas.setMinimumSize(0, 0)
+            self.canvas.setMaximumSize(16777215, 16777215)  # Qt's QWIDGETSIZE_MAX
             self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-            if hasattr(self, 'canvas_container'):
-                layout = self.canvas_container.layout()
-                layout.setAlignment(Qt.AlignCenter)  # Still centered but expands
+        elif self.EDIT_TOGGLE_STRETCH == 1:
+            # Scale to Fit - fixed size, aspect-locked, centered by canvas_container
+            self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+            self._apply_scale_to_fit_canvas_size()
+        # mode 2 (Real Size) doesn't use the live canvas at all - the
+        # rasterized preview goes through image_label instead.
         
         # Force layout update
         self.canvas.updateGeometry()
-        if hasattr(self, 'canvas_container'):
-            self.canvas_container.updateGeometry()
+    
+    def _save_window_state(self):
+        """Save window position and size"""
+        geometry = self.geometry()
+        self.EDIT_WINDOW_X = geometry.x()
+        self.EDIT_WINDOW_Y = geometry.y()
+        self.EDIT_WINDOW_WIDTH = geometry.width()
+        self.EDIT_WINDOW_HEIGHT = geometry.height()
+        
+    def _restore_window_state(self):
+        """Restore window position and size from saved values"""
+        if hasattr(self, 'EDIT_WINDOW_X') and hasattr(self, 'EDIT_WINDOW_Y'):
+            self.move(self.EDIT_WINDOW_X, self.EDIT_WINDOW_Y)
+        if hasattr(self, 'EDIT_WINDOW_WIDTH') and hasattr(self, 'EDIT_WINDOW_HEIGHT'):
+            self.resize(self.EDIT_WINDOW_WIDTH, self.EDIT_WINDOW_HEIGHT)
+            
     def resizeEvent(self, event):
-        """Handle window resize - update image scaling if in Real Size mode"""
+        """Handle window resize with proper mode handling"""
         super().resizeEvent(event)
-        if self.EDIT_TOGGLE_STRETCH == 2 and hasattr(self, 'image_label'):
-            # Re-render the image at new size
+        
+        if self.EDIT_TOGGLE_STRETCH == 1:
+            # Scale to Fit: update letterboxed canvas size
+            self._apply_scale_to_fit_canvas_size()
+            self.canvas.draw()
+        elif self.EDIT_TOGGLE_STRETCH == 2:
+            # Real Size: re-render the image at new size
             self._refresh_plot()
+    def _remove_background_from_curve(self, x, y):
+        """Apply background removal based on current mode"""
+        if not self.current_state.bg_ranges:
+            return y
+        
+        ranges = self.current_state.bg_ranges
+        mode = self.current_state.bg_removal_mode
+        
+        # Create a mask for points inside background ranges
+        in_range_mask = np.zeros_like(x, dtype=bool)
+        for xmin, xmax in ranges:
+            in_range_mask |= (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+        
+        if mode == BgRemovalMode.REGION_DELETE:
+            # Simply delete data in ranges - return NaN for those points
+            y_cleaned = y.copy()
+            y_cleaned[in_range_mask] = np.nan
+            return y_cleaned
+        
+        elif mode == BgRemovalMode.CONNECT_END:
+            # Connect end of one range to start of next with straight line
+            y_cleaned = y.copy()
+            
+            # Get points just outside each range
+            for i, (xmin, xmax) in enumerate(ranges):
+                # Find indices just outside the range
+                idx_before = np.where(x < xmin)[0]
+                idx_after = np.where(x > xmax)[0]
+                
+                if len(idx_before) > 0 and len(idx_after) > 0:
+                    # Get points just outside
+                    x_before = x[idx_before[-1]]
+                    y_before = y[idx_before[-1]]
+                    x_after = x[idx_after[0]]
+                    y_after = y[idx_after[0]]
+                    
+                    # Linear interpolation between these points
+                    if x_after > x_before:
+                        # Replace the range with linear interpolation
+                        mask_range = (x >= xmin) & (x <= xmax)
+                        x_range = x[mask_range]
+                        y_range = y_before + (y_after - y_before) * (x_range - x_before) / (x_after - x_before)
+                        y_cleaned[mask_range] = y_range
+            
+            return y_cleaned
+        
+        elif mode == BgRemovalMode.POLY:
+            # Polynomial fit through selected ranges
+            poly_deg = self.current_state.poly_degree
+            
+            # Collect points from all background ranges
+            x_bg = []
+            y_bg = []
+            for xmin, xmax in ranges:
+                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                x_bg.extend(x[mask])
+                y_bg.extend(y[mask])
+            
+            if len(x_bg) >= poly_deg + 1:
+                # Fit polynomial
+                coeffs = np.polyfit(x_bg, y_bg, poly_deg)
+                # Subtract the polynomial from the entire curve
+                y_fit = np.polyval(coeffs, x)
+                return y - y_fit
+            else:
+                return y  # Not enough points for fit
+        
+        elif mode == BgRemovalMode.SPLINE:
+            # Spline interpolation through selected points
+            try:
+                from scipy.interpolate import splrep, splev
+            except ImportError:
+                # Fallback to linear if scipy not available
+                return y
+            
+            # Collect points from all background ranges
+            x_bg = []
+            y_bg = []
+            for xmin, xmax in ranges:
+                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                x_bg.extend(x[mask])
+                y_bg.extend(y[mask])
+            
+            if len(x_bg) >= 4:  # Need at least 4 points for spline
+                # Sort by x
+                idx_sorted = np.argsort(x_bg)
+                x_bg = np.array(x_bg)[idx_sorted]
+                y_bg = np.array(y_bg)[idx_sorted]
+                
+                # Create spline
+                smoothing = self.current_state.spline_smoothing or None
+                tck = splrep(x_bg, y_bg, s=smoothing)
+                y_fit = splev(x, tck)
+                return y - y_fit
+            else:
+                return y
+        
+        else:  # LINEAR mode (default)
+            # Linear fit through selected ranges
+            x_bg = []
+            y_bg = []
+            for xmin, xmax in ranges:
+                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                x_bg.extend(x[mask])
+                y_bg.extend(y[mask])
+            
+            if len(x_bg) >= 2:
+                coeffs = np.polyfit(x_bg, y_bg, 1)
+                y_fit = np.polyval(coeffs, x)
+                return y - y_fit
+            else:
+                return y    
             
     def _refresh_plot(self):
         # Drop any stale SpanSelector before tearing down its axes - leaving
@@ -964,7 +1429,8 @@ class MainWindow(QtWidgets.QMainWindow):
     
         self.raw_xy_list = [curve_to_xy(c) for c in curves]
     
-        # ALWAYS apply figsize for rendering (the image needs the correct size)
+        # ALWAYS apply figsize for rendering (the image needs the correct size,
+        # and this is also the size Real Size / Scale to Fit letterbox against)
         fig_width = self.EDIT_FIGSIZE_X
         fig_height = self.EDIT_FIGSIZE_Y
         if self.show_comment:
@@ -979,18 +1445,57 @@ class MainWindow(QtWidgets.QMainWindow):
             ax = self.fig.add_subplot(111)
     
         fit_coeffs = self.current_state.fit_coeffs or [None] * len(curves)
+        
+        # Store the plotted data for bounds calculation
+        plotted_x = []
+        plotted_y = []
+        
         for idx, (curve, (x, y)) in enumerate(zip(curves, self.raw_xy_list)):
             y_plot = y
             fit_line = None
-            coeffs = fit_coeffs[idx] if idx < len(fit_coeffs) else None
-            if coeffs is not None:
-                fit_line = np.polyval(coeffs, x)
-                if self.current_state.remove_background:
-                    y_plot = y - fit_line
-    
+            
+            if self.current_state.remove_background:
+                # Apply background removal based on mode
+                if self.current_state.bg_removal_mode in [BgRemovalMode.REGION_DELETE, BgRemovalMode.CONNECT_END]:
+                    # These modes modify the data directly
+                    y_plot = self._remove_background_from_curve(x, y)
+                else:
+                    # These modes use coefficients or compute on the fly
+                    coeffs = fit_coeffs[idx] if idx < len(fit_coeffs) else None
+                    if coeffs is not None:
+                        fit_line = np.polyval(coeffs, x)
+                        y_plot = y - fit_line
+                    elif self.current_state.bg_removal_mode == BgRemovalMode.SPLINE:
+                        # Spline interpolation
+                        try:
+                            from scipy.interpolate import splrep, splev
+                            # Collect background points
+                            x_bg = []
+                            y_bg = []
+                            for xmin, xmax in self.current_state.bg_ranges:
+                                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                                x_bg.extend(x[mask])
+                                y_bg.extend(y[mask])
+                            if len(x_bg) >= 4:
+                                # Sort by x
+                                idx_sorted = np.argsort(x_bg)
+                                x_bg = np.array(x_bg)[idx_sorted]
+                                y_bg = np.array(y_bg)[idx_sorted]
+                                smoothing = self.current_state.spline_smoothing or None
+                                tck = splrep(x_bg, y_bg, s=smoothing)
+                                y_fit = splev(x, tck)
+                                y_plot = y - y_fit
+                        except ImportError:
+                            # Fallback to linear if scipy not available
+                            pass
+            
             ax.plot(x, y_plot, label=curve_display_name(curve, idx))
             if fit_line is not None and not self.current_state.remove_background:
                 ax.plot(x, fit_line, "--", color="grey", alpha=0.6)
+            
+            # Store the plotted data for bounds
+            plotted_x.append(x)
+            plotted_y.append(y_plot)
     
         for i, (xmin, xmax) in enumerate(self.current_state.bg_ranges):
             if i == self.selected_range_index:
@@ -1008,15 +1513,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.show_comment:
             self._draw_comment_panel(dat, ax)
     
-        # Only enable SpanSelector in Stretch/Scale modes
+        # Only enable SpanSelector in Stretch/Scale modes (the underlying
+        # data coordinates in Real Size mode are only ever seen via the
+        # rasterized preview, so span-selection there wouldn't map to
+        # anything meaningful)
         if self.add_range_btn.isChecked() and self.EDIT_TOGGLE_STRETCH != 2:
             self._enable_span_selector(ax)
     
-        # Get data bounds for scaling calculations
-        if len(self.raw_xy_list) > 0:
-            # Find global min/max across all curves
-            all_x = np.concatenate([xy[0] for xy in self.raw_xy_list])
-            all_y = np.concatenate([xy[1] for xy in self.raw_xy_list])
+        # Data bounds - use the PLOTTED data, not the raw data
+        if len(plotted_x) > 0 and len(plotted_y) > 0:
+            all_x = np.concatenate(plotted_x)
+            all_y = np.concatenate(plotted_y)
             x_min, x_max = all_x.min(), all_x.max()
             y_min, y_max = all_y.min(), all_y.max()
             x_range = x_max - x_min
@@ -1030,133 +1537,50 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             x_limits = (0, 1)
             y_limits = (0, 1)
-            x_range = 1
-            y_range = 1
     
-        # Apply the stretch mode to the matplotlib axes
-        if self.EDIT_TOGGLE_STRETCH == 0:
-            # Stretch to Fit - force axes to fill the plot area (no aspect locking)
-            ax.set_aspect('auto')
-            ax.set_xlim(x_limits)
-            ax.set_ylim(y_limits)
-            ax.set_frame_on(True)
+        # The data itself is always shown "auto" (no aspect locking to data
+        # units) - what differs between the three modes is only how the
+        # *figure as a whole* gets placed on screen afterwards.
+        ax.set_aspect('auto')
+        ax.set_xlim(x_limits)
+        ax.set_ylim(y_limits)
+        ax.set_frame_on(True)
+        # Add a pale grey dotted x-axis (y=0) if the lower bound goes below zero
+        if y_limits[0] < 0:
+            ax.axhline(y=0, color='grey', linestyle=':', linewidth=1, alpha=0.7, zorder=1)
             
-        elif self.EDIT_TOGGLE_STRETCH == 1:
-            # Scale to Fit - maintain aspect ratio, fit within view
-            bbox = ax.get_position()
-            
-            fig_width_px = self.fig.get_figwidth() * self.fig.dpi
-            fig_height_px = self.fig.get_figheight() * self.fig.dpi
-            
-            avail_width = fig_width_px * bbox.width
-            avail_height = fig_height_px * bbox.height
-            
-            data_aspect = x_range / y_range if y_range != 0 else 1
-            avail_aspect = avail_width / avail_height if avail_height != 0 else 1
-            
-            if data_aspect > avail_aspect:
-                ax.set_aspect(avail_width / (avail_height * data_aspect))
-            else:
-                ax.set_aspect(avail_height * data_aspect / avail_width)
-            
-            ax.set_xlim(x_limits)
-            ax.set_ylim(y_limits)
-            ax.set_frame_on(True)
-            
-        else:  # 2 - Real Size
-            # Real Size - plot as it would be saved
-            if len(self.raw_xy_list) > 0:
-                all_x = np.concatenate([xy[0] for xy in self.raw_xy_list])
-                all_y = np.concatenate([xy[1] for xy in self.raw_xy_list])
-                x_min, x_max = all_x.min(), all_x.max()
-                y_min, y_max = all_y.min(), all_y.max()
-                x_range = x_max - x_min
-                y_range = y_max - y_min
-                
-                x_pad = x_range * 0.05 if x_range > 0 else 1
-                y_pad = y_range * 0.05 if y_range > 0 else 1
-                x_limits = (x_min - x_pad, x_max + x_pad)
-                y_limits = (y_min - y_pad, y_max + y_pad)
-            else:
-                x_limits = (0, 1)
-                y_limits = (0, 1)
-                x_range = 1
-                y_range = 1
-            
-            inches_per_data_unit = 1.0
-            data_width_inches = x_range * inches_per_data_unit
-            data_height_inches = y_range * inches_per_data_unit
-            
-            data_aspect = x_range / y_range if y_range != 0 else 1
-            ax.set_aspect(data_aspect)
-            ax.set_xlim(x_limits)
-            ax.set_ylim(y_limits)
-            
-            padding_inches = 0.5
-            desired_width_inches = data_width_inches + padding_inches * 2
-            desired_height_inches = data_height_inches + padding_inches * 2
-            
-            ax_width_frac = desired_width_inches / fig_width
-            ax_height_frac = desired_height_inches / fig_height
-            
-            max_frac = 0.95
-            if ax_width_frac > max_frac:
-                ax_width_frac = max_frac
-            if ax_height_frac > max_frac:
-                ax_height_frac = max_frac
-            
-            x_pos = (1.0 - ax_width_frac) / 2.0
-            y_pos = (1.0 - ax_height_frac) / 2.0
-            
-            ax.set_position([x_pos, y_pos, ax_width_frac, ax_height_frac])
-            
-            ax.set_frame_on(True)
-            for spine in ax.spines.values():
-                spine.set_linewidth(2)
-                spine.set_color('red')
-            
-            ax.annotate(
-                f"Real Size: {data_width_inches:.2f}″ × {data_height_inches:.2f}″ at {self.fig.dpi} DPI",
-                xy=(0.5, 0.02), xycoords="axes fraction",
-                ha='center', va='bottom',
-                fontsize=int(self.EDIT_TEXT_BODY_SIZE * 0.75), color='red'
-            )
-    
         # --- Render/Display based on mode ---
         if self.EDIT_TOGGLE_STRETCH == 2:
-            # Real Size mode: render figure to image and display in QLabel
-            self.fig.tight_layout()
+            # Real Size: render and display as image with NEAREST NEIGHBOR scaling
+            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
             pixmap = self._render_figure_to_pixmap()
-            
-            # Scale to fit label while maintaining aspect ratio
             label_size = self.image_label.size()
             if label_size.width() > 0 and label_size.height() > 0:
+                # Use FastTransformation for nearest neighbor (no interpolation)
                 scaled_pixmap = pixmap.scaled(
                     label_size.width() - 10,
                     label_size.height() - 10,
                     Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
+                    Qt.FastTransformation  # Nearest neighbor - no interpolation
                 )
                 self.image_label.setPixmap(scaled_pixmap)
             else:
                 self.image_label.setPixmap(pixmap)
-            
-            # Clear canvas (not needed in Real Size mode)
             self.canvas.draw()
-            
         else:
-            # Stretch/Scale modes: use interactive canvas
-            if self.EDIT_TOGGLE_STRETCH != 2:
-                self.fig.tight_layout()
-            
+            # Stretch/Scale modes: interactive canvas. Scale to Fit keeps its
+            # letterboxed fixed size in sync 
+            if self.EDIT_TOGGLE_STRETCH == 1:
+                self._apply_scale_to_fit_canvas_size()
             self.canvas.draw()
             self.image_label.clear()
             
-            # Force canvas update
-            self.canvas.updateGeometry()
-            current_size = self.canvas.size()
-            self.canvas.resize(current_size.width() + 1, current_size.height())
-            self.canvas.resize(current_size.width(), current_size.height())
+            if self.EDIT_TOGGLE_STRETCH == 0:
+                # Force canvas update (nudge to clear stale Stretch-to-Fit repaint artifacts)
+                self.canvas.updateGeometry()
+                current_size = self.canvas.size()
+                self.canvas.resize(current_size.width() + 1, current_size.height())
+                self.canvas.resize(current_size.width(), current_size.height())
 
 
     def _build_annotated_axes(self):
@@ -1172,51 +1596,92 @@ class MainWindow(QtWidgets.QMainWindow):
         comment = getattr(getattr(dat, "_psmeasurement", None), "Method", None)
         comment_text = getattr(comment, "Notes", "") if comment else ""
         timestamp = getattr(dat, "timestamp", "")
-
+    
         ax_text = self.fig.add_axes(self._text_pos)
         ax_text.axis("off")
-        ax_text.set_facecolor("lightcyan")
         ax_text.patch.set_visible(True)
-
+        
+        # Make sure the background is visible
+        ax_text.patch.set_alpha(1.0)
+        ax_text.patch.set_edgecolor('none')
+    
+        # Add text first
         header = ax_text.text(
             0.05, 0.97, "Comment",
             transform=ax_text.transAxes, verticalalignment="top",
             fontsize=self.EDIT_COMMENT_HEADER_SIZE, fontweight="bold",
         )
-
+    
+        # Calculate wrap width
         ax_text_width_px = ax_text.get_window_extent().width
         fontsize = self.EDIT_COMMENT_BODY_SIZE
         dpi = self.fig.get_dpi()
         char_width_px = fontsize * dpi / 72 * 0.5
         wrap_width = max(int(ax_text_width_px / char_width_px), 10)
         wrapped = textwrap.fill(f"{comment_text}\n{timestamp}", width=wrap_width)
-
+    
         body = ax_text.text(
             0.05, 0.9, wrapped,
             transform=ax_text.transAxes, verticalalignment="top",
             fontsize=fontsize, clip_on=False,
         )
-
-        ax.set_position(self._plot_pos)
-        ax_text.set_position(self._text_pos)
+    
+        # Force a draw to get proper extents
         self.fig.canvas.draw()
-
+    
+        # Get the bounding box of the text
         bbox_header = header.get_window_extent()
         bbox_body = body.get_window_extent()
-        combined = bbox_header.union([bbox_header, bbox_body])
-
+        
+        # Combine the bounding boxes properly - use Bbox.union() with a list
+        combined = mpl.transforms.Bbox.union([bbox_header, bbox_body])
+    
+        # Convert from display to axes coordinates
         inv = ax_text.transAxes.inverted()
         x0, y0 = inv.transform((combined.x0, combined.y0))
         x1, y1 = inv.transform((combined.x1, combined.y1))
-
+        
+        # Calculate the height of one line of text in axes coordinates
+        # Get the body text height
+        bbox_body_display = body.get_window_extent()
+        # Get the height of the body text in axes units
+        y0_body, _ = inv.transform((0, bbox_body_display.y0))
+        _, y1_body = inv.transform((0, bbox_body_display.y1))
+        row_height_px = fontsize * dpi / 72
+        # Convert from pixels to axes coordinates using the axes height
+        ax_height_px = ax_text.get_window_extent().height
+        ax_height_axes = 1.0  # axes coordinates go from 0 to 1
+        row_height_axes = row_height_px / ax_height_px * ax_height_axes
+    
+        # Extend y0 downward by one row height
+        y0_extended = y0 - row_height_axes
+    
+        # Add some padding
         pad = 0.03
-        patch = FancyBboxPatch(
-            (x0 - pad, y0 - pad), (x1 - x0) + 2 * pad, (y1 - y0) + 2 * pad,
-            boxstyle="square,pad=0", facecolor="lightcyan", edgecolor="none",
-            transform=ax_text.transAxes, zorder=0,
+        
+        # Create the background patch with border so it's visible
+        patch = mpl.patches.Rectangle(
+            (x0 - pad, y0_extended - pad),  # Extended y0
+            (x1 - x0) + 2 * pad, 
+            (y1 - y0_extended) + 2 * pad,   # Extended height
+            facecolor="lightblue", 
+            linewidth=1,
+            transform=ax_text.transAxes, 
+            zorder=0,
+            alpha=0.9
         )
         ax_text.add_patch(patch)
-
+        
+        # Make sure the patch is behind the text
+        patch.set_zorder(0)
+        header.set_zorder(1)
+        body.set_zorder(1)
+    
+        # Ensure the positions are set correctly
+        ax.set_position(self._plot_pos)
+        ax_text.set_position(self._text_pos)
+    
+        # Handle legend
         handles, labels = ax.get_legend_handles_labels()
         for handle in handles:
             handle.set_linewidth(2)
@@ -1278,28 +1743,67 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot()
 
     def _fit_background(self):
+        """Fit background using selected mode"""
         if not self.raw_xy_list or not self.current_state.bg_ranges:
             QtWidgets.QMessageBox.information(
                 self, "No selection", "Select at least one background range first."
             )
             return
-
+    
+        mode = self.current_state.bg_removal_mode
         new_coeffs = []
         fitted_any = False
+        
         for x, y in self.raw_xy_list:
-            mask = np.zeros_like(x, dtype=bool)
+            # Collect points from all background ranges
+            x_bg = []
+            y_bg = []
             for xmin, xmax in self.current_state.bg_ranges:
-                mask |= (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-            if mask.sum() >= 2:
-                new_coeffs.append(np.polyfit(x[mask], y[mask], deg=1).tolist())
-                fitted_any = True
-            else:
+                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                x_bg.extend(x[mask])
+                y_bg.extend(y[mask])
+            
+            if mode == BgRemovalMode.LINEAR:
+                # Linear fit
+                if len(x_bg) >= 2:
+                    coeffs = np.polyfit(x_bg, y_bg, 1).tolist()
+                    new_coeffs.append(coeffs)
+                    fitted_any = True
+                else:
+                    new_coeffs.append(None)
+            
+            elif mode == BgRemovalMode.POLY:
+                # Polynomial fit
+                degree = self.current_state.poly_degree
+                if len(x_bg) >= degree + 1:
+                    coeffs = np.polyfit(x_bg, y_bg, degree).tolist()
+                    new_coeffs.append(coeffs)
+                    fitted_any = True
+                else:
+                    new_coeffs.append(None)
+            
+            elif mode == BgRemovalMode.SPLINE:
+                # Spline - store coefficients as None since we'll compute on the fly
                 new_coeffs.append(None)
-
+                fitted_any = True
+            
+            elif mode == BgRemovalMode.REGION_DELETE:
+                # Delete regions - no coefficients needed
+                new_coeffs.append(None)
+                fitted_any = True
+            
+            elif mode == BgRemovalMode.CONNECT_END:
+                # Connect ends - no coefficients needed
+                new_coeffs.append(None)
+                fitted_any = True
+    
         if not fitted_any:
-            QtWidgets.QMessageBox.warning(self, "Fit failed", "Not enough points in the selection.")
+            QtWidgets.QMessageBox.warning(
+                self, "Fit failed", 
+                "Not enough points in the selection for the selected mode."
+            )
             return
-
+    
         self.current_state.fit_coeffs = new_coeffs
         self._save_state()
         self._refresh_plot()
@@ -1330,7 +1834,7 @@ class MainWindow(QtWidgets.QMainWindow):
             'figure.dpi'            : self.EDIT_FIGURE_DPI,
             'figure.figsize'        :[self.EDIT_FIGSIZE_X, self.EDIT_FIGSIZE_Y],
 
-            # Linnes and Markers
+            # Lines and Markers
             'lines.linewidth'       : self.EDIT_LINEWIDTH,
             'lines.markersize'      : self.EDIT_MARKERSIZE,
             'axes.grid': False,
@@ -1344,14 +1848,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _reset_all_parameters(self):
         """Reset all parameters to defaults"""
         
-        # Reset rcParam-linked variables
+        # First, update DEFAULT_* values from current defaults
         for edit_name in self.UI_RCPCONFIG_MAP.keys():
             default_value = self.get_default_for_edit(edit_name)
             if default_value is not None:
+                # Set the DEFAULT_* variable for reference
+                setattr(self, f"DEFAULT_{edit_name}", default_value)
                 setattr(self, edit_name, default_value)
         
         # Reset UI-only variables
         for edit_name, default_value in self.UI_ONLY_DEFAULTS.items():
+            setattr(self, f"DEFAULT_{edit_name}", default_value)
             setattr(self, edit_name, default_value)
         
         # Reset user rcParams
@@ -1360,7 +1867,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Reset matplotlib rcParams to defaults
         mpl.rcParams.update(self.RCPARAM_DEFAULTS)
         
-        # Update UI
+        # Update UI elements - this should now work properly
         self._update_ui_from_config()
         
         # Only apply figsize if NOT Real Size mode
@@ -1406,20 +1913,40 @@ class MainWindow(QtWidgets.QMainWindow):
                     if edit_name in ui_config:
                         setattr(self, edit_name, ui_config[edit_name])
                 
-                # Load user rcParams overrides
-                self._user_rcparams = session_data.get('user_rcparams', {})
+                # Load show_comment state
+                if 'show_comment' in ui_config:
+                    self.show_comment = ui_config['show_comment']
+                    # Update the toggle button
+                    if hasattr(self, 'comment_toggle'):
+                        self.comment_toggle.blockSignals(True)
+                        self.comment_toggle.setChecked(self.show_comment)
+                        self.comment_toggle.blockSignals(False)
+                
+                # Restore window state
+                if hasattr(self, 'EDIT_WINDOW_X'):
+                    self._restore_window_state()
+                
+                # NOTE: rcParam overrides are read from session.json which lives in their own dedicated file (RCPARAMS_OVERRIDE_PATH, see load_rcparams_override()).
+                # Save/Load/Reset in the Display tab has one unambiguous source of truth. self._user_rcparams is already populated from that file in __init__.
                 
                 # Update UI elements
                 self._update_ui_from_config()
                 
-                # Apply rcParams after loading
+                # Apply rcParams after loading, then make sure the EDIT_*
+                # fields reflect whatever the (higher-priority) rcParam
+                # overrides actually set, so the displayed values are honest.
                 self._apply_all_rcparams()
+                self._sync_edit_vars_from_rcparams(self._user_rcparams)
+                self._update_ui_from_config()
                 
             except Exception as e:
                 print(f"Error loading session: {e}")
                 
     def _save_session_parameters(self):
         """Save all settings to a single session file"""
+        
+        # Save window state
+        self._save_window_state()
         
         # Build UI config from both maps
         ui_config = {}
@@ -1434,6 +1961,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if hasattr(self, edit_name):
                 ui_config[edit_name] = getattr(self, edit_name)
         
+        # Save show_comment state
+        ui_config['show_comment'] = self.show_comment
+        
         # Build rcParams config (only user-modified rcParams that differ from defaults)
         rc_defaults = self.RCPARAM_DEFAULTS
         current_rc = {k: v for k, v in mpl.rcParams.items() 
@@ -1441,7 +1971,6 @@ class MainWindow(QtWidgets.QMainWindow):
         
         session_data = {
             'ui_config': ui_config,
-            'user_rcparams': self._user_rcparams if hasattr(self, '_user_rcparams') else {},
             'current_rcparams': current_rc,
         }
         
@@ -1449,6 +1978,84 @@ class MainWindow(QtWidgets.QMainWindow):
         SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(SESSION_PATH, "w") as f:
             json.dump(session_data, f, indent=2, default=str)
+
+    # -- rcParam override file handling (Save / Load / Reset buttons) --------
+
+    def _sync_edit_vars_from_rcparams(self, rc_dict, fallback_to_defaults=False):
+        """Keep the EDIT_* UI variables consistent with a given rcParams
+        dict, for every EDIT_* that maps to an rcParam key present in it.
+        With fallback_to_defaults=True, any mapped EDIT_* not present in
+        rc_dict is pulled from RCPARAM_DEFAULTS instead (used by Reset)."""
+        for edit_name, mapping in self.UI_RCPCONFIG_MAP.items():
+            if mapping is None:
+                continue
+            rc_key, index = mapping
+            if rc_key in rc_dict:
+                value = rc_dict[rc_key]
+            elif fallback_to_defaults and rc_key in self.RCPARAM_DEFAULTS:
+                value = self.RCPARAM_DEFAULTS[rc_key]
+            else:
+                continue
+            if index is not None and isinstance(value, (list, tuple)):
+                value = value[index]
+            setattr(self, edit_name, value)
+
+    def _get_current_rcparam_diffs(self):
+        """Return the subset of rcParams (matching RCPARAM_DEFAULTS keys)
+        whose current mpl.rcParams value differs from the code default."""
+        diffs = {}
+        for key, default_val in self.RCPARAM_DEFAULTS.items():
+            current_val = mpl.rcParams.get(key, default_val)
+            if current_val != default_val:
+                diffs[key] = current_val
+        return diffs
+
+    def _save_rcparam_overrides(self):
+        """Persist the current rcParams (on top of the code defaults) to
+        disk, so this becomes the new baseline that loads automatically on
+        every future launch."""
+        self._apply_all_rcparams()  # make sure EDIT_* edits are reflected in mpl.rcParams first
+        diffs = self._get_current_rcparam_diffs()
+        save_rcparams_override(diffs)
+        self._user_rcparams = diffs
+        QtWidgets.QMessageBox.information(
+            self, "Saved", f"Saved {len(diffs)} rcParam override(s) as the new startup defaults."
+        )
+
+    def _load_rcparam_overrides(self):
+        """Reload the saved override file and apply it to the current
+        session (does not touch the file itself)."""
+        self._user_rcparams = load_rcparams_override()
+        self._sync_edit_vars_from_rcparams(self._user_rcparams)
+        self._apply_all_rcparams()
+        self._update_ui_from_config()
+        if self.EDIT_TOGGLE_STRETCH != 2:
+            self._apply_figsize(self.show_comment)
+        self._refresh_plot()
+        self._save_session_parameters()
+
+    def _reset_rcparam_overrides(self):
+        """Discard saved overrides and go back to the defaults hardcoded in
+        get_rcparam_defaults(), deleting the override file."""
+        reply = QtWidgets.QMessageBox.question(
+            self, "Reset rcParam overrides",
+            "This deletes the saved rcParam override file and reverts to "
+            "the defaults defined in the code. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        delete_rcparams_override()
+        self._user_rcparams = {}
+        self._sync_edit_vars_from_rcparams({}, fallback_to_defaults=True)
+        mpl.rcParams.update(self.RCPARAM_DEFAULTS)
+        self._apply_all_rcparams()
+        self._update_ui_from_config()
+        if self.EDIT_TOGGLE_STRETCH != 2:
+            self._apply_figsize(self.show_comment)
+        self._refresh_plot()
+        self._save_session_parameters()
+
     # -- Export -----------------------------------------------------------
 
     def _save_figure(self):
@@ -1462,7 +2069,7 @@ class MainWindow(QtWidgets.QMainWindow):
         on_screen_size = self.fig.get_size_inches().copy()
         on_screen_dpi = self.fig.get_dpi()
 
-        self.fig.set_size_inches(self.SAVE_WIDTH_IN, self.SAVE_HEIGHT_IN)
+        self.fig.set_size_inches(self.EDIT_FIGSIZE_X, self.EDIT_FIGSIZE_Y)
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
         self.fig.savefig(path, dpi=self.EDIT_FIGURE_DPI)
 
@@ -1481,19 +2088,20 @@ def get_rcparam_defaults():
                     'text.usetex': False,
                     'font.family': fontfamily,
                     
-                    # 1. Physical Dimensions (Clean 4:3 Aspect Ratio)
-                    'figure.figsize': [6, 4.5],      # 6 inches wide, 4.5 inches tall
-                    'figure.dpi': 300,               # High density (Yields exactly 1800 x 1350 pixels)
+                    # Figure Dimensions 4:3 default
+                    'figure.figsize': [6, 4.5],      
+                    'figure.dpi': 200,               
                     
-                    # 2. Clean Font Sizes
+                    # Label Fontsizes
                     'font.size': bigfont,                 
                     'xtick.labelsize': mediumfont,
                     'ytick.labelsize': mediumfont,           
                     'legend.fontsize': mediumfont,           
-                    'legend.title_fontsize': bigfont,     
-                    'figure.titlesize': titlefont,
+                    'legend.title_fontsize': bigfont,   
+                    'axes.titlesize':titlefont,
+                    'axes.labelsize': bigfont, 
                     
-                    # 3. Standard Linewidths and Markers
+                    #Standard Linewidths and Markers
                     'lines.linewidth': 1.5,
                     'lines.markeredgewidth': 1.5,
                     'lines.markersize': 5,
