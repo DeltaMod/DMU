@@ -47,9 +47,7 @@ from typing import Optional
 
 import numpy as np
 
-# Must be set before QApplication is constructed - avoids Qt's automatic
-# HiDPI scaling double-counting against matplotlib's own devicePixelRatio
-# handling, which was producing oversized text and a clipped toolbar.
+# Must be set before QApplication is constructed to avoid pyQT5 high DPI scaling.
 os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
 
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -76,8 +74,7 @@ def load_session_file(filepath: Path):
 
 
 def curve_display_name(curve, index=0):
-    """Best-effort curve label. TODO: confirm the right attribute for your
-    curve objects - this tries the common candidates in order."""
+    """Finds details for curves for display."""
     for attr in ("title", "name", "label", "array_type"):
         val = getattr(curve, attr, None)
         if val:
@@ -102,29 +99,29 @@ def curve_to_xy(curve):
 # Per-measurement operator state, persisted as JSON, never touches raw data
 # ---------------------------------------------------------------------------
 
+
+
+def state_key(filename: str, measurement_id: int) -> str:
+    return f"{filename}__m{measurement_id}"
+
 @dataclass
 class CurveState:
-    """Per-measurement, saved to disk. "show_comment" deliberately lives on
-    MainWindow instead (see self.show_comment) - it's a global display
-    toggle, not something that should vary per file."""
-    bg_ranges: list = field(default_factory=list)       # [[xmin, xmax], ...], shared across curves
-    fit_coeffs: Optional[list] = None                    # one np.polyfit()-style list per curve, or None per curve
+    bg_ranges: list = field(default_factory=list)          # [xmin, xmax]  (SPANs)
+    anchor_points: list = field(default_factory=list)      # [[x, y], ...]
+    fit_coeffs: Optional[list] = None
     remove_background: bool = False
+    bg_removal_mode: int = 0
+    poly_degree: int = 2
+    spline_smoothing: float = 0.0
 
     def to_dict(self):
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d):
-        # tolerate old sidecars that still have a "show_comment" key
         known = {f.name for f in dataclass_fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})
-
-
-def state_key(filename: str, measurement_id: int) -> str:
-    return f"{filename}__m{measurement_id}"
-
-
+    
 class StateStore:
     """One JSON sidecar per (file, measurementID), in <folder>/.psense_gui_state/"""
 
@@ -148,7 +145,7 @@ class StateStore:
 
 
 # ---------------------------------------------------------------------------
-# Small config: remembers which folders you've added, across sessions
+# Small config: remembers which folders you've added, across sessions. Change this to a local directory later.
 # ---------------------------------------------------------------------------
 
 CONFIG_PATH = Path.home() / ".config" / "palmsens_gui" / "folders.json"
@@ -210,9 +207,9 @@ class EditableParamRow(QtWidgets.QWidget):
         self.param_name = param_name
         self._default_value = default_value
         self.parent_window = parent
-        self._is_updating = False  # Flag to prevent recursive updates
+        self._is_updating = False  # This will prevent recursive updates
         
-        # Create layout FIRST
+        # Create layout
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 2)
         
@@ -221,19 +218,19 @@ class EditableParamRow(QtWidgets.QWidget):
         self.label.setFixedWidth(80)
         layout.addWidget(self.label)
         
-        # Editable field - create BEFORE any potential access
+        # This is the editable field generated in the row.
         self.line_edit = QtWidgets.QLineEdit()
         self.line_edit.setText(str(default_value))
         self.line_edit.textChanged.connect(self._on_text_changed)
         
-        # Add validator to only allow numbers (optional but helpful)
+        # Add validator to only allow numbers 
         validator = QtGui.QDoubleValidator()
         validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
         self.line_edit.setValidator(validator)
         
         layout.addWidget(self.line_edit)
         
-        # Reset button
+        # Add Reset Button
         self.reset_btn = QtWidgets.QPushButton("⟳")
         self.reset_btn.setFixedWidth(30)
         self.reset_btn.setToolTip("Reset to default")
@@ -245,28 +242,24 @@ class EditableParamRow(QtWidgets.QWidget):
         if self._is_updating:
             return
         
-        # Skip empty strings
         if not text or text.strip() == "":
             return
         
-        try:
-            # Try to convert to float
+        try: #try float, and check if inf.
             value = float(text)
             
-            # Check for special cases like NaN, Inf
             if not np.isfinite(value):
                 return
             
-            # Update the parent
+
             setattr(self.parent_window, self.param_name, value)
             if hasattr(self.parent_window, '_on_param_changed'):
                 self.parent_window._on_param_changed()
         except ValueError:
-            # Invalid input - do nothing
             pass
     
     def _reset_to_default(self):
-        # Use DEFAULT_* if available
+        # Use provided DEFAULT_* parameters if available
         default_name = f"DEFAULT_{self.param_name}"
         if hasattr(self.parent_window, default_name):
             default_value = getattr(self.parent_window, default_name)
@@ -291,43 +284,53 @@ class EditableParamRow(QtWidgets.QWidget):
             setattr(self.parent_window, self.param_name, float(self._default_value))
             if hasattr(self.parent_window, '_on_param_changed'):
                 self.parent_window._on_param_changed()
-# Add this at the top with other constants
+# BG REMOVAL options
 class BgRemovalMode:
     LINEAR = 0           # Linear fit across selected ranges
     POLY = 1             # Polynomial fit (user-selectable degree)
     SPLINE = 2           # Spline interpolation through selected points
-    REGION_DELETE = 3    # Delete data in selected regions entirely
-    CONNECT_END = 4      # Connect end of one range to start of next with straight line
-    SMOOTH = 5           # Smooth interpolation through selected points
+    CONNECT_END = 3      # Connect end of one range to start of next with straight line
+    EXPONENTIAL_DECAY = 4  # Fit exponential decay through baseline points
+    MANUAL_GRADIENT = 5   # Manual piecewise gradient construction
 
-@dataclass
-class CurveState:
-    """Per-measurement, saved to disk."""
-    bg_ranges: list = field(default_factory=list)       # [[xmin, xmax], ...]
-    fit_coeffs: Optional[list] = None                    # one np.polyfit()-style list per curve, or None per curve
-    remove_background: bool = False
-    bg_removal_mode: int = 0  # Default to LINEAR
-    poly_degree: int = 2      # For POLY mode
-    spline_smoothing: float = 0.0  # For SPLINE mode
-    
-    def to_dict(self):
-        return asdict(self)
+# BG REMOVAL span types 
+class RangeType:
+    SPAN = 0          # Background range to remove
+    ANCHOR = 1        # Manual anchor point (stored as [x, y] in separate list)
 
-    @classmethod
-    def from_dict(cls, d):
-        known = {f.name for f in dataclass_fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in known})
+
         
 class MultiParamRow(QtWidgets.QWidget):
+    """
+    This function creates a row/col layout for multi-input and resetting of parameters.
+    For instance, we can have:
+       |         | colheader1  |       |   colheader2 |       | reset all
+       rowlabel1 |txtentry_1_1 | reset | txtentry_1_2 | reset |
+       rowlabel2 |txtentry_2_1 | reset | txtentry_2_2 | reset |
+       ...
+       rowlabelN |txtentry_N_1 | reset | txtentry_N_2 | reset | 
+
+    Example use: 
+    MultiParamRow(
+        headers=["Header", "Body"],
+        row_labels=["Text", "Legend", "Comment", "Axis"],
+        param_names=[
+            ["EDIT_TEXT_HEADER_SIZE", "EDIT_TEXT_BODY_SIZE"],
+            ["EDIT_LEGEND_HEADER_SIZE", "EDIT_LEGEND_BODY_SIZE"],
+            ["EDIT_COMMENT_HEADER_SIZE", "EDIT_COMMENT_BODY_SIZE"],
+            ["EDIT_AXIS_LABEL_SIZE", "EDIT_TICK_SIZE"]
+        ],
+        parent=self
+    )                                      
+    """
     def __init__(self, headers, row_labels, param_names, parent=None):
         super().__init__(parent)
         self.parent_window = parent
         self.param_names = param_names
         self.row_labels = row_labels
         self.headers = headers
-        self._is_updating = False  # Add this flag
+        self._is_updating = False   # This will prevent recursive updates
         
-        # Don't call _load_defaults_from_parent here - do it later
         self.default_values = {}
         
         layout = QtWidgets.QGridLayout(self)
@@ -335,31 +338,28 @@ class MultiParamRow(QtWidgets.QWidget):
         layout.setHorizontalSpacing(5)
         layout.setVerticalSpacing(2)
         
-        # Create header labels (top row, starting at column 1)
+
         for col_idx, header_text in enumerate(headers):
             header = QtWidgets.QLabel(header_text)
             header.setStyleSheet("font-weight: bold;")
             layout.addWidget(header, 0, col_idx * 2 + 1, 1, 2)
         
-        # Add a "Reset All" button in the top right corner
+        # "Reset All" button to restore everything in the multiparam to defaults
         reset_all_btn = QtWidgets.QPushButton("↺ Reset All")
         reset_all_btn.setFixedWidth(80)
         reset_all_btn.setToolTip("Reset all values to defaults")
         reset_all_btn.clicked.connect(self.reload_defaults)
         layout.addWidget(reset_all_btn, 0, len(headers) * 2 + 1)
         
-        # Create rows with labels, entry boxes and reset buttons
         self.line_edits = {}
         self.reset_btns = {}
         
-        for row_idx, row_label in enumerate(row_labels):
-            # Row label (column 0)
+        for row_idx, row_label in enumerate(row_labels): #recursively go through all row labels and add entry boxes and reset buttons to all 
             label = QtWidgets.QLabel(row_label)
             label.setStyleSheet("font-weight: bold;")
             layout.addWidget(label, row_idx + 1, 0)
             
             for col_idx, param_name in enumerate(param_names[row_idx]):
-                # Entry box
                 line_edit = QtWidgets.QLineEdit()
                 line_edit.setFixedWidth(60)
                 # Set initial value from parent if available
@@ -367,14 +367,13 @@ class MultiParamRow(QtWidgets.QWidget):
                     line_edit.setText(str(getattr(parent, param_name)))
                 line_edit.textChanged.connect(self._on_text_changed)
                 
-                # Add validator
+                # Add validator to avoid invalid entry
                 validator = QtGui.QDoubleValidator()
                 validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
                 line_edit.setValidator(validator)
                 
                 layout.addWidget(line_edit, row_idx + 1, col_idx * 2 + 1)
                 self.line_edits[param_name] = line_edit
-                
                 # Reset button
                 reset_btn = QtWidgets.QPushButton("⟳")
                 reset_btn.setFixedWidth(30)
@@ -382,8 +381,6 @@ class MultiParamRow(QtWidgets.QWidget):
                 reset_btn.clicked.connect(lambda checked, p=param_name: self._reset_to_default(p))
                 layout.addWidget(reset_btn, row_idx + 1, col_idx * 2 + 2)
                 self.reset_btns[param_name] = reset_btn
-        
-        # Now load defaults after everything is created
         self._load_defaults_from_parent()
     
     def _load_defaults_from_parent(self):
@@ -399,8 +396,6 @@ class MultiParamRow(QtWidgets.QWidget):
         """Called when any text changes - only update if all values are valid"""
         if self._is_updating:
             return
-        
-        # Check that ALL entries are valid before updating
         all_valid = True
         for param_name, line_edit in self.line_edits.items():
             text = line_edit.text()
@@ -419,8 +414,7 @@ class MultiParamRow(QtWidgets.QWidget):
         if not all_valid:
             return
         
-        # All entries are valid, update them
-        try:
+        try: #If all entries are valid, to updat them.
             for param_name, line_edit in self.line_edits.items():
                 value = float(line_edit.text())
                 setattr(self.parent_window, param_name, value)
@@ -528,12 +522,15 @@ class MainWindow(QtWidgets.QMainWindow):
             'EDIT_AXES_LINEWIDTH': ('axes.linewidth', None),
         }
         
+        self._toggle_widgets = {}   # variable_name -> QPushButton (checkable)
+        
         self.UI_ONLY_DEFAULTS = {
             'EDIT_COMMENT_WIDTH_FACTOR': 1.3,
             'EDIT_COMMENT_HEADER_SIZE': 14.0,
             'EDIT_COMMENT_BODY_SIZE': 8,
             'EDIT_TOGGLE_STRETCH': 0,
-            'EDIT_SHOW_COMMENT': False,  
+            'EDIT_SHOW_COMMENT': False,
+            'EDIT_HIDE_SPANS': False,
              #Window Persistance
             'EDIT_WINDOW_WIDTH': 1300,
             'EDIT_WINDOW_HEIGHT': 800,
@@ -546,27 +543,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.raw_xy_list = []       # [(x, y), ...] one per curve in the current measurement, cached on plot
         self.span_selector = None
 
-        self.show_comment = False       # global toggle, not persisted per file
-        self.selected_range_index: Optional[int] = None  # row currently highlighted in the range list
+        self._selected_row: Optional[int] = None  # row currently highlighted in the range list
         
-        # Initialize all EDIT_* variables from UI_CONFIG_MAP
-        self._init_session_variables()
+
+        self._init_session_variables() #This references the UI_ONLY_DEFAULTS and UI_RCPCONFIG_MAP
         
-        # User rcParams overrides - loaded from the dedicated override file
-        # (see RCPARAMS_OVERRIDE_PATH), not from session.json. This is the
-        # "startup defaults" layer managed by the Save/Load/Reset buttons.
+        # User rcParams overrides - loaded from the dedicated override file (see RCPARAMS_OVERRIDE_PATH)
         self._user_rcparams = load_rcparams_override()
         self._sync_edit_vars_from_rcparams(self._user_rcparams)
         self._apply_all_rcparams()
         
         self._build_ui()
         self._restore_folders()
-        # Load saved parameters
         self._load_session_parameters()
-        # Apply initial figure size after UI is built  # Added
-        self._apply_figsize(self.show_comment)  # Added
+        self._apply_figsize(self.EDIT_SHOW_COMMENT)  
         self._update_canvas_size_policy()
-        self._refresh_plot()  # Added (or call after everything is loaded)
+        self._refresh_plot()   
     
     def get_default_for_edit(self,edit_name):
         """Get the default value for an EDIT_* variable from rcParams or UI_ONLY_DEFAULTS"""
@@ -591,18 +583,17 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _init_session_variables(self):
         """Initialize all EDIT_* variables from rcParams or UI_ONLY_DEFAULTS"""
-        # Initialize rcParam-linked variables from UI_RCPCONFIG_MAP
+        # rcParam-linked variables 
         for edit_name in self.UI_RCPCONFIG_MAP.keys():
             default_value = self.get_default_for_edit(edit_name)
             if default_value is not None:
-                # Set both the EDIT_* and DEFAULT_EDIT_* variables
                 setattr(self, edit_name, default_value)
                 setattr(self, f"DEFAULT_{edit_name}", default_value)
             else:
                 setattr(self, edit_name, 0)
                 setattr(self, f"DEFAULT_{edit_name}", 0)
         
-        # Initialize UI-only variables from UI_ONLY_DEFAULTS
+        # UI-only variables 
         for edit_name, default_value in self.UI_ONLY_DEFAULTS.items():
             setattr(self, edit_name, default_value)
             setattr(self, f"DEFAULT_{edit_name}", default_value)
@@ -610,21 +601,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 
     def _apply_all_rcparams(self):
-        """Apply rcParams in order: defaults -> UI -> user overrides"""
+        """rcParams are applied in the following order: HARDCODED Defaults -> UI defined defaults -> user defined overrides"""
         
-        # 1. Start with base defaults
+        #HARDCODED Defaults
         mpl.rcParams.update(self.RCPARAM_DEFAULTS)
         
-        # 2. Apply UI overrides (only for EDIT_* that map to rcParams)
+        #UI Defaults
         for edit_name, mapping in self.UI_RCPCONFIG_MAP.items():
             if mapping is None:
-                continue  # Not an rcParam
+                continue  
             rc_key, index = mapping
             value = getattr(self, edit_name, None)
             if value is None:
                 continue
             if index is not None:
-                # Handle list items like figure.figsize
+                # Some entries are lists, and we must handle those differently 
                 current = mpl.rcParams.get(rc_key, [])
                 if isinstance(current, list) and len(current) > index:
                     current[index] = value
@@ -632,12 +623,12 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 mpl.rcParams[rc_key] = value
     
-        # 3. Apply user overrides (highest priority)
+        #USER overrides
         if hasattr(self, '_user_rcparams') and self._user_rcparams:
             mpl.rcParams.update(self._user_rcparams)
     def _update_ui_from_config(self):
         """Update all UI elements from EDIT_* variables"""
-        # Update EditableParamRow widgets
+
         for widget_name in ['save_width_row', 'save_height_row', 'dpi_row', 'width_factor_row']:
             if hasattr(self, widget_name):
                 widget = getattr(self, widget_name)
@@ -653,10 +644,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     values[param_name] = getattr(self, param_name)
             self.font_sizes_row.set_values(values)
         
-        # Update stretch button
-        self._update_button_text()       
+        self._update_button_text()  
+        
     # -- UI construction ----------------------------------------------------
-
     def _build_ui(self):
         central = QtWidgets.QWidget()
         root = QtWidgets.QHBoxLayout(central)
@@ -700,30 +690,26 @@ class MainWindow(QtWidgets.QMainWindow):
         # Create stacked widget to switch between canvas and image
         self.display_stack = QtWidgets.QStackedWidget()
         
-        # --- Canvas (for Stretch/Scale modes) ---
+        # --- MAIN PLOTTING CANVAS ---
         self.fig = Figure(figsize=(self.EDIT_FIGSIZE_X, self.EDIT_FIGSIZE_Y), dpi=self.EDIT_FIGURE_DPI)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
-        # canvas_container centers the canvas when it's given a fixed size
-        # (Scale to Fit mode). A QStackedWidget always forces its *page*
-        # widget to fill the whole stack area, so letterboxing has to be
-        # done one level in, via this wrapper's centered layout - the
-        # canvas itself is the thing we fix the size of, the container just
-        # provides the centering.
+        # canvas_container centers the canvas when it's given a fixed size (Scale to Fit mode). 
+        # A QStackedWidget always forces its *page* widget to fill the whole stack area, so letterboxing is an exception rule we must add via this wrapper's centered layout.
         self.canvas_container = QtWidgets.QWidget()
         canvas_container_layout = QtWidgets.QVBoxLayout(self.canvas_container)
         canvas_container_layout.setContentsMargins(0, 0, 0, 0)
         canvas_container_layout.setAlignment(Qt.AlignCenter)
         canvas_container_layout.addWidget(self.canvas)
-        self.display_stack.addWidget(self.canvas_container)  # Index 0
+        self.display_stack.addWidget(self.canvas_container)  
         
         # --- Image label (for Real Size mode) ---
         self.image_label = QtWidgets.QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.image_label.setStyleSheet("background-color: white; border: 1px solid #ccc;")
-        self.display_stack.addWidget(self.image_label)  # Index 1
+        self.display_stack.addWidget(self.image_label)  
         
         toolbar = NavigationToolbar(self.canvas, self)
         toolbar.setIconSize(QtCore.QSize(20, 20))
@@ -736,11 +722,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_right_column(self):
         col = QtWidgets.QVBoxLayout()
         
-        # Create tab widget
+        # TAB WIDGET for multi-selection of plotting modes
         self.tab_widget = QtWidgets.QTabWidget()
         col.addWidget(self.tab_widget)
         
-        # Create tabs
+        # We build the three columns used in the GUI.
         self._build_display_tab()
         self._build_fitting_tab()
         self._build_advanced_tab()
@@ -755,17 +741,35 @@ class MainWindow(QtWidgets.QMainWindow):
         # Background ranges
         layout.addWidget(QtWidgets.QLabel("Background ranges"))
         self.range_list = QtWidgets.QListWidget()
-        self.range_list.currentRowChanged.connect(self._on_range_row_changed)
+        self.range_list.itemClicked.connect(self._on_range_item_clicked)
+        self.range_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         layout.addWidget(self.range_list)
         
         range_btn_row = QtWidgets.QHBoxLayout()
-        self.add_range_btn = QtWidgets.QPushButton("+")
-        self.add_range_btn.setCheckable(True)
-        self.add_range_btn.toggled.connect(self._toggle_select_background)
-        remove_range_btn = QtWidgets.QPushButton("-")
-        remove_range_btn.clicked.connect(self._remove_range)
-        range_btn_row.addWidget(self.add_range_btn)
-        range_btn_row.addWidget(remove_range_btn)
+        
+        # SPAN button
+        self.span_btn = QtWidgets.QPushButton("|━━|")
+        self.span_btn.setCheckable(True)
+        self.span_btn.toggled.connect(lambda checked: self._toggle_select_range(checked, RangeType.SPAN))
+        range_btn_row.addWidget(self.span_btn)
+        
+        # ANCHOR button
+        self.anchor_btn = QtWidgets.QPushButton("•")
+        self.anchor_btn.setCheckable(True)
+        self.anchor_btn.toggled.connect(self._toggle_anchor_selection)
+        range_btn_row.addWidget(self.anchor_btn)
+        
+        # Delete button
+        delete_btn = QtWidgets.QPushButton("✕")
+        delete_btn.clicked.connect(self._remove_range)
+        delete_btn.setToolTip("Delete selected range")
+        range_btn_row.addWidget(delete_btn)
+        
+        # Clear all button
+        clear_btn = QtWidgets.QPushButton("Clear All")
+        clear_btn.clicked.connect(self._clear_all_ranges)
+        range_btn_row.addWidget(clear_btn)
+        
         layout.addLayout(range_btn_row)
         
         # Background removal mode
@@ -777,13 +781,14 @@ class MainWindow(QtWidgets.QMainWindow):
             "Linear Fit",
             "Polynomial Fit",
             "Spline Interpolation",
-            "Delete Regions",
-            "Connect Region Ends"
+            "Connect Region Ends",
+            "Exponential Decay",
+            "Manual Gradient"
         ])
         self.bg_mode_combo.currentIndexChanged.connect(self._on_bg_mode_changed)
         layout.addWidget(self.bg_mode_combo)
         
-        # Polynomial degree (only for POLY mode)
+        # Polynomial degree 
         poly_layout = QtWidgets.QHBoxLayout()
         poly_layout.addWidget(QtWidgets.QLabel("Polynomial Degree:"))
         self.poly_degree_spin = QtWidgets.QSpinBox()
@@ -794,7 +799,7 @@ class MainWindow(QtWidgets.QMainWindow):
         poly_layout.addStretch()
         layout.addLayout(poly_layout)
         
-        # Spline smoothing (only for SPLINE mode)
+        # Spline smoothing 
         spline_layout = QtWidgets.QHBoxLayout()
         spline_layout.addWidget(QtWidgets.QLabel("Spline Smoothing:"))
         self.spline_smoothing_spin = QtWidgets.QDoubleSpinBox()
@@ -819,6 +824,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.comment_toggle.setCheckable(True)
         self.comment_toggle.toggled.connect(self._toggle_comment)
         layout.addWidget(self.comment_toggle)
+        self._toggle_widgets['EDIT_SHOW_COMMENT'] = self.comment_toggle
+        
+        self.span_show_toggle = QtWidgets.QPushButton("Hide Spans")
+        self.span_show_toggle.setCheckable(True)
+        self.span_show_toggle.toggled.connect(self._toggle_spans)
+        layout.addWidget(self.span_show_toggle)
+        self._toggle_widgets['EDIT_HIDE_SPANS'] = self.span_show_toggle
         
         save_btn = QtWidgets.QPushButton("Save figure")
         save_btn.clicked.connect(self._save_figure)
@@ -843,7 +855,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
         
-        # FIGURE DISPLAY PARAMETERS
+        # Label for the FIGURE DISPLAY PARAMETERS
         fig_display_label = QtWidgets.QLabel("Figure Display Parameters")
         fig_display_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
         layout.addWidget(fig_display_label)
@@ -859,13 +871,13 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.save_height_row)
         
-        # Add DPI row
+        # DPI row
         self.dpi_row = EditableParamRow(
             "Figure DPI:", self.EDIT_FIGURE_DPI, "EDIT_FIGURE_DPI", self
         )
         layout.addWidget(self.dpi_row)
         
-        # Add width factor row
+        # Width factor row
         self.width_factor_row = EditableParamRow(
             "Comment W:", self.EDIT_COMMENT_WIDTH_FACTOR, "EDIT_COMMENT_WIDTH_FACTOR", self
         )
@@ -877,7 +889,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.ui_toggle_stretchplot)
         self._update_button_text()
         
-        # Separator
+        # -- Separator --
         line2 = QtWidgets.QFrame()
         line2.setFrameShape(QtWidgets.QFrame.HLine)
         layout.addWidget(line2)
@@ -904,7 +916,7 @@ class MainWindow(QtWidgets.QMainWindow):
         reset_all_btn.clicked.connect(self._reset_all_parameters)
         layout.addWidget(reset_all_btn)
         
-        # Separator
+        # -- Separator --
         line3 = QtWidgets.QFrame()
         line3.setFrameShape(QtWidgets.QFrame.HLine)
         layout.addWidget(line3)
@@ -977,7 +989,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fig.clear()
         self.canvas.draw()
 
-    # -- Measurement list (grouped under grey filename headers) ---------------
+    # -- Measurement list---------------
 
     def _on_folder_selected(self, item, _prev=None):
         self.file_list.clear()
@@ -1009,7 +1021,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 entry.setData(QtCore.Qt.UserRole, (str(f), file_index, meas_index))
                 self.file_list.addItem(entry)
 
-            del data  # only the file you click into gets kept in memory
+            del data  # only current clicked file is kept in memory
 
     def _on_entry_selected(self, item, _prev=None):
         if item is None:
@@ -1055,7 +1067,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.poly_degree_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.POLY)
         self.spline_smoothing_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.SPLINE)
     
-        self.selected_range_index = None
+        self._selected_row = None
         self._refresh_range_list()
         self._refresh_plot()
         
@@ -1065,37 +1077,31 @@ class MainWindow(QtWidgets.QMainWindow):
             key = state_key(self.current_filename, self.current_meas_index)
             StateStore(self.current_folder).save(key, self.current_state)
 
-    def _refresh_range_list(self):
-        self.range_list.blockSignals(True)
-        self.range_list.clear()
-        for i, (xmin, xmax) in enumerate(self.current_state.bg_ranges):
-            self.range_list.addItem(f"{i}: [{xmin:.4g}, {xmax:.4g}]")
-        self.range_list.blockSignals(False)
     
     # -- Plotting -------------------------------------------------------------
     def _render_figure_to_pixmap(self):
         """Render the current figure to a QPixmap at the specified DPI"""
         
-        # CRITICAL: Ensure figure is properly sized for export
+        # Ensure figure is properly sized for export
         fig_w = self.EDIT_FIGSIZE_X
         fig_h = self.EDIT_FIGSIZE_Y
-        if self.show_comment:
+        if self.EDIT_SHOW_COMMENT:
             fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
         
         self.fig.set_size_inches(fig_w, fig_h)
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
         
-        # Apply tight_layout for the export
-        if self.show_comment:
+        # The export should respect pre-set bounds so that we have the same size figure each time
+        if self.EDIT_SHOW_COMMENT:
             self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
         else:
-            self.fig.tight_layout(pad=0.8)
+            self.fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.08)
         
         # Render at full resolution
         width = int(fig_w * self.EDIT_FIGURE_DPI)
         height = int(fig_h * self.EDIT_FIGURE_DPI)
         
-        # Use the canvas's renderer for proper rendering
+        # Use the canvas's renderer for proper 
         pixmap = QPixmap(width, height)
         pixmap.fill(Qt.transparent)
         
@@ -1108,7 +1114,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_axes_frame(self, ax, mode):
         """Update axes frame appearance based on mode"""
         if mode == 2:  # Real Size
-            # Make frame visible and prominent
+            # Make frame visible
             ax.set_frame_on(True)
             for spine in ax.spines.values():
                 spine.set_linewidth(2)
@@ -1128,15 +1134,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_button_text()
         
         # Clear any stale image or canvas artifacts
-        if self.EDIT_TOGGLE_STRETCH == 2:
-            # Switch to Real Size mode - disable selector if active
+        if self.EDIT_TOGGLE_STRETCH == 2: #Real size mode
+            
             if self.span_selector is not None:
                 self.span_selector.disconnect_events()
                 self.span_selector = None
                 self.add_range_btn.setChecked(False)
             self.image_label.clear()
-        else:
-            # Switch to Stretch/Scale mode
+        else: # Switch to Stretch/Scale mode
             self.image_label.clear()
             if self.EDIT_TOGGLE_STRETCH == 1:
                 self._apply_scale_to_fit_canvas_size()
@@ -1171,7 +1176,7 @@ class MainWindow(QtWidgets.QMainWindow):
             2: "Real Size"
         }
         self.ui_toggle_stretchplot.setText(mode_texts[self.EDIT_TOGGLE_STRETCH])
-        # Optional: change button color or style to indicate active state
+        # We change button color to indicate active state, return and change to more pleasant colours later.
         if self.EDIT_TOGGLE_STRETCH == 0:
             self.ui_toggle_stretchplot.setStyleSheet("background-color: #4CAF50; color: white;")  # Green
         elif self.EDIT_TOGGLE_STRETCH == 1:
@@ -1180,9 +1185,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui_toggle_stretchplot.setStyleSheet("background-color: #f44336; color: white;")  # Red
             
     def _toggle_comment(self, checked):
-        self.show_comment = checked
+        self.EDIT_SHOW_COMMENT = checked
         self._refresh_plot()
         #Save comment state to preserve it between sessions
+        self._save_session_parameters()  
+    
+    def _toggle_spans(self,checked):
+        self.EDIT_HIDE_SPANS = checked
+        self._refresh_plot()
+        #Save spans  state to preserve it between sessions
         self._save_session_parameters()  
     
     def closeEvent(self, event):
@@ -1210,7 +1221,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
         fig_w = self.EDIT_FIGSIZE_X
         fig_h = self.EDIT_FIGSIZE_Y
-        if self.show_comment:
+        if self.EDIT_SHOW_COMMENT:
             fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
         
         # Get the actual figure size in pixels at current DPI
@@ -1292,123 +1303,200 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.EDIT_TOGGLE_STRETCH == 2:
             # Real Size: re-render the image at new size
             self._refresh_plot()
-    def _remove_background_from_curve(self, x, y):
-        """Apply background removal based on current mode"""
-        if not self.current_state.bg_ranges:
+    
+    
+    def _apply_span_ranges(self, x, y, span_ranges, anchor_points=None):
+        """Build baseline (y_subtract) from SPANs and anchor points."""
+        if not span_ranges and not anchor_points:
+            return np.zeros_like(y)
+    
+        ranges = []                 # list of [start, end] for each SPAN and anchor
+        anchor_values = {}          # index -> clicked y value for anchors
+    
+        # Process SPANs
+        for xmin, xmax in span_ranges:
+            xmin, xmax = min(xmin, xmax), max(xmin, xmax)
+            idx = np.where((x >= xmin) & (x <= xmax))[0]
+            if len(idx) > 0:
+                start, end = idx[0], idx[-1]
+                ranges.append([start, end])
+    
+        # Process anchors
+        if anchor_points:
+            for xp, yp in anchor_points:
+                idx = np.argmin(np.abs(x - xp))
+                ranges.append([idx, idx])
+                anchor_values[idx] = yp
+    
+        if not ranges:
+            return np.zeros_like(y)
+    
+        # Sort ranges by start index
+        ranges.sort(key=lambda r: r[0])
+    
+        y_subtract = np.zeros_like(y)
+    
+        # 1. Set values for SPANs and anchors
+        for start, end in ranges:
+            if start == end:
+                # anchor – use the clicked y value
+                if start in anchor_values:
+                    y_subtract[start] = anchor_values[start]
+                else:
+                    y_subtract[start] = y[start]   # fallback
+            else:
+                # SPAN – original y values
+                y_subtract[start:end+1] = y[start:end+1]
+    
+        # 2. Fill gaps between consecutive ranges
+        for i in range(len(ranges) - 1):
+            cur_end = ranges[i][1]
+            next_start = ranges[i+1][0]
+            if cur_end < next_start:
+                num = next_start - cur_end + 1
+                y_subtract[cur_end:next_start+1] = np.linspace(
+                    y_subtract[cur_end], y_subtract[next_start], num
+                )
+    
+        return y_subtract
+    
+    
+    def _apply_linear_fit(self, x, y, span_ranges, anchor_points=None):
+        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points or [])
+        if len(x_fit) < 2:
             return y
-        
-        ranges = self.current_state.bg_ranges
+        coeffs = np.polyfit(x_fit, y_fit, 1)
+        return y - np.polyval(coeffs, x)
+    
+    
+    def _apply_poly_fit(self, x, y, span_ranges, anchor_points=None):
+        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points or [])
+        degree = self.current_state.poly_degree
+        if len(x_fit) < degree + 1:
+            return self._apply_linear_fit(x, y, span_ranges, anchor_points)
+        coeffs = np.polyfit(x_fit, y_fit, degree)
+        return y - np.polyval(coeffs, x)
+    
+    def _apply_exponential_decay_fit(self, x, y, span_ranges, anchor_points=None):
+        """Exponential decay fit through SPANs + anchors."""
+        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points or [])
+        if len(x_fit) < 3:
+            return y  # not enough points
+    
+        sort = np.argsort(x_fit)
+        x_fit = np.array(x_fit)[sort]
+        y_fit = np.array(y_fit)[sort]
+    
+        try:
+            from scipy.optimize import curve_fit
+            def decay(x, A, tau, C, m):
+                return A * np.exp(-x / tau) + C + m * x
+            C_est = np.min(y_fit)
+            A_est = np.max(y_fit) - C_est
+            tau_est = (x_fit[-1] - x_fit[0]) / 3
+            m_est = (y_fit[-1] - y_fit[0]) / (x_fit[-1] - x_fit[0]) if x_fit[-1] > x_fit[0] else 0
+            p0 = [A_est, tau_est, C_est, m_est]
+            popt, _ = curve_fit(decay, x_fit, y_fit, p0=p0, maxfev=5000)
+            baseline = decay(x, *popt)
+            return y - baseline
+        except:
+            return self._apply_manual_gradient(x, y, span_ranges, anchor_points)
+    
+    
+    def _apply_manual_gradient(self, x, y, span_ranges, anchor_points=None):
+        """Polynomial fit through median points of SPANs + anchors."""
+        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points or [])
+        if len(x_fit) < 2:
+            return y
+    
+        # Use median of each SPAN? Already using all points; this is fine.
+        degree = min(3, len(x_fit) - 1)
+        coeffs = np.polyfit(x_fit, y_fit, degree)
+        baseline = np.polyval(coeffs, x)
+        return y - baseline
+    
+    
+    
+    def _remove_background_from_curve(self, x, y):
+        """Apply background removal using SPANs + anchor points."""
+        # Gather SPANs (ignore any stray FIT entries)
+        span_ranges = []
+        for r in self.current_state.bg_ranges:
+            if len(r) >= 3 and r[2] == RangeType.SPAN:
+                span_ranges.append([r[0], r[1]])
+            elif len(r) == 2:
+                span_ranges.append([r[0], r[1]])
+        anchor_points = getattr(self.current_state, 'anchor_points', [])
+    
+        if not span_ranges and not anchor_points:
+            return y
+    
         mode = self.current_state.bg_removal_mode
-        
-        # Create a mask for points inside background ranges
-        in_range_mask = np.zeros_like(x, dtype=bool)
-        for xmin, xmax in ranges:
-            in_range_mask |= (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-        
-        if mode == BgRemovalMode.REGION_DELETE:
-            # Simply delete data in ranges - return NaN for those points
-            y_cleaned = y.copy()
-            y_cleaned[in_range_mask] = np.nan
-            return y_cleaned
-        
-        elif mode == BgRemovalMode.CONNECT_END:
-            # Connect end of one range to start of next with straight line
-            y_cleaned = y.copy()
-            
-            # Get points just outside each range
-            for i, (xmin, xmax) in enumerate(ranges):
-                # Find indices just outside the range
-                idx_before = np.where(x < xmin)[0]
-                idx_after = np.where(x > xmax)[0]
-                
-                if len(idx_before) > 0 and len(idx_after) > 0:
-                    # Get points just outside
-                    x_before = x[idx_before[-1]]
-                    y_before = y[idx_before[-1]]
-                    x_after = x[idx_after[0]]
-                    y_after = y[idx_after[0]]
-                    
-                    # Linear interpolation between these points
-                    if x_after > x_before:
-                        # Replace the range with linear interpolation
-                        mask_range = (x >= xmin) & (x <= xmax)
-                        x_range = x[mask_range]
-                        y_range = y_before + (y_after - y_before) * (x_range - x_before) / (x_after - x_before)
-                        y_cleaned[mask_range] = y_range
-            
-            return y_cleaned
-        
+    
+        if mode == BgRemovalMode.CONNECT_END:
+            baseline = self._apply_span_ranges(x, y, span_ranges, anchor_points)
+            return y - baseline
+    
+        elif mode == BgRemovalMode.LINEAR:
+            x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+            if len(x_fit) >= 2:
+                coeffs = np.polyfit(x_fit, y_fit, 1)
+                return y - np.polyval(coeffs, x)
+            return y
+    
         elif mode == BgRemovalMode.POLY:
-            # Polynomial fit through selected ranges
-            poly_deg = self.current_state.poly_degree
-            
-            # Collect points from all background ranges
-            x_bg = []
-            y_bg = []
-            for xmin, xmax in ranges:
-                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-                x_bg.extend(x[mask])
-                y_bg.extend(y[mask])
-            
-            if len(x_bg) >= poly_deg + 1:
-                # Fit polynomial
-                coeffs = np.polyfit(x_bg, y_bg, poly_deg)
-                # Subtract the polynomial from the entire curve
-                y_fit = np.polyval(coeffs, x)
-                return y - y_fit
-            else:
-                return y  # Not enough points for fit
-        
+            x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+            degree = self.current_state.poly_degree
+            if len(x_fit) >= degree + 1:
+                coeffs = np.polyfit(x_fit, y_fit, degree)
+                return y - np.polyval(coeffs, x)
+            elif len(x_fit) >= 2:
+                coeffs = np.polyfit(x_fit, y_fit, 1)
+                return y - np.polyval(coeffs, x)
+            return y
+    
         elif mode == BgRemovalMode.SPLINE:
-            # Spline interpolation through selected points
-            try:
-                from scipy.interpolate import splrep, splev
-            except ImportError:
-                # Fallback to linear if scipy not available
-                return y
-            
-            # Collect points from all background ranges
-            x_bg = []
-            y_bg = []
-            for xmin, xmax in ranges:
-                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-                x_bg.extend(x[mask])
-                y_bg.extend(y[mask])
-            
-            if len(x_bg) >= 4:  # Need at least 4 points for spline
-                # Sort by x
-                idx_sorted = np.argsort(x_bg)
-                x_bg = np.array(x_bg)[idx_sorted]
-                y_bg = np.array(y_bg)[idx_sorted]
-                
-                # Create spline
-                smoothing = self.current_state.spline_smoothing or None
-                tck = splrep(x_bg, y_bg, s=smoothing)
-                y_fit = splev(x, tck)
-                return y - y_fit
-            else:
-                return y
+            x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+            if len(x_fit) >= 4:
+                try:
+                    from scipy.interpolate import splrep, splev
+                    sort = np.argsort(x_fit)
+                    x_fit = np.array(x_fit)[sort]
+                    y_fit = np.array(y_fit)[sort]
+                    smoothing = self.current_state.spline_smoothing or None
+                    tck = splrep(x_fit, y_fit, s=smoothing)
+                    return y - splev(x, tck)
+                except ImportError:
+                    pass
+            if len(x_fit) >= 2:
+                coeffs = np.polyfit(x_fit, y_fit, 1)
+                return y - np.polyval(coeffs, x)
+            return y
+    
+        elif mode == BgRemovalMode.EXPONENTIAL_DECAY:
+            return self._apply_exponential_decay_fit(x, y, span_ranges, anchor_points)
+    
+        elif mode == BgRemovalMode.MANUAL_GRADIENT:
+            return self._apply_manual_gradient(x, y, span_ranges, anchor_points)
+    
+        return y
         
-        else:  # LINEAR mode (default)
-            # Linear fit through selected ranges
-            x_bg = []
-            y_bg = []
-            for xmin, xmax in ranges:
-                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-                x_bg.extend(x[mask])
-                y_bg.extend(y[mask])
-            
-            if len(x_bg) >= 2:
-                coeffs = np.polyfit(x_bg, y_bg, 1)
-                y_fit = np.polyval(coeffs, x)
-                return y - y_fit
-            else:
-                return y    
+        return y
+    def _collect_fit_points(self, x, y, span_ranges, anchor_points):
+        """Collect (x, y) points from SPANs and anchor points for fitting."""
+        x_fit, y_fit = [], []
+        for xmin, xmax in span_ranges:
+            mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+            x_fit.extend(x[mask])
+            y_fit.extend(y[mask])
+        for xp, yp in anchor_points:
+            x_fit.append(xp)
+            y_fit.append(yp)
+        return x_fit, y_fit
+    
             
     def _refresh_plot(self):
-        # Drop any stale SpanSelector before tearing down its axes - leaving
-        # one connected across a fig.clear() is what caused the leftover
-        # selection artifacts on redraw.
+        # Drop any stale SpanSelector before tearing down its axes
         if self.span_selector is not None:
             try:
                 self.span_selector.disconnect_events()
@@ -1429,98 +1517,184 @@ class MainWindow(QtWidgets.QMainWindow):
     
         self.raw_xy_list = [curve_to_xy(c) for c in curves]
     
-        # ALWAYS apply figsize for rendering (the image needs the correct size,
-        # and this is also the size Real Size / Scale to Fit letterbox against)
         fig_width = self.EDIT_FIGSIZE_X
         fig_height = self.EDIT_FIGSIZE_Y
-        if self.show_comment:
+        if self.EDIT_SHOW_COMMENT:
             fig_width = fig_width * self.EDIT_COMMENT_WIDTH_FACTOR
         self.fig.set_size_inches(fig_width, fig_height)
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
     
-        # Build axes
-        if self.show_comment:
+        if self.EDIT_SHOW_COMMENT:
             ax = self._build_annotated_axes()
         else:
             ax = self.fig.add_subplot(111)
     
         fit_coeffs = self.current_state.fit_coeffs or [None] * len(curves)
-        
-        # Store the plotted data for bounds calculation
+    
         plotted_x = []
         plotted_y = []
-        
+    
+        # Get SPAN ranges
+        span_ranges = []
+        for range_data in self.current_state.bg_ranges:
+            if len(range_data) >= 3:
+                xmin, xmax, rtype = range_data[0], range_data[1], range_data[2]
+            else:
+                xmin, xmax = range_data[0], range_data[1]
+                rtype = RangeType.SPAN
+            if rtype == RangeType.SPAN:
+                span_ranges.append([xmin, xmax])
+    
+        # Get anchor points
+        anchor_points = getattr(self.current_state, 'anchor_points', [])
+    
+        # Determine selected item (if any) using self._selected_row
+        selected_typ = None
+        selected_idx = None
+        if self._selected_row is not None:
+            item = self.range_list.item(self._selected_row)
+            if item is not None:
+                data = item.data(QtCore.Qt.UserRole)
+                if data is not None:
+                    selected_typ, selected_idx = data
+    
         for idx, (curve, (x, y)) in enumerate(zip(curves, self.raw_xy_list)):
-            y_plot = y
-            fit_line = None
-            
+            y_plot = y.copy()
+            baseline = None
+    
             if self.current_state.remove_background:
-                # Apply background removal based on mode
-                if self.current_state.bg_removal_mode in [BgRemovalMode.REGION_DELETE, BgRemovalMode.CONNECT_END]:
-                    # These modes modify the data directly
-                    y_plot = self._remove_background_from_curve(x, y)
-                else:
-                    # These modes use coefficients or compute on the fly
-                    coeffs = fit_coeffs[idx] if idx < len(fit_coeffs) else None
-                    if coeffs is not None:
-                        fit_line = np.polyval(coeffs, x)
-                        y_plot = y - fit_line
-                    elif self.current_state.bg_removal_mode == BgRemovalMode.SPLINE:
-                        # Spline interpolation
-                        try:
-                            from scipy.interpolate import splrep, splev
-                            # Collect background points
-                            x_bg = []
-                            y_bg = []
-                            for xmin, xmax in self.current_state.bg_ranges:
-                                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-                                x_bg.extend(x[mask])
-                                y_bg.extend(y[mask])
-                            if len(x_bg) >= 4:
-                                # Sort by x
-                                idx_sorted = np.argsort(x_bg)
-                                x_bg = np.array(x_bg)[idx_sorted]
-                                y_bg = np.array(y_bg)[idx_sorted]
+                if span_ranges or anchor_points:
+                    mode = self.current_state.bg_removal_mode
+    
+                    if mode == BgRemovalMode.CONNECT_END:
+                        baseline = self._apply_span_ranges(x, y, span_ranges, anchor_points)
+                        y_plot = y - baseline
+                    elif mode == BgRemovalMode.LINEAR:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        if len(x_fit) >= 2:
+                            coeffs = np.polyfit(x_fit, y_fit, 1)
+                            baseline = np.polyval(coeffs, x)
+                            y_plot = y - baseline
+                    elif mode == BgRemovalMode.POLY:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        degree = self.current_state.poly_degree
+                        if len(x_fit) >= degree + 1:
+                            coeffs = np.polyfit(x_fit, y_fit, degree)
+                            baseline = np.polyval(coeffs, x)
+                            y_plot = y - baseline
+                        elif len(x_fit) >= 2:
+                            coeffs = np.polyfit(x_fit, y_fit, 1)
+                            baseline = np.polyval(coeffs, x)
+                            y_plot = y - baseline
+                    elif mode == BgRemovalMode.SPLINE:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        if len(x_fit) >= 4:
+                            try:
+                                from scipy.interpolate import splrep, splev
+                                sort_idx = np.argsort(x_fit)
+                                x_fit = np.array(x_fit)[sort_idx]
+                                y_fit = np.array(y_fit)[sort_idx]
                                 smoothing = self.current_state.spline_smoothing or None
-                                tck = splrep(x_bg, y_bg, s=smoothing)
-                                y_fit = splev(x, tck)
-                                y_plot = y - y_fit
-                        except ImportError:
-                            # Fallback to linear if scipy not available
-                            pass
-            
+                                tck = splrep(x_fit, y_fit, s=smoothing)
+                                baseline = splev(x, tck)
+                                y_plot = y - baseline
+                            except ImportError:
+                                pass
+                    elif mode == BgRemovalMode.EXPONENTIAL_DECAY:
+                        baseline = self._apply_exponential_decay_fit(x, y, span_ranges, anchor_points)
+                        if baseline is not None:
+                            y_plot = y - baseline
+                    elif mode == BgRemovalMode.MANUAL_GRADIENT:
+                        baseline = self._apply_manual_gradient(x, y, span_ranges, anchor_points)
+                        if baseline is not None:
+                            y_plot = y - baseline
+            else:
+                # Background removal OFF - compute baseline for display
+                if span_ranges or anchor_points:
+                    mode = self.current_state.bg_removal_mode
+                    if mode == BgRemovalMode.CONNECT_END:
+                        baseline = self._apply_span_ranges(x, y, span_ranges, anchor_points)
+                    elif mode == BgRemovalMode.LINEAR:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        if len(x_fit) >= 2:
+                            coeffs = np.polyfit(x_fit, y_fit, 1)
+                            baseline = np.polyval(coeffs, x)
+                    elif mode == BgRemovalMode.POLY:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        degree = self.current_state.poly_degree
+                        if len(x_fit) >= degree + 1:
+                            coeffs = np.polyfit(x_fit, y_fit, degree)
+                            baseline = np.polyval(coeffs, x)
+                        elif len(x_fit) >= 2:
+                            coeffs = np.polyfit(x_fit, y_fit, 1)
+                            baseline = np.polyval(coeffs, x)
+                    elif mode == BgRemovalMode.SPLINE:
+                        x_fit, y_fit = self._collect_fit_points(x, y, span_ranges, anchor_points)
+                        if len(x_fit) >= 4:
+                            try:
+                                from scipy.interpolate import splrep, splev
+                                sort_idx = np.argsort(x_fit)
+                                x_fit = np.array(x_fit)[sort_idx]
+                                y_fit = np.array(y_fit)[sort_idx]
+                                smoothing = self.current_state.spline_smoothing or None
+                                tck = splrep(x_fit, y_fit, s=smoothing)
+                                baseline = splev(x, tck)
+                            except ImportError:
+                                pass
+                    elif mode == BgRemovalMode.EXPONENTIAL_DECAY:
+                        baseline = self._apply_exponential_decay_fit(x, y, span_ranges, anchor_points)
+                    elif mode == BgRemovalMode.MANUAL_GRADIENT:
+                        baseline = self._apply_manual_gradient(x, y, span_ranges, anchor_points)
+    
             ax.plot(x, y_plot, label=curve_display_name(curve, idx))
-            if fit_line is not None and not self.current_state.remove_background:
-                ax.plot(x, fit_line, "--", color="grey", alpha=0.6)
-            
-            # Store the plotted data for bounds
+    
+            if baseline is not None and not self.current_state.remove_background:
+                ax.plot(x, baseline, '--', color='red', alpha=0.7, linewidth=1.5,
+                       label='Baseline' if idx == 0 else '')
+    
             plotted_x.append(x)
             plotted_y.append(y_plot)
     
-        for i, (xmin, xmax) in enumerate(self.current_state.bg_ranges):
-            if i == self.selected_range_index:
-                ax.axvspan(xmin, xmax, color="green", alpha=0.35)
-            else:
-                ax.axvspan(xmin, xmax, color="orange", alpha=0.2)
-    
-        ax.set_title(getattr(dat, "title", self.current_filename), fontweight="bold")
-        ax.legend(loc="best")
-        ax.annotate(
-            f"fileID: {self.current_file_index}  measurementID: {self.current_meas_index}",
-            xy=(0.1, 0.9), xycoords="axes fraction",
-        )
-    
-        if self.show_comment:
+        # Draw SPAN ranges with highlighting
+        if not self.EDIT_HIDE_SPANS:
+            for i, (xmin, xmax) in enumerate(span_ranges):
+                highlight = (selected_typ == 'span' and selected_idx == i)
+                color = "green" if highlight else "orange"
+                alpha = 0.35 if highlight else 0.25
+                edge_color = "darkgreen" if highlight else "orange"
+                ax.axvspan(xmin, xmax, color=color, alpha=alpha)
+                if highlight:
+                    ax.axvline(xmin, color=edge_color, linestyle='--', alpha=0.5)
+                    ax.axvline(xmax, color=edge_color, linestyle='--', alpha=0.5)
+        
+            # Draw anchor points with highlighting if background is not removed
+            if not self.current_state.remove_background:
+                for j, (xp, yp) in enumerate(anchor_points):
+                    highlight = (selected_typ == 'anchor' and selected_idx == j)
+                    marker_color = 'magenta' if not highlight else 'green'
+                    size = 60 if highlight else 40
+                    edge = 'black' if highlight else None
+                    ax.scatter(xp, yp, color=marker_color, s=size, zorder=5,
+                                   edgecolors=edge, linewidth=1, label='Anchors' if j == 0 and not self.current_state.remove_background else "")
+        title = getattr(dat, "title")
+        if not title:
+            title = self.current_filename
+        if self.current_state.remove_background:
+            title += " (rm BG)"
+        
+        ax.set_title(title, fontweight="bold")
+        ax.legend(loc="best")    
+        if self.EDIT_SHOW_COMMENT:
             self._draw_comment_panel(dat, ax)
+            ax.annotate(
+                f"fileID: {self.current_file_index}  measurementID: {self.current_meas_index}",
+                xy=(0.1, 0.9), xycoords="axes fraction",
+            )
+
+        # Enable SpanSelector only for SPAN button
+        if self.span_btn.isChecked() and self.EDIT_TOGGLE_STRETCH != 2:
+            self._enable_span_selector(ax, RangeType.SPAN)
     
-        # Only enable SpanSelector in Stretch/Scale modes (the underlying
-        # data coordinates in Real Size mode are only ever seen via the
-        # rasterized preview, so span-selection there wouldn't map to
-        # anything meaningful)
-        if self.add_range_btn.isChecked() and self.EDIT_TOGGLE_STRETCH != 2:
-            self._enable_span_selector(ax)
-    
-        # Data bounds - use the PLOTTED data, not the raw data
         if len(plotted_x) > 0 and len(plotted_y) > 0:
             all_x = np.concatenate(plotted_x)
             all_y = np.concatenate(plotted_y)
@@ -1528,8 +1702,7 @@ class MainWindow(QtWidgets.QMainWindow):
             y_min, y_max = all_y.min(), all_y.max()
             x_range = x_max - x_min
             y_range = y_max - y_min
-            
-            # Add a small padding (5%) for better visualization
+    
             x_pad = x_range * 0.05 if x_range > 0 else 1
             y_pad = y_range * 0.05 if y_range > 0 else 1
             x_limits = (x_min - x_pad, x_max + x_pad)
@@ -1538,45 +1711,35 @@ class MainWindow(QtWidgets.QMainWindow):
             x_limits = (0, 1)
             y_limits = (0, 1)
     
-        # The data itself is always shown "auto" (no aspect locking to data
-        # units) - what differs between the three modes is only how the
-        # *figure as a whole* gets placed on screen afterwards.
         ax.set_aspect('auto')
         ax.set_xlim(x_limits)
         ax.set_ylim(y_limits)
         ax.set_frame_on(True)
-        # Add a pale grey dotted x-axis (y=0) if the lower bound goes below zero
         if y_limits[0] < 0:
             ax.axhline(y=0, color='grey', linestyle=':', linewidth=1, alpha=0.7, zorder=1)
-            
-        # --- Render/Display based on mode ---
+    
         if self.EDIT_TOGGLE_STRETCH == 2:
-            # Real Size: render and display as image with NEAREST NEIGHBOR scaling
             self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
             pixmap = self._render_figure_to_pixmap()
             label_size = self.image_label.size()
             if label_size.width() > 0 and label_size.height() > 0:
-                # Use FastTransformation for nearest neighbor (no interpolation)
                 scaled_pixmap = pixmap.scaled(
                     label_size.width() - 10,
                     label_size.height() - 10,
                     Qt.KeepAspectRatio,
-                    Qt.FastTransformation  # Nearest neighbor - no interpolation
+                    Qt.FastTransformation
                 )
                 self.image_label.setPixmap(scaled_pixmap)
             else:
                 self.image_label.setPixmap(pixmap)
             self.canvas.draw()
         else:
-            # Stretch/Scale modes: interactive canvas. Scale to Fit keeps its
-            # letterboxed fixed size in sync 
             if self.EDIT_TOGGLE_STRETCH == 1:
                 self._apply_scale_to_fit_canvas_size()
             self.canvas.draw()
             self.image_label.clear()
-            
+    
             if self.EDIT_TOGGLE_STRETCH == 0:
-                # Force canvas update (nudge to clear stale Stretch-to-Fit repaint artifacts)
                 self.canvas.updateGeometry()
                 current_size = self.canvas.size()
                 self.canvas.resize(current_size.width() + 1, current_size.height())
@@ -1684,8 +1847,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # Handle legend
         handles, labels = ax.get_legend_handles_labels()
         for handle in handles:
-            handle.set_linewidth(2)
-            handle.set_markersize(8)
+            if hasattr(handle, 'set_linewidth'):
+                handle.set_linewidth(2)
+            if hasattr(handle, 'set_markersize'):
+                handle.set_markersize(8)
         legend = ax.legend(handles, labels, prop={"size": 10}, handlelength=0.9)
         ax_bottom = ax.get_position().y0
         ax_right = ax.get_position().x1
@@ -1693,57 +1858,249 @@ class MainWindow(QtWidgets.QMainWindow):
         legend._loc = 3  # lower left
 
     # -- Background selection / fitting ---------------------------------------
-
-    def _toggle_select_background(self, checked):
+    def _toggle_anchor_selection(self, checked):
+        if self.EDIT_TOGGLE_STRETCH == 2:
+            self.anchor_btn.setChecked(False)
+            QtWidgets.QMessageBox.information(self, "Not available", "Anchor selection not available in Real Size mode.")
+            return
+        if checked:
+            self.span_btn.setChecked(False)
+            self._anchor_click_cid = self.canvas.mpl_connect('button_press_event', self._on_anchor_click)
+        else:
+            if hasattr(self, '_anchor_click_cid'):
+                self.canvas.mpl_disconnect(self._anchor_click_cid)
+                self._anchor_click_cid = None
+    
+    def _on_anchor_click(self, event):
+        if event.inaxes is None:
+            return
+        x, y = event.xdata, event.ydata
+        self.current_state.anchor_points.append([float(x), float(y)])
+        self._save_state()
+        self._refresh_range_list()
+        self._refresh_plot()
+        
+    def _toggle_select_range(self, checked, range_type):
         if self.EDIT_TOGGLE_STRETCH == 2:
             QtWidgets.QMessageBox.information(
-                self, "Not available", 
-                "Background selection is not available in Real Size mode. Switch to Stretch or Scale mode."
+                self, "Not available", "Span selection not available in Real Size mode."
             )
-            self.add_range_btn.setChecked(False)
+            self.span_btn.setChecked(False)
             return
-        
         if checked:
             axes = self.fig.axes
             if axes:
-                self._enable_span_selector(axes[0])
+                self._enable_span_selector(axes[0], range_type)
         else:
             if self.span_selector is not None:
                 self.span_selector.disconnect_events()
                 self.span_selector = None
             self._refresh_plot()
-
-    def _enable_span_selector(self, ax):
+    
+    def _enable_span_selector(self, ax, range_type):
+        """Enable span selector with type"""
         self.span_selector = SpanSelector(
-            ax, self._on_span_select, "horizontal",
-            useblit=True, props=dict(alpha=0.2, facecolor="orange"),
+            ax, lambda xmin, xmax: self._on_span_select(xmin, xmax, range_type),
+            "horizontal",
+            useblit=True, 
+            props=dict(alpha=0.35, facecolor="orange"),
         )
-
-    def _on_span_select(self, xmin, xmax):
-        self.current_state.bg_ranges.append([float(xmin), float(xmax)])
+    
+    def _on_span_select(self, xmin, xmax, range_type, skip_overlap_check=False):
+        """Handle span selection; if a span is selected and the span button is active,
+        the selected span is replaced by the newly drawn one."""
+        # Ensure min/max order
+        xmin, xmax = min(xmin, xmax), max(xmin, xmax)
+    
+        # Check if we are in "replacement mode": span button active and a span row is selected
+        selected_span_idx = None
+        if self.span_btn.isChecked() and self._selected_row is not None:
+            item = self.range_list.item(self._selected_row)
+            if item is not None:
+                data = item.data(QtCore.Qt.UserRole)
+                if data is not None:
+                    typ, idx = data
+                    if typ == 'span':
+                        selected_span_idx = idx  # index into self.current_state.bg_ranges
+    
+        if not skip_overlap_check:
+            # Check for overlaps against all spans EXCEPT the one we may replace
+            for i, existing in enumerate(self.current_state.bg_ranges):
+                if i == selected_span_idx:
+                    continue  # skip the selected one – it will be deleted if we proceed
+                ex_min, ex_max = existing[0], existing[1]
+                if not (xmax <= ex_min or xmin >= ex_max):
+                    # Overlap detected – snap to nearest valid position
+                    dist_to_min = abs(xmin - ex_min)
+                    dist_to_max = abs(xmax - ex_max)
+                    if dist_to_min < dist_to_max:
+                        xmax = ex_min
+                    else:
+                        xmin = ex_max
+                    if xmin >= xmax:
+                        QtWidgets.QMessageBox.information(
+                            self, "Range too small",
+                            "The range would be too small after avoiding overlap."
+                        )
+                        return  # do NOT delete the selected span
+    
+        # If we get here, the new span is valid – delete the selected one (if any)
+        if selected_span_idx is not None:
+            del self.current_state.bg_ranges[selected_span_idx]
+            self._selected_row = None
+    
+        # Add the new span
+        self.current_state.bg_ranges.append([float(xmin), float(xmax), range_type])
+        self._sort_ranges()
         self._save_state()
         self._refresh_range_list()
         self._refresh_plot()
-
-    def _on_range_row_changed(self, row):
-        self.selected_range_index = row if row >= 0 else None
-        self._refresh_plot()
-
-    def _remove_range(self):
-        if not self.current_state.bg_ranges:
-            return
-        if self.selected_range_index is not None and 0 <= self.selected_range_index < len(self.current_state.bg_ranges):
-            idx = self.selected_range_index
+    
+    def _sort_ranges(self):
+        """Sort ranges by xmin"""
+        self.current_state.bg_ranges.sort(key=lambda r: r[0])
+    
+    def _refresh_range_list(self):
+        """Refresh the range list with both SPANs and anchor points."""
+        self.range_list.blockSignals(True)
+        self.range_list.clear()
+    
+        # SPAN ranges
+        for i, r in enumerate(self.current_state.bg_ranges):
+            if len(r) >= 3:
+                xmin, xmax = r[0], r[1]
+            else:
+                xmin, xmax = r[0], r[1]
+            if xmin > xmax:
+                xmin, xmax = xmax, xmin
+            item = QtWidgets.QListWidgetItem(f"🟧 SPAN {i}: [{xmin:.4g}, {xmax:.4g}]")
+            item.setData(QtCore.Qt.UserRole, ('span', i))
+            self.range_list.addItem(item)
+    
+        # Anchor points
+        for j, (xp, yp) in enumerate(self.current_state.anchor_points):
+            item = QtWidgets.QListWidgetItem(f"🟣 ANCHOR {j}: x={xp:.4g}, y={yp:.4g}")
+            item.setData(QtCore.Qt.UserRole, ('anchor', j))
+            self.range_list.addItem(item)
+    
+        # Restore selection if the row still exists
+        if self._selected_row is not None and self._selected_row < self.range_list.count():
+            self.range_list.setCurrentRow(self._selected_row)
         else:
-            idx = len(self.current_state.bg_ranges) - 1  # bottom of the list, for rapid-tap clear-all
-        del self.current_state.bg_ranges[idx]
-        self.selected_range_index = None
+            self._selected_row = None
+    
+        self.range_list.blockSignals(False)   
+    
+    def _remove_range(self):
+        """Remove the selected range (SPAN or anchor) and select the previous one."""
+        # If nothing selected, delete the last item
+        if self._selected_row is None:
+            # Delete the last item in the combined list
+            total = len(self.current_state.bg_ranges) + len(self.current_state.anchor_points)
+            if total == 0:
+                return
+            # Determine the last item's type and index by examining the last row of the list widget
+            last_row = total - 1
+            item = self.range_list.item(last_row)
+            if item is None:
+                return
+            data = item.data(QtCore.Qt.UserRole)
+            if data is None:
+                return
+            typ, idx = data
+            if typ == 'span':
+                if 0 <= idx < len(self.current_state.bg_ranges):
+                    del self.current_state.bg_ranges[idx]
+            elif typ == 'anchor':
+                if 0 <= idx < len(self.current_state.anchor_points):
+                    del self.current_state.anchor_points[idx]
+            else:
+                return
+            # After deletion, we have no selection, but we can set target row to last_row-1 if exists
+            target_row = last_row - 1
+            self._selected_row = target_row if target_row >= 0 else None
+        else:
+            # Delete the selected item
+            row = self._selected_row
+            item = self.range_list.item(row)
+            if item is None:
+                return
+            data = item.data(QtCore.Qt.UserRole)
+            if data is None:
+                return
+            typ, idx = data
+            if typ == 'span':
+                if 0 <= idx < len(self.current_state.bg_ranges):
+                    del self.current_state.bg_ranges[idx]
+            elif typ == 'anchor':
+                if 0 <= idx < len(self.current_state.anchor_points):
+                    del self.current_state.anchor_points[idx]
+            else:
+                return
+            # Determine new selection: try to stay at the same row, else go to previous
+            total = len(self.current_state.bg_ranges) + len(self.current_state.anchor_points)
+            if total == 0:
+                self._selected_row = None
+            else:
+                # If the same row now exists (i.e., the item that shifted up), keep it
+                if row < total:
+                    self._selected_row = row
+                else:
+                    # Otherwise, the last item was removed, so go to the previous row
+                    self._selected_row = total - 1 if total > 0 else None
+    
         self._save_state()
         self._refresh_range_list()
         self._refresh_plot()
+    def _on_range_item_clicked(self, item):
+        """Clicking a row selects/deselects it; no automatic deletion."""
+        row = self.range_list.row(item)
+        data = item.data(QtCore.Qt.UserRole)
+        if data is None:
+            return
+    
+        if self._selected_row == row:
+            # Already selected → deselect
+            self._selected_row = None
+            self.range_list.blockSignals(True)
+            self.range_list.setCurrentRow(-1)
+            self.range_list.blockSignals(False)
+            self._refresh_plot()
+            return
+    
+        # New selection
+        self._selected_row = row
+        self.range_list.blockSignals(True)
+        self.range_list.setCurrentRow(row)
+        self.range_list.blockSignals(False)
+        self._refresh_plot()
+    
+    
+    def _clear_all_ranges(self):
+        """Clear all ranges and anchor points."""
+        if not self.current_state.bg_ranges and not self.current_state.anchor_points:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Clear All Ranges",
+            "Remove all background ranges and anchor points?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.current_state.bg_ranges = []
+            self.current_state.anchor_points = []
+            self._selected_row = None
+            self._save_state()
+            self._refresh_range_list()
+            self._refresh_plot()
 
+    
+    def _fit_curve(self):
+        ### This needs a fit panel, where we can choose what type of fit to apply - mainly, this will be the ideal diode equation.
+        None
+    
+    
     def _fit_background(self):
-        """Fit background using selected mode"""
+        """Fit background using selected mode - for when user clicks 'Fit from selection'"""
         if not self.raw_xy_list or not self.current_state.bg_ranges:
             QtWidgets.QMessageBox.information(
                 self, "No selection", "Select at least one background range first."
@@ -1755,16 +2112,30 @@ class MainWindow(QtWidgets.QMainWindow):
         fitted_any = False
         
         for x, y in self.raw_xy_list:
-            # Collect points from all background ranges
-            x_bg = []
-            y_bg = []
-            for xmin, xmax in self.current_state.bg_ranges:
-                mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
-                x_bg.extend(x[mask])
-                y_bg.extend(y[mask])
+            # Separate SPAN and FIT ranges
+            span_ranges = []
+            for range_data in self.current_state.bg_ranges:
+                if len(range_data) >= 3:
+                    xmin, xmax, rtype = range_data[0], range_data[1], range_data[2]
+                else:
+                    xmin, xmax = range_data[0], range_data[1]
+                    rtype = RangeType.SPAN
+                
+                if rtype == RangeType.SPAN:
+                    span_ranges.append([xmin, xmax])
+                
             
-            if mode == BgRemovalMode.LINEAR:
-                # Linear fit
+            if mode == BgRemovalMode.CONNECT_END:
+                new_coeffs.append(None)
+                fitted_any = True
+                
+            elif mode == BgRemovalMode.LINEAR:
+                x_bg = []
+                y_bg = []
+                for xmin, xmax in span_ranges:
+                    mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                    x_bg.extend(x[mask])
+                    y_bg.extend(y[mask])
                 if len(x_bg) >= 2:
                     coeffs = np.polyfit(x_bg, y_bg, 1).tolist()
                     new_coeffs.append(coeffs)
@@ -1773,7 +2144,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     new_coeffs.append(None)
             
             elif mode == BgRemovalMode.POLY:
-                # Polynomial fit
+                x_bg = []
+                y_bg = []
+                for xmin, xmax in span_ranges:
+                    mask = (x >= min(xmin, xmax)) & (x <= max(xmin, xmax))
+                    x_bg.extend(x[mask])
+                    y_bg.extend(y[mask])
                 degree = self.current_state.poly_degree
                 if len(x_bg) >= degree + 1:
                     coeffs = np.polyfit(x_bg, y_bg, degree).tolist()
@@ -1783,17 +2159,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     new_coeffs.append(None)
             
             elif mode == BgRemovalMode.SPLINE:
-                # Spline - store coefficients as None since we'll compute on the fly
                 new_coeffs.append(None)
                 fitted_any = True
             
-            elif mode == BgRemovalMode.REGION_DELETE:
-                # Delete regions - no coefficients needed
+            elif mode == BgRemovalMode.EXPONENTIAL_DECAY:
                 new_coeffs.append(None)
                 fitted_any = True
             
-            elif mode == BgRemovalMode.CONNECT_END:
-                # Connect ends - no coefficients needed
+            elif mode == BgRemovalMode.MANUAL_GRADIENT:
                 new_coeffs.append(None)
                 fitted_any = True
     
@@ -1817,8 +2190,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- Selecting, editing and restoring text entry fields ---
     
     def _update_rcparams_from_ui(self):
-        """Update matplotlib rcParams from UI controls. 
-        Note that if you then load an rc_param dict from the advanced tab, that this will update the UI. This is how we can save plotting defaults."""
+        """
+        Update matplotlib rcParams from UI controls. 
+        Note that if you then load an rc_param dict from the advanced tab, that this will update the UI. This is how we can save plotting defaults.
+        """
     
         rc_updates = {
             # Font sizes
@@ -1861,18 +2236,19 @@ class MainWindow(QtWidgets.QMainWindow):
             setattr(self, f"DEFAULT_{edit_name}", default_value)
             setattr(self, edit_name, default_value)
         
+        
         # Reset user rcParams
         self._user_rcparams = {}
         
         # Reset matplotlib rcParams to defaults
         mpl.rcParams.update(self.RCPARAM_DEFAULTS)
         
-        # Update UI elements - this should now work properly
+        # Update UI elements
         self._update_ui_from_config()
         
         # Only apply figsize if NOT Real Size mode
         if self.EDIT_TOGGLE_STRETCH != 2:
-            self._apply_figsize(self.show_comment)
+            self._apply_figsize(self.EDIT_SHOW_COMMENT)
         
         self._refresh_plot()
         self._save_session_parameters()
@@ -1891,7 +2267,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_all_rcparams()
         self._refresh_plot()
         self._save_session_parameters()
-        
+    def _update_toggle_buttons(self):
+        """Set all toggle buttons from their EDIT_* variables, blocking signals."""
+        for var_name, btn in self._toggle_widgets.items():
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(getattr(self, var_name, False))
+                btn.blockSignals(False)
+            
     def _load_session_parameters(self):
         """Load saved parameter values from the session config"""
         SESSION_PATH = Path.home() / ".config" / "palmsens_gui" / "session.json"
@@ -1912,16 +2295,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 for edit_name in self.UI_ONLY_DEFAULTS.keys():
                     if edit_name in ui_config:
                         setattr(self, edit_name, ui_config[edit_name])
-                
-                # Load show_comment state
-                if 'show_comment' in ui_config:
-                    self.show_comment = ui_config['show_comment']
-                    # Update the toggle button
-                    if hasattr(self, 'comment_toggle'):
-                        self.comment_toggle.blockSignals(True)
-                        self.comment_toggle.setChecked(self.show_comment)
-                        self.comment_toggle.blockSignals(False)
-                
+                    
                 # Restore window state
                 if hasattr(self, 'EDIT_WINDOW_X'):
                     self._restore_window_state()
@@ -1931,10 +2305,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 
                 # Update UI elements
                 self._update_ui_from_config()
+                                
+                #Synchronise buttons
+                self._update_toggle_buttons()
                 
-                # Apply rcParams after loading, then make sure the EDIT_*
-                # fields reflect whatever the (higher-priority) rcParam
-                # overrides actually set, so the displayed values are honest.
+                # Apply rcParams after loading, then make sure the EDIT_* fields reflect whatever the (higher-priority) rcParam overrides actually set.
                 self._apply_all_rcparams()
                 self._sync_edit_vars_from_rcparams(self._user_rcparams)
                 self._update_ui_from_config()
@@ -1962,7 +2337,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ui_config[edit_name] = getattr(self, edit_name)
         
         # Save show_comment state
-        ui_config['show_comment'] = self.show_comment
+        ui_config['show_comment'] = self.EDIT_SHOW_COMMENT
         
         # Build rcParams config (only user-modified rcParams that differ from defaults)
         rc_defaults = self.RCPARAM_DEFAULTS
@@ -1970,9 +2345,9 @@ class MainWindow(QtWidgets.QMainWindow):
                       if k in rc_defaults and v != rc_defaults.get(k)}
         
         session_data = {
-            'ui_config': ui_config,
-            'current_rcparams': current_rc,
-        }
+                        'ui_config': ui_config,
+                        'current_rcparams': current_rc,
+                        }
         
         SESSION_PATH = Path.home() / ".config" / "palmsens_gui" / "session.json"
         SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1982,10 +2357,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- rcParam override file handling (Save / Load / Reset buttons) --------
 
     def _sync_edit_vars_from_rcparams(self, rc_dict, fallback_to_defaults=False):
-        """Keep the EDIT_* UI variables consistent with a given rcParams
-        dict, for every EDIT_* that maps to an rcParam key present in it.
-        With fallback_to_defaults=True, any mapped EDIT_* not present in
-        rc_dict is pulled from RCPARAM_DEFAULTS instead (used by Reset)."""
+        """
+        Keep the EDIT_* UI variables consistent with a given rcParams dict for every EDIT_* that maps to an rcParam key present in it.
+        Fallback simply forces rc_dict to be pulled from RCPARAM_DEFAULTS instead.
+        """
         for edit_name, mapping in self.UI_RCPCONFIG_MAP.items():
             if mapping is None:
                 continue
@@ -2001,8 +2376,9 @@ class MainWindow(QtWidgets.QMainWindow):
             setattr(self, edit_name, value)
 
     def _get_current_rcparam_diffs(self):
-        """Return the subset of rcParams (matching RCPARAM_DEFAULTS keys)
-        whose current mpl.rcParams value differs from the code default."""
+        """
+        Return the subset of rcParams (matching RCPARAM_DEFAULTS keys) whose current mpl.rcParams value differs from the code default.
+        """
         diffs = {}
         for key, default_val in self.RCPARAM_DEFAULTS.items():
             current_val = mpl.rcParams.get(key, default_val)
@@ -2011,9 +2387,11 @@ class MainWindow(QtWidgets.QMainWindow):
         return diffs
 
     def _save_rcparam_overrides(self):
-        """Persist the current rcParams (on top of the code defaults) to
-        disk, so this becomes the new baseline that loads automatically on
-        every future launch."""
+        """
+        Persist the current rcParams (on top of the code defaults) to disk.
+        This then becomes the new baseline that loads automatically on
+        every future launch.
+        """
         self._apply_all_rcparams()  # make sure EDIT_* edits are reflected in mpl.rcParams first
         diffs = self._get_current_rcparam_diffs()
         save_rcparams_override(diffs)
@@ -2023,20 +2401,22 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _load_rcparam_overrides(self):
-        """Reload the saved override file and apply it to the current
-        session (does not touch the file itself)."""
+        """
+        Reload the saved override file and apply it to the current session (does not touch the file itself).
+        """
         self._user_rcparams = load_rcparams_override()
         self._sync_edit_vars_from_rcparams(self._user_rcparams)
         self._apply_all_rcparams()
         self._update_ui_from_config()
         if self.EDIT_TOGGLE_STRETCH != 2:
-            self._apply_figsize(self.show_comment)
+            self._apply_figsize(self.EDIT_SHOW_COMMENT)
         self._refresh_plot()
         self._save_session_parameters()
 
     def _reset_rcparam_overrides(self):
-        """Discard saved overrides and go back to the defaults hardcoded in
-        get_rcparam_defaults(), deleting the override file."""
+        """
+        Discard saved overrides and return to hardcoded defaults get_rcparam_defaults(), deleting the override file.
+        """
         reply = QtWidgets.QMessageBox.question(
             self, "Reset rcParam overrides",
             "This deletes the saved rcParam override file and reverts to "
@@ -2052,7 +2432,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_all_rcparams()
         self._update_ui_from_config()
         if self.EDIT_TOGGLE_STRETCH != 2:
-            self._apply_figsize(self.show_comment)
+            self._apply_figsize(self.EDIT_SHOW_COMMENT)
         self._refresh_plot()
         self._save_session_parameters()
 
@@ -2105,14 +2485,14 @@ def get_rcparam_defaults():
                     'lines.linewidth': 1.5,
                     'lines.markeredgewidth': 1.5,
                     'lines.markersize': 5,
-                    'axes.linewidth': 1.0,           # Standard edge thickness
+                    'axes.linewidth': 1.0,           
                     
-                    # 4. Clean Tick Dimensions and Padding
-                    'xtick.major.size': 4,           # Clean standard major tick length
-                    'xtick.minor.size': 2.5,         # Clean standard minor tick length
-                    'xtick.major.width': 1.2,        # Clean standard major tick width
-                    'xtick.minor.width': 0.8,        # Clean standard minor tick width
-                    'xtick.major.pad': 4,            # Clean standard pad spacing
+                    # Tick Dimensions and Padding
+                    'xtick.major.size': 4,           
+                    'xtick.minor.size': 2.5,         
+                    'xtick.major.width': 1.2,        
+                    'xtick.minor.width': 0.8,        
+                    'xtick.major.pad': 4,            
                     'xtick.minor.pad': 4,
                     'xtick.minor.visible': True,
                     
@@ -2124,7 +2504,7 @@ def get_rcparam_defaults():
                     'ytick.minor.pad': 4,
                     'ytick.minor.visible': True,
                     
-                    # 5. Legend Structural Padding (Kept intact)
+                    # Legend Structural Padding (Kept intact)
                     'legend.borderpad': 0.4,
                     'legend.labelspacing': 0.4,
                     'legend.handlelength': 1.25,
