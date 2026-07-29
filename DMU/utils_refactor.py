@@ -6,6 +6,7 @@ Created on Tue Aug 18 17:06:05 2020
 Github: https://github.com/DeltaMod
 """
 import os
+from collections import defaultdict
 import sys
 import time
 import re
@@ -53,6 +54,21 @@ logger = get_custom_logger("DMU_UTILS")
 # =============================================================================
 #  Keithley data importer Helper functions
 # =============================================================================
+
+def strip_measurement_suffix(stem: str) -> str:
+    return re.sub(r'_(2Term|4Term|LOG)$', '', stem, flags=re.IGNORECASE)
+
+def find_common_prefix(stems):
+    if not stems:
+        return ""
+    prefix = stems[0]
+    for s in stems[1:]:
+        while not s.startswith(prefix):
+            prefix = prefix[:-1]
+            if not prefix:
+                return ""
+    return prefix
+
 def get_sec(time_str: str) -> float:
     try:
         h, m, s = map(float, time_str.split(':'))
@@ -112,7 +128,7 @@ KEYDEF = {
 }
 
 # =============================================================================
-# LogBook class (unchanged)
+# LogBook class
 # =============================================================================
 class LogBook:
     def __init__(self, file_path: str):
@@ -290,11 +306,10 @@ class KeithleyDataReader:
     def _parse_run_sheet(self, xls, sheet_name: str, file_path: str, settings: Dict) -> Optional[Dict]:
         sheet = xls.sheet_by_name(sheet_name)
         cols = {}
-        cols["col headers"] = []
         cols["Data directory"] = file_path
         col_dict = {}
         header_order = []
-
+    
         for col_index in range(sheet.ncols):
             col_data = [x for x in sheet.col_values(col_index) if x != ""]
             if not col_data:
@@ -305,112 +320,136 @@ class KeithleyDataReader:
                 data = data[0]
             col_dict[header] = data
             header_order.append(header)
-
-        cols["column_order"] = header_order   # preserve order
-        # keep all raw columns
+    
+        cols["column_order"] = header_order
         for h in header_order:
             cols[h] = col_dict[h]
-
-        # ---- Identify main applied voltage and measured current ----
-        applied_col = None
-        measured_col = None
-
-        # 1) Try using settings "Colname"
+    
+        # ---- Identify applied voltage and measured current columns (ALL of them) ----
+        applied_cols = []
+        measured_cols = []
+    
         colnames = settings.get("Colname")
         if colnames is not None:
             if isinstance(colnames, str):
                 colnames = [colnames]
             for name in colnames:
                 if name in col_dict:
-                    applied_col = name
-                    # The measured column is the one immediately before applied in order
-                    # because order is measured|applied|measured|applied...
-                    idx = header_order.index(applied_col)
+                    applied_cols.append(name)
+                    idx = header_order.index(name)
                     if idx > 0:
-                        measured_col = header_order[idx - 1]
-                    break
-
-        # 2) If not found, try heuristic (ends with 'V' or contains "voltage")
-        if applied_col is None:
+                        measured_cols.append(header_order[idx - 1])
+    
+        # If nothing found via Colname, try heuristic (columns ending with 'V')
+        if not applied_cols:
             for h in header_order:
                 if h.endswith('V') and not any(s in h for s in ["START", "STOP"]):
-                    applied_col = h
-                    break
-                elif "voltage" in h.lower():
-                    applied_col = h
-                    break
-            if applied_col is not None:
-                idx = header_order.index(applied_col)
-                if idx > 0:
-                    measured_col = header_order[idx - 1]
-
-        # 3) Fallback: first two columns as (measured, applied)
-        if applied_col is None and len(header_order) >= 2:
-            applied_col = header_order[1]
-            measured_col = header_order[0]
-
-        if applied_col is None or measured_col is None:
+                    applied_cols.append(h)
+                    idx = header_order.index(h)
+                    if idx > 0:
+                        measured_cols.append(header_order[idx - 1])
+                    break   # only grab the first pair in heuristic mode
+    
+        # Fallback: first two columns
+        if not applied_cols and len(header_order) >= 2:
+            applied_cols.append(header_order[1])
+            measured_cols.append(header_order[0])
+    
+        if not applied_cols or not measured_cols:
             logger.warning(f"Could not identify applied/measured columns in {sheet_name}")
             return None
-
-        cols['voltage'] = col_dict.get(applied_col, [])
-        cols['current'] = col_dict.get(measured_col, [])
-        # Store which columns were chosen
-        cols['applied_col'] = applied_col
-        cols['measured_col'] = measured_col
-
+    
+        # Store all pairs for multi‑SMU handling
+        cols['applied_cols'] = applied_cols
+        cols['measured_cols'] = measured_cols
+    
+        # Keep primary pair for legacy access
+        cols['voltage'] = col_dict.get(applied_cols[0], [])
+        cols['current'] = col_dict.get(measured_cols[0], [])
+        cols['applied_col'] = applied_cols[0]
+        cols['measured_col'] = measured_cols[0]
+    
         return cols
 
     def _process_run_data(self, cols: Dict, stats: Dict, sheet_name: str, file_path: str):
-        # ensure lists
-        if not isinstance(stats['Npts'], list):
+        # ---------- Ensure all stats values that will be indexed are lists ----------
+        if not isinstance(stats.get('Npts', []), list):
             for key in list(stats.keys()):
                 if not isinstance(stats[key], list):
                     stats[key] = [stats[key]]
-
-        npts_values = [float(x) for x in stats['Npts'] if isinstance(x, (int, float))]
-        if not npts_values:
-            logger.warning(f"No valid Npts in {sheet_name}, skipping sweep processing")
-            return
-
-        main_col = stats['Npts'].index(max(npts_values))
-        npts = int(stats['Npts'][main_col])
-
+    
+        # ---------- Robust Npts handling ----------
+        npts_raw = stats.get('Npts', 0)
+        # Now npts_raw is guaranteed to be a list
+        if not isinstance(npts_raw, list):
+            npts_raw = [npts_raw]   # just in case
+    
+        # Convert each entry to an integer, treating non‑numeric as 0
+        npts_ints = []
+        for v in npts_raw:
+            try:
+                npts_ints.append(int(float(v)))
+            except (ValueError, TypeError):
+                npts_ints.append(0)
+    
+        # Choose the largest valid value and its index
+        max_npts = max(npts_ints)
+        main_col = npts_ints.index(max_npts) if max_npts > 0 else 0
+    
+        # If no valid Npts found, fall back to the length of the current column
+        if max_npts == 0:
+            if 'current' in cols and isinstance(cols['current'], list):
+                max_npts = len(cols['current'])
+                main_col = 0
+            else:
+                logger.warning(f"No valid Npts and no current data in {sheet_name}, skipping")
+                return
+    
+        npts = int(max_npts)
+    
+        # ---------- Time per point ----------
         try:
             exec_time = stats.get('Execution Time', '0:00:00')
-            time_per_point = get_sec(exec_time) / max(npts_values) if npts_values else 0
+            time_per_point = get_sec(exec_time) / npts if npts else 0
         except:
             time_per_point = 0
         stats["Time Per Point"] = time_per_point
         stats["NWID"] = ["NW1", "NW1", "NW2", "NW2"]
-
+    
         try:
             cols["Time"] = np.linspace(0, npts * time_per_point, npts)
         except:
             cols["Time"] = np.linspace(0, npts, npts)
-
-        if isinstance(stats["VStep"][main_col], str):
-            stats["VStep"][main_col] = float(stats["VStep"][main_col])
-
+    
+        # ---------- Ensure VStep is float ----------
+        try:
+            if isinstance(stats["VStep"][main_col], str):
+                stats["VStep"][main_col] = float(stats["VStep"][main_col])
+        except (ValueError, TypeError):
+            stats["VStep"][main_col] = 0.0   # safe fallback
+    
+        # ---------- Detect sweep indices ----------
         try:
             if (stats["FBSweep"][main_col] == True and
                 npts == 2 * (1 + int(abs(stats["VStart"][main_col] - stats["VStop"][main_col]) / abs(stats["VStep"][main_col])))):
                 sweep_indices = [0, int(npts / 2), npts]
             else:
-                sweep_indices = [0, max(npts_values)]
+                sweep_indices = [0, npts]
         except:
             sweep_indices = [0, npts]
-
+    
         print(f"{os.sep.join(file_path.split(os.sep)[-3:])} - {sheet_name}: {stats['Operation Mode'][main_col]}")
-
+    
+        # ---------- Segment sweep for linear sweeps ----------
         if "Voltage Linear Sweep" in stats["Operation Mode"]:
-            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("col headers", "Data directory", "column_order")]
+            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("Data directory", "column_order")]
             for k in list_keys:
                 cols[k] = segment_sweep(cols[k], sweep_indices)
-
+    
+        # ---------- Special handling for curing sweeps ----------
         if ("Voltage List Sweep" in stats["Operation Mode"] and
             "curing" in stats["Test Name"].lower()):
-            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("col headers", "Data directory", "column_order")]
+            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("Data directory", "column_order")]
             tps = turning_points(cols["voltage"])
             for k in list_keys:
                 cols[k] = segment_sweep(cols[k], tps)
@@ -481,13 +520,68 @@ class KeithleyDataReader:
         cols["emitter"] = emitter_dict
         cols["detector"] = detector_dict
 
+def _find_matching_log(data_stem: str, log_files: List[Path]) -> Optional[Path]:
+    """
+    Given a data file stem (without extension) and a list of LOG file Paths,
+    return the LOG file Path whose stem best matches the data file stem.
+    Dashes and underscores are treated as identical for matching.
+
+    Strategy:
+      1. Perfect candidate: data_stem with last '_...' replaced by '_LOG'.
+         Example: DFR1_IG_BL3_2Term -> DFR1_IG_BL3_LOG
+      2. Longest common prefix with any log file stem (minimum 50% length of data_stem).
+    """
+    # Normalise dashes/underscores for comparison
+    data_clean = data_stem.replace('-', '_')
+
+    # --- perfect candidate ---
+    if '_' in data_clean:
+        candidate = data_clean.rsplit('_', 1)[0] + '_LOG'
+        for lf in log_files:
+            if lf.stem.replace('-', '_') == candidate:
+                return lf
+
+    # --- longest common prefix fallback ---
+    best_match = None
+    best_len = 0
+    min_len = max(1, len(data_clean) // 2)
+
+    for lf in log_files:
+        log_clean = lf.stem.replace('-', '_')
+        common = os.path.commonprefix([data_clean, log_clean])
+        if len(common) >= min_len and len(common) > best_len:
+            best_len = len(common)
+            best_match = lf
+
+    return best_match
+
+
 # =============================================================================
 # Public API
 # =============================================================================
+
+
 def Keithley_xls_read_file(file_path: str, logbook: Optional[LogBook] = None) -> Dict[str, Any]:
+    """
+    Read a single Keithley .xls file.
+    If logbook is not provided, the function automatically searches for a matching
+    LOG file in the same directory (using _find_matching_log).
+    """
+    # Auto-detect logbook if none supplied
+    if logbook is None:
+        directory = Path(file_path).parent
+        log_files = [f for f in directory.glob("*.xls") if "LOG" in f.stem.upper()]
+        matched = _find_matching_log(Path(file_path).stem, log_files)
+        if matched is not None:
+            try:
+                logbook = LogBook(str(matched))
+            except Exception as e:
+                logger.warning(f"Could not parse logbook {matched.name}: {e}")
+
     reader = KeithleyDataReader(logbook)
     file_data = reader.read_file(file_path)
     result = {}
+
     if "Settings" in file_data:
         settings_dict = file_data.pop("Settings")
         for run_key, run_data in file_data.items():
@@ -508,25 +602,366 @@ def Keithley_xls_read_file(file_path: str, logbook: Optional[LogBook] = None) ->
             log_info = logbook.get_run_info(run_key)
             if log_info:
                 run_data['LOG'] = log_info
+
     return result
 
+
 def Keithley_xls_read(directory: str, **kwargs) -> Dict[str, Any]:
+    """
+    Read all .xls Keithley data files in a directory.
+    For each data file, the best matching LOG file is automatically detected
+    (using _find_matching_log) and used as the logbook.
+    """
     directory = Path(directory)
     all_files = list(directory.glob("*.xls"))
     log_files = [f for f in all_files if "LOG" in f.stem.upper()]
     data_files = [f for f in all_files if "LOG" not in f.stem.upper()]
 
-    logbook = None
-    if log_files:
-        try:
-            logbook = LogBook(str(log_files[0]))
-        except:
-            logger.warning("Could not parse logbook, proceeding without.")
-
     results = {}
     for df in data_files:
+        matched = _find_matching_log(df.stem, log_files)
+        logbook = None
+        if matched is not None:
+            try:
+                logbook = LogBook(str(matched))
+            except Exception as e:
+                logger.warning(f"Could not parse logbook {matched.name}: {e}")
+
         try:
             results[df.stem] = Keithley_xls_read_file(str(df), logbook)
         except Exception as e:
             logger.error(f"Error reading {df.name}: {e}")
+
     return results
+
+def convert_log_xls_to_dict(xls_path: str) -> dict:
+    """
+    Returns a dict: { device_name: { '2port': {...}, '4port': {...} } }
+    Uses original NW labels; common ground SMUs are labelled as their nanowire.
+    """
+
+    log = LogBook(xls_path)
+    flat = log.data
+    positions = flat.get('positions', {})
+
+    # Physical column order and NW mapping from header
+    smu_to_nw = {}          # SMU number → 'NW1'/'NW2'
+    smu_order = []          # physical column order of SMU numbers
+    for pos_key in sorted(positions.keys()):   # pos1, pos2, pos3, pos4
+        info = positions[pos_key]
+        smu_num = int(info['SMU'].replace('SMU', ''))
+        nw = info.get('NW')
+        smu_to_nw[smu_num] = nw
+        smu_order.append(smu_num)
+
+    device_name = None
+    runs_2port = {}
+    runs_4port = {}
+
+    for key, entry in flat.items():
+        if key == 'positions' or key.startswith('pos'):
+            continue
+        if not key.isdigit():
+            continue
+
+        if device_name is None:
+            device_name = entry.get('Device', 'Unlabelled')
+
+        # Build SMU1..SMU4 assignments
+        smu_assignments = {}
+        for smu_num in range(1, 5):
+            raw = entry.get(f'SMU{smu_num}', 'NA')
+            if isinstance(raw, float) and raw == 0.0:
+                raw = 'NA'
+            raw = str(raw).strip().lower()
+
+            # NA or empty → null (not used)
+            if raw in ('na', ''):
+                role = None
+            else:
+                # Any other value (sweep, pulse, common ground, etc.)
+                # → assign the nanowire label from the header
+                nw = smu_to_nw.get(smu_num)
+                role = nw if nw else None   # fallback to None if unknown
+            smu_assignments[f'SMU{smu_num}'] = role
+
+        # Determine measurement type: presence of both NW1 and NW2 → 4‑port
+        present_nws = set(v for v in smu_assignments.values() if v is not None)
+        mtype = '4port' if ('NW1' in present_nws and 'NW2' in present_nws) else '2port'
+
+        # SMU Order = all SMU channels (physical order) that have a non‑null assignment
+        smu_order_list = [
+            n for n in smu_order
+            if smu_assignments.get(f'SMU{n}') is not None
+        ]
+
+        light_mic = entry.get('Light Microscope', 0)
+        try:
+            light_mic = bool(int(light_mic))
+        except:
+            light_mic = False
+
+        run_info = {
+            **smu_assignments,               # SMU1 … SMU4 (NW1/NW2 or null)
+            'SMU Order': smu_order_list,
+            'LightMicroscope': light_mic,
+            'Comment': ''
+        }
+
+        if mtype == '2port':
+            runs_2port[key] = run_info
+        else:
+            runs_4port[key] = run_info
+
+    if device_name is None:
+        device_name = 'UnknownDevice'
+
+    return {device_name: {'2port': runs_2port, '4port': runs_4port}}
+
+
+# ----------------------------------------------------------------------
+# Process one folder: merge all LOG.xls into a single aggregate JSON
+# ----------------------------------------------------------------------
+def process_folder(folder: Path):
+    """Convert all LOG.xls files in the folder and save an aggregated JSON."""
+    xls_files = list(folder.glob("*.xls"))
+    log_files = [f for f in xls_files if "LOG" in f.stem.upper()]
+    data_files = [f for f in xls_files if "LOG" not in f.stem.upper()]
+
+    if not log_files or not data_files:
+        return
+
+    # Common prefix, truncated at the last underscore
+    stems = [strip_measurement_suffix(f.stem).replace('-', '_') for f in data_files]
+    common = find_common_prefix(stems)
+    if common:
+        if '_' in common:
+            common = common.rsplit('_', 1)[0]      # keep only up to last segment
+    else:
+        common = Path(data_files[0].stem).split('_')[0]
+    common = common.rstrip('_')
+
+    # Merge all logbooks in this folder
+    aggregated = {}
+    for log_path in log_files:
+        try:
+            dev_dict = convert_log_xls_to_dict(str(log_path))
+            for device, content in dev_dict.items():
+                if device in aggregated:
+                    for mtype in ['2port', '4port']:
+                        aggregated[device].setdefault(mtype, {}).update(content.get(mtype, {}))
+                else:
+                    aggregated[device] = content
+        except Exception as e:
+            print(f"Error converting {log_path}: {e}")
+
+    if not aggregated:
+        return
+
+    output_name = f"{common}_LOG.json"
+    output_path = folder / output_name
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(aggregated, f, indent=2, ensure_ascii=False)
+    print(f"Created {output_path}")
+
+
+# ----------------------------------------------------------------------
+# Walk the entire directory tree and process every folder
+# ----------------------------------------------------------------------
+def aggregate_all_logs(root_dir: str,skip_dupes=True):
+    """
+    Example use:
+        root_folder_1 = "/home/vidar/mnt/Box/PhD/Lab Data/Device Data/Kiethley Probe Station/DFR1_RAW_DATA/"
+        root_folder_2 = "/home/vidar/mnt/Box/PhD/Lab Data/Device Data/Kiethley Probe Station/DFR2_RAW_DATA/"
+
+        aggregate_all_logs(root_folder_1)
+        aggregate_all_logs(root_folder_2)
+    """
+    root = Path(root_dir)
+    for current_dir, dirs, files in os.walk(root):
+        # Process only if the folder contains .xls files
+        
+        if any(f.endswith('.xls') for f in files):
+            if skip_dupes:
+                if any(f.endswith('.json') for f in files):
+                    print("Json already present in " + current_dir)
+                    continue
+            
+            process_folder(Path(current_dir))
+
+
+
+# ----------------------------------------------------------------------
+# Helper: group name from full device name
+# ----------------------------------------------------------------------
+def get_device_group(device_name: str) -> str:
+    """Return the group prefix (everything before the last underscore)."""
+    # Normalise dashes to underscores for consistency
+    normalised = device_name.replace('-', '_')
+    if '_' in normalised:
+        return normalised.rsplit('_', 1)[0]
+    return normalised
+
+# ----------------------------------------------------------------------
+# Scan root and build group → subdevice → log_info mapping
+# ----------------------------------------------------------------------
+def discover_device_groups(root_dir: str) -> Dict[str, Dict[str, Dict]]:
+    """
+    Walk root_dir, find all *_LOG.json files, and build:
+        group -> {
+            subdevice_name -> {
+                'log_path': str,          # path to the log JSON
+                'runs': {                 # all runs for this subdevice
+                    run_number: {         # e.g. '758'
+                        '2port': {...},   # run info from JSON
+                        '4port': {...}
+                    }
+                }
+            }
+        }
+    """
+    root = Path(root_dir)
+    groups = {}
+    
+    for log_file in root.rglob('*_LOG.json'):
+        try:
+            with open(log_file, 'r') as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Skipping {log_file}: {e}")
+            continue
+        
+        # Each JSON has top-level device names
+        for device, content in data.items():
+            group = get_device_group(device)
+            # Subdevice is the last part after the group prefix + underscore
+            # e.g. device = DFR1_GG_BL1, group = DFR1_GG, sub = BL1
+            normalised_device = device.replace('-', '_')
+            if normalised_device.startswith(group + '_'):
+                sub = normalised_device[len(group)+1:]
+            else:
+                sub = normalised_device  # fallback
+            
+            if group not in groups:
+                groups[group] = {}
+            if sub not in groups[group]:
+                groups[group][sub] = {
+                    'log_path': str(log_file),
+                    'runs': {}
+                }
+            # Merge runs from both 2port and 4port
+            for mtype in ['2port', '4port']:
+                runs = content.get(mtype, {})
+                for run_num, run_info in runs.items():
+                    groups[group][sub]['runs'][run_num] = {
+                        'measurement_type': mtype,
+                        **run_info
+                    }
+    return groups
+
+# ----------------------------------------------------------------------
+# Load full measurement data for a subdevice
+# ----------------------------------------------------------------------
+def load_subdevice_data(log_path: str, device_name: str) -> Dict[str, Any]:
+    """
+    Given the path to the LOG.json and the device name,
+    find the matching .xls files in that folder and load all runs.
+    Returns dict: run_key -> run_data (with 'LOG' already inserted).
+    """
+    folder = Path(log_path).parent
+    # Find .xls files that belong to this device
+    # Normalise device name to match file naming conventions
+    device_pattern = device_name.replace('-', '_')
+    xls_files = [
+        f for f in folder.glob('*.xls')
+        if 'LOG' not in f.stem.upper()
+        and device_pattern in f.stem.upper().replace('-', '_')
+    ]
+    if not xls_files:
+        return {}
+
+    # We'll use your existing Keithley_xls_read_file but pass logbook=None
+    # because we'll inject the log info ourselves from the aggregated data.
+    # However, we need the function imported.
+
+    all_runs = {}
+    for xls_path in xls_files:
+        try:
+            file_data = Keithley_xls_read_file(str(xls_path), logbook=None)
+        except Exception as e:
+            print(f"Error reading {xls_path}: {e}")
+            continue
+        if file_data is None:
+            continue
+        # Enrich with log info later when we merge
+        for run_key, run_data in file_data.items():
+            all_runs[run_key] = run_data
+    return all_runs
+
+# ----------------------------------------------------------------------
+# Build aggregated data for a specific group (with cache)
+# ----------------------------------------------------------------------
+def build_group_data(root_dir: str, group: str,
+                     force_reload: bool = False,
+                     cache_dir: Optional[str] = None) -> Dict[str, Dict]:
+    """
+    For the given group, load all measurement data for all its subdevices.
+    Returns dict: { subdevice_name -> { run_key: run_data } }
+    The run_data already contains the 'LOG' field from the log JSON.
+    
+    Caching: if cache_dir is provided, a pickle file <group>_data.pkl is saved/loaded.
+    """
+    if cache_dir is None:
+        cache_dir = root_dir
+    cache_path = Path(cache_dir) / f"{group}_data.pkl"
+
+    # Try to load from cache if not forced
+    if not force_reload and cache_path.exists():
+        # Check if any log file is newer than the cache
+        cache_mtime = cache_path.stat().st_mtime
+        # We need the list of log files used for this group
+        groups = discover_device_groups(root_dir)
+        if group in groups:
+            subdevices = groups[group]
+            log_files = set(info['log_path'] for info in subdevices.values())
+            if all(Path(lf).stat().st_mtime <= cache_mtime for lf in log_files):
+                print(f"Loading cached data from {cache_path}")
+                with open(cache_path, 'rb') as f:
+                    return pickle.load(f)
+
+    # Load fresh data
+    groups = discover_device_groups(root_dir)
+    if group not in groups:
+        print(f"Group '{group}' not found.")
+        return {}
+
+    subdevices = groups[group]
+    aggregated = {}
+
+    for sub, info in subdevices.items():
+        log_path = info['log_path']
+        device_name = f"{group}_{sub}".replace('_', '-')  # reconstruct original device name
+        # Load measurement data
+        runs = load_subdevice_data(log_path, device_name)
+        # Now attach log metadata to each run
+        for run_num, run_info in info['runs'].items():
+            run_key = f"Run{run_num}" if not run_num.startswith("Run") else run_num
+            if run_key in runs:
+                runs[run_key]['LOG'] = run_info
+        aggregated[sub] = runs
+
+    # Save cache
+    if cache_dir:
+        with open(cache_path, 'wb') as f:
+            pickle.dump(aggregated, f)
+        print(f"Cached data saved to {cache_path}")
+
+    return aggregated
+
+# ----------------------------------------------------------------------
+# Convenience: list all groups
+# ----------------------------------------------------------------------
+def list_groups(root_dir: str) -> List[str]:
+    groups = discover_device_groups(root_dir)
+    return sorted(groups.keys())
+
