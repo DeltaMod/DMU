@@ -2,7 +2,7 @@
 """
 Lumerical Data Handling
 Created on Tue Aug 18 17:06:05 2020
-@author: Vidar Flodgren
+@author: DeltaMod
 Github: https://github.com/DeltaMod
 """
 import os
@@ -33,6 +33,7 @@ import mat73
 import pickle
 from typing import Dict, List, Optional, Any, Union, Tuple
 from pathlib import Path
+import ast
 # ---------- HANDLE IMPORTS FOR BOTH PACKAGE AND DEBUG ----------
 try:
     # Running directly from file in debug
@@ -54,6 +55,37 @@ logger = get_custom_logger("DMU_UTILS")
 # =============================================================================
 #  Keithley data importer Helper functions
 # =============================================================================
+
+
+def _convert(val):
+    if isinstance(val, list):
+        return [_convert(x) for x in val]
+    if isinstance(val, tuple):
+        return tuple(_convert(x) for x in val)
+    if isinstance(val, dict):
+        return {k: _convert(v) for k, v in val.items()}
+    if isinstance(val, str):
+        for typ in (int, float):
+            try:
+                return typ(val)
+            except ValueError:
+                continue
+        # optional bool/None
+        if val.lower() == 'true': return True
+        if val.lower() == 'false': return False
+        if val.lower() == 'none': return None
+        return val
+    return val
+
+def convert_values(d):
+    out = {}
+    for k, v in d.items():
+        try:
+            parsed = ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            parsed = v
+        out[k] = _convert(parsed)
+    return out
 
 def strip_measurement_suffix(stem: str) -> str:
     return re.sub(r'_(2Term|4Term|LOG)$', '', stem, flags=re.IGNORECASE)
@@ -373,33 +405,18 @@ class KeithleyDataReader:
 
     def _process_run_data(self, cols: Dict, stats: Dict, sheet_name: str, file_path: str):
         # ---------- Ensure all stats values that will be indexed are lists ----------
-        if not isinstance(stats.get('Npts', []), list):
-            for key in list(stats.keys()):
-                if not isinstance(stats[key], list):
-                    stats[key] = [stats[key]]
-    
-        # ---------- Robust Npts handling ----------
-        npts_raw = stats.get('Npts', 0)
-        # Now npts_raw is guaranteed to be a list
-        if not isinstance(npts_raw, list):
-            npts_raw = [npts_raw]   # just in case
-    
-        # Convert each entry to an integer, treating non‑numeric as 0
-        npts_ints = []
-        for v in npts_raw:
-            try:
-                npts_ints.append(int(float(v)))
-            except (ValueError, TypeError):
-                npts_ints.append(0)
-    
+        stats = convert_values(stats)
+        
         # Choose the largest valid value and its index
-        max_npts = max(npts_ints)
-        main_col = npts_ints.index(max_npts) if max_npts > 0 else 0
+        max_npts = max([val if type(val)==int else 0 for val in stats["Npts"]])
+        main_col = stats["Npts"].index(max_npts) if max_npts > 0 else 0
     
         # If no valid Npts found, fall back to the length of the current column
+        max_npts = 0
         if max_npts == 0:
             if 'current' in cols and isinstance(cols['current'], list):
                 max_npts = len(cols['current'])
+                print(max_npts)
                 main_col = 0
             else:
                 logger.warning(f"No valid Npts and no current data in {sheet_name}, skipping")
