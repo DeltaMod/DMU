@@ -44,7 +44,7 @@ import textwrap
 from pathlib import Path
 from dataclasses import dataclass, field, asdict, fields as dataclass_fields
 from typing import Optional
-
+import io 
 import numpy as np
 
 # Must be set before QApplication is constructed to avoid pyQT5 high DPI scaling.
@@ -496,6 +496,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_meas_index: Optional[int] = None
         self.current_filename: Optional[str] = None
         
+        
         ## -- plotting parameters:
         
         self.RCPARAM_DEFAULTS = get_rcparam_defaults()
@@ -700,16 +701,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas_container = QtWidgets.QWidget()
         canvas_container_layout = QtWidgets.QVBoxLayout(self.canvas_container)
         canvas_container_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_container_layout.setAlignment(Qt.AlignCenter)
         canvas_container_layout.addWidget(self.canvas)
         self.display_stack.addWidget(self.canvas_container)  
         
         # --- Image label (for Real Size mode) ---
         self.image_label = QtWidgets.QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.image_label.setStyleSheet("background-color: white; border: 1px solid #ccc;")
-        self.display_stack.addWidget(self.image_label)  
+        self.image_label.setStyleSheet("background-color: #2b2b2b;")  # dark grey
+        
+        self.image_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+        self.image_label.setMinimumSize(0, 0)
+        self.canvas_container.layout().addWidget(self.canvas)
+        self.canvas_container.layout().addWidget(self.image_label)
+        self.image_label.hide()
         
         toolbar = NavigationToolbar(self.canvas, self)
         toolbar.setIconSize(QtCore.QSize(20, 20))
@@ -826,7 +830,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.comment_toggle)
         self._toggle_widgets['EDIT_SHOW_COMMENT'] = self.comment_toggle
         
-        self.span_show_toggle = QtWidgets.QPushButton("Hide Spans")
+        self.span_show_toggle = QtWidgets.QPushButton("Hide Fit")
         self.span_show_toggle.setCheckable(True)
         self.span_show_toggle.toggled.connect(self._toggle_spans)
         layout.addWidget(self.span_show_toggle)
@@ -1080,35 +1084,15 @@ class MainWindow(QtWidgets.QMainWindow):
     
     # -- Plotting -------------------------------------------------------------
     def _render_figure_to_pixmap(self):
-        """Render the current figure to a QPixmap at the specified DPI"""
+        """Render the current figure to a QPixmap at the current figure size and DPI."""
+        buf = io.BytesIO()
+        # Save the figure as PNG using the current figure's DPI and size
         
-        # Ensure figure is properly sized for export
-        fig_w = self.EDIT_FIGSIZE_X
-        fig_h = self.EDIT_FIGSIZE_Y
-        if self.EDIT_SHOW_COMMENT:
-            fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
-        
-        self.fig.set_size_inches(fig_w, fig_h)
-        self.fig.set_dpi(self.EDIT_FIGURE_DPI)
-        
-        # The export should respect pre-set bounds so that we have the same size figure each time
-        if self.EDIT_SHOW_COMMENT:
-            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
-        else:
-            self.fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.08)
-        
-        # Render at full resolution
-        width = int(fig_w * self.EDIT_FIGURE_DPI)
-        height = int(fig_h * self.EDIT_FIGURE_DPI)
-        
-        # Use the canvas's renderer for proper 
-        pixmap = QPixmap(width, height)
-        pixmap.fill(Qt.transparent)
-        
-        painter = QPainter(pixmap)
-        self.fig.canvas.render(painter)
-        painter.end()
-        
+        self.fig.savefig(buf, format='png', dpi=self.fig.get_dpi())
+        buf.seek(0)
+        pixmap = QPixmap()
+        pixmap.loadFromData(buf.read())
+        buf.close()
         return pixmap
 
     def _update_axes_frame(self, ax, mode):
@@ -1127,28 +1111,27 @@ class MainWindow(QtWidgets.QMainWindow):
             for spine in ax.spines.values():
                 spine.set_linewidth(1)
                 spine.set_color('black')
-                
+            
     def _cycle_stretch_mode(self):
         """Cycle through the 3 stretch modes with proper cleanup"""
         self.EDIT_TOGGLE_STRETCH = (self.EDIT_TOGGLE_STRETCH + 1) % 3
         self._update_button_text()
-        
-        # Clear any stale image or canvas artifacts
-        if self.EDIT_TOGGLE_STRETCH == 2: #Real size mode
-            
+    
+        # Clean up span selector if entering image‑preview mode
+        if self.EDIT_TOGGLE_STRETCH == 2:
             if self.span_selector is not None:
                 self.span_selector.disconnect_events()
                 self.span_selector = None
                 self.add_range_btn.setChecked(False)
-            self.image_label.clear()
-        else: # Switch to Stretch/Scale mode
-            self.image_label.clear()
-            if self.EDIT_TOGGLE_STRETCH == 1:
-                self._apply_scale_to_fit_canvas_size()
-        
+    
+        # Always clear the image label (previous pixmap)
+        self.image_label.clear()
+    
+        # Update canvas size policy and refresh the plot
         self._update_canvas_size_policy()
-        self._refresh_plot()
-        self._save_session_parameters()  # Save the mode state
+        self._refresh_plot()   
+    
+        self._save_session_parameters()
     
     def _update_display_mode(self):
         """Switch between canvas and image display"""
@@ -1200,6 +1183,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Save session when closing the window"""
         self._save_session_parameters()
         event.accept()    
+        
     def _apply_figsize(self, comment: bool):
         # Skip if in Real Size mode so that the preview for the saved figure can be seen
         if self.EDIT_TOGGLE_STRETCH == 2:
@@ -1212,32 +1196,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
     
     def _apply_scale_to_fit_canvas_size(self):
-        """Resize the canvas widget so it preserves the figure's own aspect ratio"""
-        if not hasattr(self, "display_stack"):
+        container = self.canvas_container
+        container_size = container.size()
+        if container_size.width() <= 0 or container_size.height() <= 0:
             return
-        container_size = self.display_stack.size()
-        avail_w = max(container_size.width() - 20, 1)
-        avail_h = max(container_size.height() - 20, 1)
     
         fig_w = self.EDIT_FIGSIZE_X
         fig_h = self.EDIT_FIGSIZE_Y
         if self.EDIT_SHOW_COMMENT:
-            fig_w = fig_w * self.EDIT_COMMENT_WIDTH_FACTOR
-        
-        # Get the actual figure size in pixels at current DPI
-        dpi = self.EDIT_FIGURE_DPI
-        actual_w = fig_w * dpi
-        actual_h = fig_h * dpi
-        
-        # Calculate scaling to fit within container
-        scale_w = avail_w / actual_w if actual_w > 0 else 1
-        scale_h = avail_h / actual_h if actual_h > 0 else 1
-        scale = min(scale_w, scale_h, 1.0)  # Don't scale up beyond 1x
-        
-        new_w = int(actual_w * scale)
-        new_h = int(actual_h * scale)
-        
-        self.canvas.setFixedSize(max(new_w, 1), max(new_h, 1))
+            fig_w *= self.EDIT_COMMENT_WIDTH_FACTOR
+            
+        aspect = fig_w / fig_h
+    
+        avail_w = container_size.width() - 4
+        avail_h = container_size.height() - 4
+    
+        if avail_w / avail_h > aspect:
+            new_w = int(avail_h * aspect)
+            new_h = avail_h
+        else:
+            new_w = avail_w
+            new_h = int(avail_w / aspect)
+    
+        new_w = max(new_w, 1)
+        new_h = max(new_h, 1)
+    
+        current = self.canvas.size()
+        if current.width() != new_w or current.height() != new_h:
+            self.canvas.resize(new_w, new_h) 
+            
     def _on_bg_mode_changed(self, index):
         """Handle background removal mode change"""
         self.current_state.bg_removal_mode = index
@@ -1261,21 +1248,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot()
         
     def _update_canvas_size_policy(self):
-        """Update canvas size policy based on current mode"""
         if self.EDIT_TOGGLE_STRETCH == 0:
-            # Stretch to Fit - canvas fills the available area, no letterboxing
             self.canvas.setMinimumSize(0, 0)
-            self.canvas.setMaximumSize(16777215, 16777215)  # Qt's QWIDGETSIZE_MAX
+            self.canvas.setMaximumSize(16777215, 16777215)
             self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         elif self.EDIT_TOGGLE_STRETCH == 1:
-            # Scale to Fit - fixed size, aspect-locked, centered by canvas_container
-            self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-            self._apply_scale_to_fit_canvas_size()
-        # mode 2 (Real Size) doesn't use the live canvas at all - the
-        # rasterized preview goes through image_label instead.
-        
-        # Force layout update
-        self.canvas.updateGeometry()
+            self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            
+        # mode 2 uses the label, canvas not shown
+       
+    
+
     
     def _save_window_state(self):
         """Save window position and size"""
@@ -1292,18 +1275,25 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, 'EDIT_WINDOW_WIDTH') and hasattr(self, 'EDIT_WINDOW_HEIGHT'):
             self.resize(self.EDIT_WINDOW_WIDTH, self.EDIT_WINDOW_HEIGHT)
             
-    def resizeEvent(self, event):
-        """Handle window resize with proper mode handling"""
-        super().resizeEvent(event)
-        
-        if self.EDIT_TOGGLE_STRETCH == 1:
-            # Scale to Fit: update letterboxed canvas size
-            self._apply_scale_to_fit_canvas_size()
-            self.canvas.draw()
-        elif self.EDIT_TOGGLE_STRETCH == 2:
-            # Real Size: re-render the image at new size
-            self._refresh_plot()
+    def _update_image_preview(self):
+        """Scale the cached native pixmap to fit the label, maintaining aspect ratio."""
+        if not hasattr(self, '_native_pixmap') or self._native_pixmap is None:
+            return
+        label_size = self.image_label.size()
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            return
+        # Scale to fit inside label, keeping aspect ratio, using smooth transformation
+        scaled = self._native_pixmap.scaled(
+            label_size.width() - 2,   # small margin
+            label_size.height() - 2,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)        
     
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_display_scaling()
     
     def _apply_span_ranges(self, x, y, span_ranges, anchor_points=None):
         """Build baseline (y_subtract) from SPANs and anchor points."""
@@ -1496,7 +1486,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
             
     def _refresh_plot(self):
-        # Drop any stale SpanSelector before tearing down its axes
+        # Drop stale SpanSelector
         if self.span_selector is not None:
             try:
                 self.span_selector.disconnect_events()
@@ -1505,13 +1495,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.span_selector = None
     
         self.fig.clear()
+        self.image_label.clear()  # clear any old pixmap
     
         if self.DATA is None or self.current_meas_index is None:
             self.canvas.draw()
-            if self.EDIT_TOGGLE_STRETCH == 2:
-                self.image_label.clear()
             return
-    
         dat = self.DATA[self.current_meas_index]
         curves = dat.curves if getattr(dat, "n_curves", 0) else []
     
@@ -1523,12 +1511,13 @@ class MainWindow(QtWidgets.QMainWindow):
             fig_width = fig_width * self.EDIT_COMMENT_WIDTH_FACTOR
         self.fig.set_size_inches(fig_width, fig_height)
         self.fig.set_dpi(self.EDIT_FIGURE_DPI)
-    
+        
         if self.EDIT_SHOW_COMMENT:
             ax = self._build_annotated_axes()
+            
         else:
             ax = self.fig.add_subplot(111)
-    
+            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.92, bottom=0.125)
         fit_coeffs = self.current_state.fit_coeffs or [None] * len(curves)
     
         plotted_x = []
@@ -1648,7 +1637,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
             ax.plot(x, y_plot, label=curve_display_name(curve, idx))
     
-            if baseline is not None and not self.current_state.remove_background:
+            if baseline is not None and not self.current_state.remove_background and not self.EDIT_HIDE_SPANS:
                 ax.plot(x, baseline, '--', color='red', alpha=0.7, linewidth=1.5,
                        label='Baseline' if idx == 0 else '')
     
@@ -1690,6 +1679,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"fileID: {self.current_file_index}  measurementID: {self.current_meas_index}",
                 xy=(0.1, 0.9), xycoords="axes fraction",
             )
+            
 
         # Enable SpanSelector only for SPAN button
         if self.span_btn.isChecked() and self.EDIT_TOGGLE_STRETCH != 2:
@@ -1715,43 +1705,46 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.set_xlim(x_limits)
         ax.set_ylim(y_limits)
         ax.set_frame_on(True)
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("Current [A]")
+        
         if y_limits[0] < 0:
             ax.axhline(y=0, color='grey', linestyle=':', linewidth=1, alpha=0.7, zorder=1)
-    
+         
         if self.EDIT_TOGGLE_STRETCH == 2:
-            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.98, bottom=0.08)
-            pixmap = self._render_figure_to_pixmap()
-            label_size = self.image_label.size()
-            if label_size.width() > 0 and label_size.height() > 0:
-                scaled_pixmap = pixmap.scaled(
-                    label_size.width() - 10,
-                    label_size.height() - 10,
-                    Qt.KeepAspectRatio,
-                    Qt.FastTransformation
-                )
-                self.image_label.setPixmap(scaled_pixmap)
-            else:
-                self.image_label.setPixmap(pixmap)
-            self.canvas.draw()
+
+            # Render the figure at native resolution
+            native_pixmap = self._render_figure_to_pixmap()
+            self._native_pixmap = native_pixmap   # store for later scaling
+            # Now display the scaled version
+            self._update_image_preview()
+            # Hide canvas, show label (as you already do)
+            self.canvas.hide()
+            self.image_label.show()
         else:
-            if self.EDIT_TOGGLE_STRETCH == 1:
-                self._apply_scale_to_fit_canvas_size()
+            # For modes 0 and 1, show canvas and hide label
+            self.canvas.show()
+            self.image_label.hide()
             self.canvas.draw()
-            self.image_label.clear()
+        # self.canvas_container.updateGeometry()
+        # self.display_stack.updateGeometry()
+        
+        QtCore.QTimer.singleShot(0, self._update_display_scaling)
     
-            if self.EDIT_TOGGLE_STRETCH == 0:
-                self.canvas.updateGeometry()
-                current_size = self.canvas.size()
-                self.canvas.resize(current_size.width() + 1, current_size.height())
-                self.canvas.resize(current_size.width(), current_size.height())
-
-
+    def _update_display_scaling(self):
+        if self.EDIT_TOGGLE_STRETCH == 1:
+            self._apply_scale_to_fit_canvas_size()
+        elif self.EDIT_TOGGLE_STRETCH == 2:
+            self._update_image_preview()
+      
+            
+            
     def _build_annotated_axes(self):
         """Layout port of plot_psense(): main axes squished to the left,
         a lightcyan comment panel occupying the widened right portion."""
         original_right = 1.0 / self.EDIT_COMMENT_WIDTH_FACTOR
         o_r_mod = original_right - 0.125
-        self._plot_pos = [0.125, 0.1, o_r_mod, 0.825]
+        self._plot_pos = [0.125, 0.125, o_r_mod, 0.82]
         self._text_pos = [original_right, 0.1, 1.0 - original_right - 0.005, 0.825]
         return self.fig.add_axes(self._plot_pos)
 
@@ -2249,7 +2242,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Only apply figsize if NOT Real Size mode
         if self.EDIT_TOGGLE_STRETCH != 2:
             self._apply_figsize(self.EDIT_SHOW_COMMENT)
-        
+            
         self._refresh_plot()
         self._save_session_parameters()
         
