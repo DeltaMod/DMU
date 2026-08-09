@@ -59,6 +59,13 @@ from matplotlib.patches import FancyBboxPatch
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.widgets import SpanSelector
+from matplotlib.ticker import ScalarFormatter, FixedLocator, FuncFormatter
+
+#Local Packages:
+try:
+    from .Widgets import *
+except ImportError:
+    from Widgets import *
 
 # ---------------------------------------------------------------------------
 # pypalmsens integration
@@ -81,6 +88,53 @@ def curve_display_name(curve, index=0):
             return str(val)
     return f"curve{index}"
 
+def get_unit_oom_from_string(unit):
+    UNIT_CONVERSION = {"f":1e-15,"p":1e-12,"n":1e-9,"µ":1e-6, "m":1e-3, "":1e+0, "k":1e+3, "M":1e+6, "G":1e+9, "T":1e+12}
+    if len(unit) == 2 and type(unit) ==  str:
+        base_unit = unit[1:]
+        oom = UNIT_CONVERSION[unit[0]]
+    else:
+        base_unit = unit
+        oom = UNIT_CONVERSION[""]
+    return(oom,base_unit)
+
+
+def nice_ticks(vmin, vmax, max_ticks=8):
+    """
+    Return an array of nice tick values between vmin and vmax.
+    Step is chosen from 1, 2, 5 times a power of 10.
+    """
+    if vmax <= vmin:
+        return np.array([vmin])
+    range_val = vmax - vmin
+    # Desired step size
+    raw_step = range_val / max_ticks
+    # Get magnitude (power of 10)
+    magnitude = 10 ** np.floor(np.log10(raw_step))
+    # Normalize
+    norm = raw_step / magnitude
+    # Choose step: 1, 2, or 5
+    if norm < 1.5:
+        step = magnitude
+    elif norm < 3.5:
+        step = 2 * magnitude
+    else:
+        step = 5 * magnitude
+    # Ensure step is positive
+    step = max(step, 1e-15)
+    # Compute first and last tick
+    first = np.ceil(vmin / step) * step
+    last = np.floor(vmax / step) * step
+    # Generate ticks
+    ticks = np.arange(first, last + step/2, step)
+    # Limit to a reasonable number
+    if len(ticks) > max_ticks + 2:
+        # If too many, increase step (try doubling)
+        step *= 2
+        first = np.ceil(vmin / step) * step
+        last = np.floor(vmax / step) * step
+        ticks = np.arange(first, last + step/2, step)
+    return ticks
 
 def curve_to_xy(curve):
     """Extract (x, y) arrays from a pypalmsens curve via a disposable scratch
@@ -201,89 +255,6 @@ def delete_rcparams_override():
 
 HEADER_BG = QtGui.QColor("#c8c8c8")
 
-class EditableParamRow(QtWidgets.QWidget):
-    def __init__(self, label, default_value, param_name, parent=None):
-        super().__init__(parent)
-        self.param_name = param_name
-        self._default_value = default_value
-        self.parent_window = parent
-        self._is_updating = False  # This will prevent recursive updates
-        
-        # Create layout
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        
-        # Label
-        self.label = QtWidgets.QLabel(label)
-        self.label.setFixedWidth(80)
-        layout.addWidget(self.label)
-        
-        # This is the editable field generated in the row.
-        self.line_edit = QtWidgets.QLineEdit()
-        self.line_edit.setText(str(default_value))
-        self.line_edit.textChanged.connect(self._on_text_changed)
-        
-        # Add validator to only allow numbers 
-        validator = QtGui.QDoubleValidator()
-        validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
-        self.line_edit.setValidator(validator)
-        
-        layout.addWidget(self.line_edit)
-        
-        # Add Reset Button
-        self.reset_btn = QtWidgets.QPushButton("⟳")
-        self.reset_btn.setFixedWidth(30)
-        self.reset_btn.setToolTip("Reset to default")
-        self.reset_btn.clicked.connect(self._reset_to_default)
-        layout.addWidget(self.reset_btn)
-    
-    def _on_text_changed(self, text):
-        """Only update if the text is valid and not empty"""
-        if self._is_updating:
-            return
-        
-        if not text or text.strip() == "":
-            return
-        
-        try: #try float, and check if inf.
-            value = float(text)
-            
-            if not np.isfinite(value):
-                return
-            
-
-            setattr(self.parent_window, self.param_name, value)
-            if hasattr(self.parent_window, '_on_param_changed'):
-                self.parent_window._on_param_changed()
-        except ValueError:
-            pass
-    
-    def _reset_to_default(self):
-        # Use provided DEFAULT_* parameters if available
-        default_name = f"DEFAULT_{self.param_name}"
-        if hasattr(self.parent_window, default_name):
-            default_value = getattr(self.parent_window, default_name)
-            self._default_value = default_value
-        self.line_edit.setText(str(self._default_value))
-        setattr(self.parent_window, self.param_name, float(self._default_value))
-        if hasattr(self.parent_window, '_on_param_changed'):
-            self.parent_window._on_param_changed()
-    
-    def get_value(self):
-        try:
-            return float(self.line_edit.text())
-        except ValueError:
-            return self._default_value
-    
-    def reload_default(self):
-        """Reload the default value from parent"""
-        default_name = f"DEFAULT_{self.param_name}"
-        if hasattr(self.parent_window, default_name):
-            self._default_value = getattr(self.parent_window, default_name)
-            self.line_edit.setText(str(self._default_value))
-            setattr(self.parent_window, self.param_name, float(self._default_value))
-            if hasattr(self.parent_window, '_on_param_changed'):
-                self.parent_window._on_param_changed()
 # BG REMOVAL options
 class BgRemovalMode:
     LINEAR = 0           # Linear fit across selected ranges
@@ -298,188 +269,6 @@ class RangeType:
     SPAN = 0          # Background range to remove
     ANCHOR = 1        # Manual anchor point (stored as [x, y] in separate list)
 
-
-        
-class MultiParamRow(QtWidgets.QWidget):
-    """
-    This function creates a row/col layout for multi-input and resetting of parameters.
-    For instance, we can have:
-       |         | colheader1  |       |   colheader2 |       | reset all
-       rowlabel1 |txtentry_1_1 | reset | txtentry_1_2 | reset |
-       rowlabel2 |txtentry_2_1 | reset | txtentry_2_2 | reset |
-       ...
-       rowlabelN |txtentry_N_1 | reset | txtentry_N_2 | reset | 
-
-    Example use: 
-    MultiParamRow(
-        headers=["Header", "Body"],
-        row_labels=["Text", "Legend", "Comment", "Axis"],
-        param_names=[
-            ["EDIT_TEXT_HEADER_SIZE", "EDIT_TEXT_BODY_SIZE"],
-            ["EDIT_LEGEND_HEADER_SIZE", "EDIT_LEGEND_BODY_SIZE"],
-            ["EDIT_COMMENT_HEADER_SIZE", "EDIT_COMMENT_BODY_SIZE"],
-            ["EDIT_AXIS_LABEL_SIZE", "EDIT_TICK_SIZE"]
-        ],
-        parent=self
-    )                                      
-    """
-    def __init__(self, headers, row_labels, param_names, parent=None):
-        super().__init__(parent)
-        self.parent_window = parent
-        self.param_names = param_names
-        self.row_labels = row_labels
-        self.headers = headers
-        self._is_updating = False   # This will prevent recursive updates
-        
-        self.default_values = {}
-        
-        layout = QtWidgets.QGridLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setHorizontalSpacing(5)
-        layout.setVerticalSpacing(2)
-        
-
-        for col_idx, header_text in enumerate(headers):
-            header = QtWidgets.QLabel(header_text)
-            header.setStyleSheet("font-weight: bold;")
-            layout.addWidget(header, 0, col_idx * 2 + 1, 1, 2)
-        
-        # "Reset All" button to restore everything in the multiparam to defaults
-        reset_all_btn = QtWidgets.QPushButton("↺ Reset All")
-        reset_all_btn.setFixedWidth(80)
-        reset_all_btn.setToolTip("Reset all values to defaults")
-        reset_all_btn.clicked.connect(self.reload_defaults)
-        layout.addWidget(reset_all_btn, 0, len(headers) * 2 + 1)
-        
-        self.line_edits = {}
-        self.reset_btns = {}
-        
-        for row_idx, row_label in enumerate(row_labels): #recursively go through all row labels and add entry boxes and reset buttons to all 
-            label = QtWidgets.QLabel(row_label)
-            label.setStyleSheet("font-weight: bold;")
-            layout.addWidget(label, row_idx + 1, 0)
-            
-            for col_idx, param_name in enumerate(param_names[row_idx]):
-                line_edit = QtWidgets.QLineEdit()
-                line_edit.setFixedWidth(60)
-                # Set initial value from parent if available
-                if parent and hasattr(parent, param_name):
-                    line_edit.setText(str(getattr(parent, param_name)))
-                line_edit.textChanged.connect(self._on_text_changed)
-                
-                # Add validator to avoid invalid entry
-                validator = QtGui.QDoubleValidator()
-                validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
-                line_edit.setValidator(validator)
-                
-                layout.addWidget(line_edit, row_idx + 1, col_idx * 2 + 1)
-                self.line_edits[param_name] = line_edit
-                # Reset button
-                reset_btn = QtWidgets.QPushButton("⟳")
-                reset_btn.setFixedWidth(30)
-                reset_btn.setToolTip(f"Reset {row_label} {headers[col_idx]} to default")
-                reset_btn.clicked.connect(lambda checked, p=param_name: self._reset_to_default(p))
-                layout.addWidget(reset_btn, row_idx + 1, col_idx * 2 + 2)
-                self.reset_btns[param_name] = reset_btn
-        self._load_defaults_from_parent()
-    
-    def _load_defaults_from_parent(self):
-        """Reload default values from parent window"""
-        self.default_values = {}
-        for row_idx, row_params in enumerate(self.param_names):
-            for col_idx, param_name in enumerate(row_params):
-                default_name = f"DEFAULT_{param_name}"
-                if hasattr(self.parent_window, default_name):
-                    self.default_values[param_name] = getattr(self.parent_window, default_name)
-    
-    def _on_text_changed(self):
-        """Called when any text changes - only update if all values are valid"""
-        if self._is_updating:
-            return
-        all_valid = True
-        for param_name, line_edit in self.line_edits.items():
-            text = line_edit.text()
-            if not text or text.strip() == "":
-                all_valid = False
-                break
-            try:
-                value = float(text)
-                if not np.isfinite(value):
-                    all_valid = False
-                    break
-            except ValueError:
-                all_valid = False
-                break
-        
-        if not all_valid:
-            return
-        
-        try: #If all entries are valid, to updat them.
-            for param_name, line_edit in self.line_edits.items():
-                value = float(line_edit.text())
-                setattr(self.parent_window, param_name, value)
-            
-            # Trigger refresh once after updating all
-            if hasattr(self.parent_window, '_on_param_changed'):
-                self.parent_window._on_param_changed()
-        except ValueError:
-            pass
-    
-    def _reset_to_default(self, param_name):
-        """Reset a specific entry to its default value"""
-        if self._is_updating:
-            return
-        
-        self._is_updating = True
-        try:
-            if param_name in self.default_values:
-                default_value = self.default_values[param_name]
-                self.line_edits[param_name].setText(str(default_value))
-                setattr(self.parent_window, param_name, float(default_value))
-                if hasattr(self.parent_window, '_on_param_changed'):
-                    self.parent_window._on_param_changed()
-        finally:
-            self._is_updating = False
-    
-    def reload_defaults(self):
-        """Reload defaults and reset all entries to their defaults"""
-        if self._is_updating:
-            return
-        
-        self._is_updating = True
-        try:
-            self._load_defaults_from_parent()
-            for param_name, default_value in self.default_values.items():
-                if param_name in self.line_edits:
-                    self.line_edits[param_name].setText(str(default_value))
-                    setattr(self.parent_window, param_name, float(default_value))
-            if hasattr(self.parent_window, '_on_param_changed'):
-                self.parent_window._on_param_changed()
-        finally:
-            self._is_updating = False
-    
-    def get_values(self):
-        """Return dictionary of current values"""
-        values = {}
-        for param_name, line_edit in self.line_edits.items():
-            try:
-                values[param_name] = float(line_edit.text())
-            except ValueError:
-                values[param_name] = 0.0
-        return values
-    
-    def set_values(self, values_dict):
-        """Set values from dictionary"""
-        if self._is_updating:
-            return
-        
-        self._is_updating = True
-        try:
-            for param_name, value in values_dict.items():
-                if param_name in self.line_edits:
-                    self.line_edits[param_name].setText(str(value))
-        finally:
-            self._is_updating = False
                 
 class MainWindow(QtWidgets.QMainWindow):
     
@@ -516,7 +305,6 @@ class MainWindow(QtWidgets.QMainWindow):
             'EDIT_COMMENT_BODY_SIZE': None,    # Not an rcParam
             'EDIT_AXIS_LABEL_SIZE': ('axes.labelsize', None),
             'EDIT_TICK_SIZE': ('xtick.labelsize', None),
-            
             # Line styles
             'EDIT_LINEWIDTH': ('lines.linewidth', None),
             'EDIT_MARKERSIZE': ('lines.markersize', None),
@@ -524,7 +312,6 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         
         self._toggle_widgets = {}   # variable_name -> QPushButton (checkable)
-        
         self.UI_ONLY_DEFAULTS = {
             'EDIT_COMMENT_WIDTH_FACTOR': 1.3,
             'EDIT_COMMENT_HEADER_SIZE': 14.0,
@@ -532,6 +319,20 @@ class MainWindow(QtWidgets.QMainWindow):
             'EDIT_TOGGLE_STRETCH': 0,
             'EDIT_SHOW_COMMENT': False,
             'EDIT_HIDE_SPANS': False,
+            
+            #Plot Labels and Titles
+            'EDIT_XLABEL_OVERRIDE':None,
+            'EDIT_YLABEL_OVERRIDE':None,
+            'EDIT_SHOW_TITLE':True,
+            'EDIT_TITLE_OVERRIDE':None,
+            'EDIT_BOUNDS_LEFT':  0.1,
+            'EDIT_BOUNDS_RIGHT': 0.98,
+            'EDIT_BOUNDS_TOP':   0.92,
+            'EDIT_BOUNDS_BOTTOM':0.125,
+            'EDIT_XMIN':None,
+            'EDIT_XMAX':None,
+            'EDIT_YMIN':None,
+            'EDIT_YMAX':None,
              #Window Persistance
             'EDIT_WINDOW_WIDTH': 1300,
             'EDIT_WINDOW_HEIGHT': 800,
@@ -646,7 +447,38 @@ class MainWindow(QtWidgets.QMainWindow):
             self.font_sizes_row.set_values(values)
         
         self._update_button_text()  
-        
+    
+    def _get_default_title(self):
+        """Return the default title for the current measurement."""
+        if self.DATA is not None and self.current_meas_index is not None:
+            dat = self.DATA[self.current_meas_index]
+            title = getattr(dat, "title", "")
+            if not title:
+                title = self.current_filename or "Untitled"
+            return title
+        return "Title"
+    
+    def _toggle_show_title(self, checked):
+        self.EDIT_SHOW_TITLE = checked
+        self._refresh_plot()
+        self._save_session_parameters()
+    
+    def _update_override_placeholders(self):
+        """Update placeholder texts for all OverrideParamRow widgets."""
+        if hasattr(self, 'xlabel_override_row'):
+            self.xlabel_override_row.update_placeholder_text()
+        if hasattr(self, 'ylabel_override_row'):
+            self.ylabel_override_row.update_placeholder_text()
+        if hasattr(self, 'title_override_row'):
+            self.title_override_row.update_placeholder_text()
+    
+    def _sync_override_rows(self):
+        """Update the override line edits from the current EDIT_* attributes."""
+        for row in (self.xlabel_override_row, self.ylabel_override_row, self.title_override_row):
+            if row is not None:
+                val = getattr(self, row.param_name, None)
+                row.line_edit.setText(val if val is not None else "")
+                row._update_placeholder()   # refresh grey placeholder text
     # -- UI construction ----------------------------------------------------
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -864,6 +696,39 @@ class MainWindow(QtWidgets.QMainWindow):
         fig_display_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
         layout.addWidget(fig_display_label)
         
+        
+        self.show_title_toggle = QtWidgets.QPushButton("Show Title")
+        self.show_title_toggle.setCheckable(True)
+        self.show_title_toggle.setChecked(True)  # default True
+        self.show_title_toggle.toggled.connect(self._toggle_show_title)
+        layout.addWidget(self.show_title_toggle)
+        self._toggle_widgets['EDIT_SHOW_TITLE'] = self.show_title_toggle
+        
+        # ---- Title Override ----
+        # The placeholder will be updated when a measurement is loaded.
+        self.title_override_row = OverrideParamRow(
+            "Title:", "EDIT_TITLE_OVERRIDE", self,
+            placeholder_getter=self._get_default_title
+        )
+        layout.addWidget(self.title_override_row)
+        
+         # ---- X Label Override ----
+        self.xlabel_override_row = OverrideParamRow(
+            "X Label:", "EDIT_XLABEL_OVERRIDE", self,
+            placeholder_getter=lambda: "Time [s]"
+        )
+        layout.addWidget(self.xlabel_override_row)
+ 
+        # ---- Y Label Override ----
+        self.ylabel_override_row = OverrideParamRow(
+            "Y Label:", "EDIT_YLABEL_OVERRIDE", self,
+            placeholder_getter=lambda: "Current [A]"
+        )
+        layout.addWidget(self.ylabel_override_row)
+ 
+      
+        
+       
         # Save parameters
         self.save_width_row = EditableParamRow(
             "Fig Width:", self.EDIT_FIGSIZE_X, "EDIT_FIGSIZE_X", self
@@ -912,9 +777,48 @@ class MainWindow(QtWidgets.QMainWindow):
                 ["EDIT_COMMENT_HEADER_SIZE", "EDIT_COMMENT_BODY_SIZE"],
                 ["EDIT_AXIS_LABEL_SIZE", "EDIT_TICK_SIZE"]
             ],
-            parent=self
+            parent=self,
+            default_type = "float"
         )
         layout.addWidget(self.font_sizes_row)
+        
+        # Bounds controls
+        font_label = QtWidgets.QLabel("Plot Bounds")
+        font_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(font_label)
+        
+        self.bounds_row = MultiParamRow(
+            rows=[
+                [("Left", "EDIT_BOUNDS_LEFT"), ("Right", "EDIT_BOUNDS_RIGHT")],
+                [("Bottom", "EDIT_BOUNDS_BOTTOM"), ("Top", "EDIT_BOUNDS_TOP")]
+            ],
+            parent=self,
+            default_type = "float"
+        )
+        layout.addWidget(self.bounds_row)
+        
+        
+        # Bounds controls
+        font_label = QtWidgets.QLabel("Plot Limits")
+        font_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(font_label)
+        # GET BOUNDS to make altering them easier
+        self.get_bounds_btn = QtWidgets.QPushButton("Get Plot Bounds")
+        self.get_bounds_btn.clicked.connect(self.on_get_bounds_clicked)
+        layout.addWidget(self.get_bounds_btn)
+        
+        self.plot_lim_row = MultiParamRow(
+            headers=["min", "max"],
+            row_labels=["x-axis", "y-axis"],
+            param_names=[
+                ["EDIT_XMIN", "EDIT_XMAX"],
+                ["EDIT_YMIN", "EDIT_YMAX"],
+            ],
+            parent=self,
+            allow_none = True,
+            default_type = "float"
+        )
+        layout.addWidget(self.plot_lim_row)
         
         reset_all_btn = QtWidgets.QPushButton("↺ Reset All Parameters")
         reset_all_btn.clicked.connect(self._reset_all_parameters)
@@ -1081,7 +985,31 @@ class MainWindow(QtWidgets.QMainWindow):
             key = state_key(self.current_filename, self.current_meas_index)
             StateStore(self.current_folder).save(key, self.current_state)
 
+    def on_get_bounds_clicked(self):
+        # Assuming you have access to plotted_x and plotted_y lists of arrays
+        if not self.plotted_x or not self.plotted_y:
+            return  
     
+        all_x = np.concatenate(self.plotted_x)
+        all_y = np.concatenate(self.plotted_y)
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+    
+        x_pad = x_range * 0.05 if x_range > 0 else 1
+        y_pad = y_range * 0.05 if y_range > 0 else 1
+    
+        bounds = {
+        'EDIT_XMIN': x_min - x_pad,
+        'EDIT_XMAX': x_max + x_pad,
+        'EDIT_YMIN': y_min - y_pad,
+        'EDIT_YMAX': y_max + y_pad,
+        }
+    
+        # This updates both the line edits AND the parent attributes
+        self.plot_lim_row.set_values(bounds)
+        
     # -- Plotting -------------------------------------------------------------
     def _render_figure_to_pixmap(self):
         """Render the current figure to a QPixmap at the current figure size and DPI."""
@@ -1104,7 +1032,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 spine.set_linewidth(2)
                 spine.set_color('red')
             # Add tick marks to show real size
-            ax.tick_params(axis='both', which='major', labelsize=10)
+            ax.tick_params(axis='both', which='major', labelsize=self.EDIT_TICK_SIZE)
         else:
             # Normal frame
             ax.set_frame_on(True)
@@ -1517,11 +1445,11 @@ class MainWindow(QtWidgets.QMainWindow):
             
         else:
             ax = self.fig.add_subplot(111)
-            self.fig.subplots_adjust(left=0.1, right=0.98, top=0.92, bottom=0.125)
+            self.fig.subplots_adjust(left=self.EDIT_BOUNDS_LEFT, right=self.EDIT_BOUNDS_RIGHT, top=self.EDIT_BOUNDS_TOP, bottom=self.EDIT_BOUNDS_BOTTOM)
         fit_coeffs = self.current_state.fit_coeffs or [None] * len(curves)
     
-        plotted_x = []
-        plotted_y = []
+        self.plotted_x = []
+        self.plotted_y = []
     
         # Get SPAN ranges
         span_ranges = []
@@ -1546,11 +1474,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 data = item.data(QtCore.Qt.UserRole)
                 if data is not None:
                     selected_typ, selected_idx = data
-    
+                    
         for idx, (curve, (x, y)) in enumerate(zip(curves, self.raw_xy_list)):
+            
+            xunit_oom,x_base_unit = get_unit_oom_from_string(curve.x_unit)
+            yunit_oom,y_base_unit = get_unit_oom_from_string(curve.y_unit)
+            
+            #x *= xunit_oom
+            #y *= yunit_oom
+            
             y_plot = y.copy()
             baseline = None
-    
+            
             if self.current_state.remove_background:
                 if span_ranges or anchor_points:
                     mode = self.current_state.bg_removal_mode
@@ -1641,8 +1576,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 ax.plot(x, baseline, '--', color='red', alpha=0.7, linewidth=1.5,
                        label='Baseline' if idx == 0 else '')
     
-            plotted_x.append(x)
-            plotted_y.append(y_plot)
+            self.plotted_x.append(x)
+            self.plotted_y.append(y_plot)
     
         # Draw SPAN ranges with highlighting
         if not self.EDIT_HIDE_SPANS:
@@ -1665,13 +1600,35 @@ class MainWindow(QtWidgets.QMainWindow):
                     edge = 'black' if highlight else None
                     ax.scatter(xp, yp, color=marker_color, s=size, zorder=5,
                                    edgecolors=edge, linewidth=1, label='Anchors' if j == 0 and not self.current_state.remove_background else "")
-        title = getattr(dat, "title")
-        if not title:
-            title = self.current_filename
-        if self.current_state.remove_background:
-            title += " (rm BG)"
         
-        ax.set_title(title, fontweight="bold")
+        # ---- Title ----
+        base_title = getattr(dat, "title")
+        if not base_title:
+            base_title = self.current_filename
+        if self.current_state.remove_background:
+            base_title += " (rm BG)"
+        
+        if self.EDIT_SHOW_TITLE:
+            if self.EDIT_TITLE_OVERRIDE is not None:
+                final_title = self.EDIT_TITLE_OVERRIDE
+            else:
+                final_title = base_title
+        else:
+            final_title = ""   # hide title
+        
+        ax.set_title(final_title, fontweight="bold")
+        
+        # ---- Axis labels ----
+        xlabel = self.EDIT_XLABEL_OVERRIDE if self.EDIT_XLABEL_OVERRIDE is not None else "Time [s]"
+        ylabel = self.EDIT_YLABEL_OVERRIDE if self.EDIT_YLABEL_OVERRIDE is not None else "Current [A]"
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+                
+        ax.xaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+        ax.xaxis.get_major_formatter().set_powerlimits((-3, 3))   # scientific for <0.01 or >100
+        ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+        ax.yaxis.get_major_formatter().set_powerlimits((-3, 3))
+        ax.tick_params(axis='both', labelsize=self.EDIT_TICK_SIZE)
         ax.legend(loc="best")    
         if self.EDIT_SHOW_COMMENT:
             self._draw_comment_panel(dat, ax)
@@ -1685,28 +1642,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.span_btn.isChecked() and self.EDIT_TOGGLE_STRETCH != 2:
             self._enable_span_selector(ax, RangeType.SPAN)
     
-        if len(plotted_x) > 0 and len(plotted_y) > 0:
-            all_x = np.concatenate(plotted_x)
-            all_y = np.concatenate(plotted_y)
-            x_min, x_max = all_x.min(), all_x.max()
-            y_min, y_max = all_y.min(), all_y.max()
-            x_range = x_max - x_min
-            y_range = y_max - y_min
-    
-            x_pad = x_range * 0.05 if x_range > 0 else 1
-            y_pad = y_range * 0.05 if y_range > 0 else 1
-            x_limits = (x_min - x_pad, x_max + x_pad)
-            y_limits = (y_min - y_pad, y_max + y_pad)
-        else:
-            x_limits = (0, 1)
-            y_limits = (0, 1)
-    
+        x_limits,y_limits = self.get_plot_limits()
+        
+        
         ax.set_aspect('auto')
         ax.set_xlim(x_limits)
         ax.set_ylim(y_limits)
         ax.set_frame_on(True)
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel("Current [A]")
         
         if y_limits[0] < 0:
             ax.axhline(y=0, color='grey', linestyle=':', linewidth=1, alpha=0.7, zorder=1)
@@ -1730,6 +1672,40 @@ class MainWindow(QtWidgets.QMainWindow):
         # self.display_stack.updateGeometry()
         
         QtCore.QTimer.singleShot(0, self._update_display_scaling)
+        size = self.canvas_container.size()
+        self.canvas_container.resize(size.width() + 1, size.height() + 1)
+        self.canvas_container.resize(size.width(), size.height())
+        
+    def get_plot_limits(self):
+        # Start with all None
+        x_min = x_max = y_min = y_max = None
+    
+        # If data exists, compute padded bounds (these become the defaults)
+        if self.plotted_x and self.plotted_y:
+            all_x = np.concatenate(self.plotted_x)
+            all_y = np.concatenate(self.plotted_y)
+            x_min_data, x_max_data = all_x.min(), all_x.max()
+            y_min_data, y_max_data = all_y.min(), all_y.max()
+            x_range = x_max_data - x_min_data
+            y_range = y_max_data - y_min_data
+            x_pad = x_range * 0.05 if x_range > 0 else 1
+            y_pad = y_range * 0.05 if y_range > 0 else 1
+            x_min = x_min_data - x_pad
+            x_max = x_max_data + x_pad
+            y_min = y_min_data - y_pad
+            y_max = y_max_data + y_pad
+    
+        # Override with user values if they are not None
+        if self.EDIT_XMIN is not None:
+            x_min = self.EDIT_XMIN
+        if self.EDIT_XMAX is not None:
+            x_max = self.EDIT_XMAX
+        if self.EDIT_YMIN is not None:
+            y_min = self.EDIT_YMIN
+        if self.EDIT_YMAX is not None:
+            y_max = self.EDIT_YMAX
+
+        return((x_min, x_max), (y_min, y_max))
     
     def _update_display_scaling(self):
         if self.EDIT_TOGGLE_STRETCH == 1:
@@ -1771,6 +1747,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Calculate wrap width
         ax_text_width_px = ax_text.get_window_extent().width
         fontsize = self.EDIT_COMMENT_BODY_SIZE
+        print(type(fontsize))
         dpi = self.fig.get_dpi()
         char_width_px = fontsize * dpi / 72 * 0.5
         wrap_width = max(int(ax_text_width_px / char_width_px), 10)
@@ -2238,7 +2215,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Update UI elements
         self._update_ui_from_config()
-        
+        self._sync_override_rows()
         # Only apply figsize if NOT Real Size mode
         if self.EDIT_TOGGLE_STRETCH != 2:
             self._apply_figsize(self.EDIT_SHOW_COMMENT)
@@ -2453,9 +2430,9 @@ class MainWindow(QtWidgets.QMainWindow):
 def get_rcparam_defaults():
     import platform
     fontfamily = "Arial" if platform.system() == "Windows" else "Liberation Sans"
-    titlefont = 15
-    bigfont = 14
-    mediumfont = 12
+    titlefont = 15.0
+    bigfont = 14.0
+    mediumfont = 12.0
     defaultsDict = {
                     'axes.formatter.use_mathtext': True,
                     'text.usetex': False,
@@ -2463,7 +2440,7 @@ def get_rcparam_defaults():
                     
                     # Figure Dimensions 4:3 default
                     'figure.figsize': [6, 4.5],      
-                    'figure.dpi': 200,               
+                    'figure.dpi': 200.0,               
                     
                     # Label Fontsizes
                     'font.size': bigfont,                 
@@ -2477,7 +2454,7 @@ def get_rcparam_defaults():
                     #Standard Linewidths and Markers
                     'lines.linewidth': 1.5,
                     'lines.markeredgewidth': 1.5,
-                    'lines.markersize': 5,
+                    'lines.markersize': 5.0,
                     'axes.linewidth': 1.0,           
                     
                     # Tick Dimensions and Padding

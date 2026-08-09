@@ -174,7 +174,7 @@ def graph_style(*var):
         bigfont = 44
         mediumfont = 40
         plt.rcParams.update({
-                    'axes.formatter.use_mathtext':True,
+                    'axes.formatter.use_mathtext':False,
                     'text.usetex': False,
                     #'text.latex.preamble':r"\usepackage{siunitx} \usepackage{upgreek} \usepackage{amsmath}",
                     'font.family': fontfamily,
