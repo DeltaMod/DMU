@@ -5,11 +5,12 @@ from .geometry.OBB import OBB
 class SceneObject:
     """
     Wrapper around a geometry object (Nanowire, RoundedCuboid, etc.)
-    Holds world-space position and orientation, and owns the world-space OBB.
+    Holds world-space position and orientation, and owns the world-space OBB. We must also use this for other primitives we add to the scene normally.
+    This function can also be used to modify the sizes of such primitives, but complex structures must be deleted and moved instead.
     """
-    def __init__(self, geo, x=0, y=0, z=0, rotx=0, roty=0, rotz=0, 
+    def __init__(self, geo, x=0, y=0, z=0, rotx=0, roty=0, rotz=0, xspan=0,yspan=0,zspan=0,
                  pathdict=None, kind="geometry", axis_offset=(0,0,0),
-                 exclude_from_bounds=False, max_bounds=None):
+                 exclude_from_bounds=False, max_bounds=None, subobj=None ,permit_resize=True):
         self.geo    = geo
         if not pathdict:
             self.name, self.group, self.fullpath = ["Group",None,"Group"]
@@ -19,6 +20,9 @@ class SceneObject:
 
         self.kind   = kind   # ["geometry"|"analysis"]
         self.pos    = np.array([x, y, z], dtype=float)
+        self.subobj = subobj
+        self.spans  = np.array([0,0,0])
+        self.minmax  = np.array([[0,0][0,0],[0,0]])
         self.rot    = np.array([rotx, roty, rotz], dtype=float)  # degrees, Euler XYZ
         self.axis_offset = np.array(axis_offset, dtype=float)
         self.obb  = self._compute_obb()
@@ -35,6 +39,7 @@ class SceneObject:
         self.sim.unselectall()
         self.sim.select(self.fullpath)
         return False
+    
     def _compute_obb(self):
         if self.geo is None:
             return OBB(center=self.pos, spans=[0, 0, 0])  # placeholder until geo wrappers exist
@@ -73,6 +78,11 @@ class SceneObject:
         self.obb = self._compute_obb()
         return self
     
+    def set_spans(self,xrange=None,yrange=None,zrange=None):
+        None
+    
+    def set_bounds(self,xmin=None,xmax=None,ymin=None,ymax=None,zmin=None,zmax=None):
+        None
     #%% ANALYSIS EXCLUSIVE FUNCTIONS
     def set_monitor_bounds(self, ref_obj, dim="3d", normal="z",
                        padding=0,

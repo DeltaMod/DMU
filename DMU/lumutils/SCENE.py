@@ -1,7 +1,7 @@
 # lumutils/SCENE.py
 import numpy as np
 from .scene_object import SceneObject
-
+import lumapi as lum
 from ..custom_logger import get_custom_logger
 
 logger = get_custom_logger("DMU_SCENE")
@@ -18,18 +18,27 @@ class Scene(ObjectsMixin, AnalysisMixin, HelpersMixin):
     Owns all SceneObjects and exposes aggregate bounds.
     Mixin classes attach add_nanowire, add_DFT_monitor, etc.
     """
-    def __init__(self, sim):
+    def __init__(self):
+        try:
+            sim = lum.connect("FDTD")
+        except:
+            sim = lum.FDTD(hide=False)
         self.sim     = sim
         self.objects = []
-
+        
+        self.FDTD    = self.add_FDTD()
+       
     # ------------------------------------------------------------------
     # Object registration (called by mixins after lumapi instantiation)
     # ------------------------------------------------------------------
     def _register(self, scene_obj):
-        """Add a SceneObject to the scene registry. Called internally by mixins."""
         scene_obj.sim = self.sim
-        self.objects.append(scene_obj)
+        scene_obj.scene_ref = weakref.ref(self)  # for delete
+        self.objects.add(scene_obj)   # set handles duplicates gracefully
         return scene_obj
+
+    def _unregister(self, obj):
+        self.objects.discard(obj)   # discard = no error if missing
 
     # ------------------------------------------------------------------
     # Bound aggregation

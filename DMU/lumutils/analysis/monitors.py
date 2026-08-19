@@ -3,10 +3,13 @@ import numpy as np
 from ..scene_object import SceneObject
 from ..geometry.OBB import OBB
 from .. import helpers as hlp
+from ...custom_logger import get_custom_logger
+logger = get_custom_logger("LMU_monitors")
+
 from ..defaults import DEFAULTS_GEOMETRY, DEFAULTS_FDTD, DEFAULTS_MONITOR
 
 class AnalysisMixin(hlp.HelpersMixin):
-    
+        
     def _register_monitor(self, adict, name, group):
         """Build OBB from adict and register as an analysis SceneObject."""
         obb = OBB(
@@ -139,3 +142,21 @@ class AnalysisMixin(hlp.HelpersMixin):
         """
         xyz = tuple(xyz)
         adict,monitor_type,skip = hlp.determine_2D_3D_spans_normals(xyz,xrange,yrange,zrange,allow3D=True)
+        
+        def add_FDTD(self,adict,name):
+            if not hasattr(self, "FDTD"):
+                self.FDTD = self.sim.addfdtd()
+                self.sim.set("name",name)
+                self._set_monitor_bounds(adict, skip)
+                self.select_and_set_props(None, prop_dict)
+                return self._register_monitor(adict, name)
+            else:
+                self.FDTD._check_selection()
+                self.FDTD.set_monitor_bounds(adict, skip)
+                self.select_and_set_props(None, prop_dict)
+                
+                return self.FDTD
+                logger.warn("Attempted to create a new FDTD with a pre-existing volume. Moving old volume to new location instead.")
+                
+            
+        

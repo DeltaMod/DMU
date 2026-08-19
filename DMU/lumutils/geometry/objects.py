@@ -487,15 +487,18 @@ class ObjectsMixin(hlp.HelpersMixin):
 
         self.set_obj_props(props)
 
+    
+        scene_obj = SceneObject(
+            geo=None,
+            x=props["x"], y=props["y"], z=props["z"],
+            rotx=rx_, roty=ry_, rotz=rz_,
+            pathdict=pathdict,
+            axis_offset=axis_offset
+        )
         if standalone:
-            scene_obj = SceneObject(
-                geo=None,
-                x=props["x"], y=props["y"], z=props["z"],
-                rotx=rx_, roty=ry_, rotz=rz_,
-                pathdict=pathdict,
-                axis_offset=axis_offset
-            )
             return self._register(scene_obj)
+        else:
+            return(scene_obj)
     
     def add_roundedcube(self, RC, x=0, y=0, z=0, rotx = 0, roty = 0, rotz = 0, axis_offset = (0,0,0), 
                         name="RoundedCube", group=None, fullpath = None, material=None, zorder=0):
@@ -565,13 +568,13 @@ class ObjectsMixin(hlp.HelpersMixin):
             self.add_primitive(primitive="cylinder",x=xx,y=yy,z=zz, rx=rcx, ry=rcy, rz=rcz,material=material,zorder=zorder,group=fullpath,norm=norm,standalone=False)  
         
         scene_obj = SceneObject(RC, x=x, y=y, z=z, rotx=rotx, roty=roty, rotz=rotz,axis_offset=axis_offset,
-                                    pathdict=pathdict)
+                                    pathdict=pathdict,permit_resize=False)
         return self._register(scene_obj)
     
     def add_nanowire(self, nw, x=0, y=0, z=0, rotx=0, roty=0, rotz=0, axis_offset=(0,0,0),
                      material=None, seed_material=None,
                      zorder=0, name="Nanowire", group=None,fullpath=None):
-       
+        subobj = set()
         pathdict   = self.resolve_fullpath(name,group=group,fullpath=fullpath) 
         name, group, fullpath = [pathdict["name"],pathdict["group"], pathdict["fullpath"]]
         self.create_groups_from_dict( {"structure": [fullpath]})
@@ -581,24 +584,27 @@ class ObjectsMixin(hlp.HelpersMixin):
 
         for sphere in nw.seed_list:
             loc = {k: v + offset[k] for k, v in sphere["loc"].items()}
-            self.add_primitive(primitive="sphere", **loc,
+            prim = self.add_primitive(primitive="sphere", **loc,
                         **sphere["radius"], material=seed_material,
                         zorder=zorder + 1, name="SeedSphere", group=fullpath,standalone=False)
+            subobj.add(prim)
 
         for sphere in nw.endcaps_list:
             loc = {k: v + offset[k] for k, v in sphere["loc"].items()}
-            self.add_primitive(primitive="sphere", **loc,
+            prim = self.add_primitive(primitive="sphere", **loc,
                         **sphere["radius"], material=material,
                         zorder=zorder, name="EndcapSphere", group=fullpath,standalone=False)
-
+            subobj.add(prim)
+            
         for cyl in nw.core_cylinder:
             loc = {k: v + offset[k] for k, v in cyl["loc"].items()}
-            self.add_primitive(primitive="cylinder", **loc,
+            prim = self.add_primitive(primitive="cylinder", **loc,
                         **cyl["radius"], material=material,
                         zorder=zorder, name="NWCoreCylinder", group=fullpath,standalone=False)
-
+            subobj.add(prim)
         scene_obj = SceneObject(nw, x=x, y=y, z=z, rotx=rotx, roty=roty, rotz=rotz,
-                                pathdict=pathdict, axis_offset=axis_offset)
+                                pathdict=pathdict, axis_offset=axis_offset,subobj=subobj,permit_resize=False)
+        
         return self._register(scene_obj)
                 
     

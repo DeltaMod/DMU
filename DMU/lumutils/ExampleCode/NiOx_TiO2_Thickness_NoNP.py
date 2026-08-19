@@ -1,10 +1,12 @@
 import lumapi as lum
 import sys
-
+import os
 
 GHIN=True
+userpath    = r"E:\Path Pathsson"
+subworkpath = "Company\Materials" 
 if GHIN:
-    sys.path.append(r"E:\Vidar Flodgren")
+    sys.path.append(userpath)
     import DMUlocal.DMU.lumutils as dlu
         
 else:
@@ -20,7 +22,7 @@ except:
 
 #Initialising the FDTD Volume
 bounds = {"analysis":[],"geometry":[]}
-material_folder = r'E:\Vidar Flodgren\RedoxMe\Materials'
+material_folder = os.path.join(userpath,subworkpath)
 dlu.import_materials_from_folder(sim,material_folder,mat_type="Sampled 3D data")
 
 mats = dict(Au=dlu.get_material_list(sim,substr=["Au","Palik"],legacy=False)[0],
