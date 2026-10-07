@@ -159,6 +159,242 @@ KEYDEF = {
     "Dual Sweep": "FBSweep"
 }
 
+# -----------------------------------------------------------------------------
+# Run-key normalisation
+# -----------------------------------------------------------------------------
+_RUN_DIGITS_RE = re.compile(r'(\d+)')
+
+
+def _run_number(key: Any) -> Optional[str]:
+    """
+    Extract the numeric run number and format strictly as 'Runxx'.
+    
+    Examples:
+        '65' -> 'Run65', 'run65' -> 'Run65', 'Run 65' -> 'Run65', 65 -> 'Run65'
+    """
+    if key is None:
+        return None
+    s = str(key).strip()
+    if not s:
+        return None
+        
+    # If it's pure digits (e.g., "65" or 65), convert to "Run65"
+    if s.isdigit():
+        return f"Run{s}"
+        
+    # Prefer digits that follow 'run' (e.g., "run65" -> "Run65")
+    m = re.search(r'run[\s_\-]*(\d+)', s, re.IGNORECASE)
+    if m:
+        return f"Run{m.group(1)}"
+        
+    # Fallback for isolated numbers if applicable
+    m = re.search(r'(\d+)', s)
+    if m:
+        return f"Run{m.group(1)}"
+        
+    return None
+
+# -----------------------------------------------------------------------------
+# LOG file discovery & loading (JSON / TXT preferred, XLS as fallback)
+# -----------------------------------------------------------------------------
+def _match_log_in_list(data_clean: str, log_files: List[Path]) -> Optional[Path]:
+    """
+    Try the perfect '_..._LOG' candidate first (also after stripping common
+    '2Term_' / '4Term_' prefixes), then the longest common prefix.
+    """
+    log_files = list(log_files)
+    if not log_files:
+        return None
+
+    candidates: List[str] = [data_clean]
+    stripped = re.sub(r'^(2term|4term)_', '', data_clean, flags=re.IGNORECASE)
+    if stripped != data_clean:
+        candidates.append(stripped)
+    stripped2 = strip_measurement_suffix(data_clean)
+    if stripped2 not in candidates:
+        candidates.append(stripped2)
+
+    # 1) perfect candidate
+    for dc in candidates:
+        if '_' in dc:
+            candidate = dc.rsplit('_', 1)[0] + '_LOG'
+            for lf in log_files:
+                if lf.stem.replace('-', '_').upper() == candidate.upper():
+                    return lf
+
+    # 2) longest common prefix over all candidates
+    best_match, best_len = None, 0
+    for dc in candidates:
+        min_len = max(1, len(dc) // 2)
+        for lf in log_files:
+            log_clean = lf.stem.replace('-', '_')
+            common = os.path.commonprefix([dc, log_clean])
+            if len(common) >= min_len and len(common) > best_len:
+                best_len, best_match = len(common), lf
+    return best_match
+
+
+def _find_matching_log(data_stem: str, folder: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Find best LOG file for `data_stem` in `folder`.
+    Preference: .json > .txt > .xls
+    Returns (path, kind) or (None, None).
+    """
+    folder = Path(folder)
+    data_clean = data_stem.replace('-', '_')
+
+    json_logs = [f for f in folder.glob("*.json") if "LOG" in f.stem.upper()]
+    txt_logs  = [f for f in folder.glob("*.txt")  if "LOG" in f.stem.upper()]
+    xls_logs  = [f for f in folder.glob("*.xls")  if "LOG" in f.stem.upper()]
+
+    for logs, kind in ((json_logs, 'json'), (txt_logs, 'txt'), (xls_logs, 'xls')):
+        m = _match_log_in_list(data_clean, logs)
+        if m is not None:
+            return m, kind
+
+    # Folder-level fallback: a single JSON/TXT LOG covers everything in the dir
+    if len(json_logs) == 1:
+        return json_logs[0], 'json'
+    if len(txt_logs) == 1 and not json_logs:
+        return txt_logs[0], 'txt'
+
+    return None, None
+
+
+
+
+def _load_log_source(path: Path):
+    """
+    Load a LOG file and return a callable: run_key -> Optional[dict].
+
+    Supported formats:
+      * .json / .txt  – either the aggregated structure
+                        {device: {'2port': {run: {...}}, '4port': {...}}}
+                        or a flat {run: info} dict.
+      * .xls          – legacy LogBook.
+    """
+    suffix = path.suffix.lower()
+
+    if suffix in ('.json', '.txt'):
+        with open(path, 'r', encoding='utf-8') as f:
+            content = json.load(f)
+        
+        # Detect the aggregated 2port/4port layout
+        is_aggregated = any(
+            isinstance(v, dict) and ('2port' in v or '4port' in v)
+            for v in content.values()
+        )
+
+        # Initialize flat outside the branches to guarantee correct scoping
+        flat: Dict[str, Dict] = {}
+
+        if is_aggregated:
+            for device, dev_content in content.items():
+                if not isinstance(dev_content, dict):
+                    continue
+                for mtype in ('2port', '4port'):
+                    for run_num, run_info in dev_content.get(mtype, {}).items():
+                        # Direct key normalization on ingestion
+                        normalized_key = _run_number(run_num) or str(run_num)
+                        flat[normalized_key] = {
+                            **run_info,
+                            'measurement_type': mtype,
+                            'Device': device,
+                        }
+        else:
+            for k, v in content.items():
+                # Direct key normalization on ingestion
+                normalized_key = _run_number(k) or str(k)
+                flat[normalized_key] = v
+            
+        # Build a number-indexed map for loose runtime query fallback variations
+        by_number: Dict[str, Dict] = {}
+        for k, v in flat.items():
+            n = _run_number(k)
+            if n is not None:
+                by_number.setdefault(n, v)
+            
+        def lookup(run_key: str):
+            # 1. First normalize the incoming query to matching "Runxx" layout
+            n = _run_number(run_key)
+            
+            # 2. Check the strictly normalized flat structure first
+            if n in flat:
+                return flat[n]
+                
+            # 3. Fallback check for raw text key match if normalization was empty
+            if run_key in flat:
+                return flat[run_key]
+                
+            # 4. Final loose variations dictionary lookup
+            if n is not None:
+                return by_number.get(n)
+                
+            return None
+        
+        return lookup
+
+    if suffix == '.xls':
+        logbook = LogBook(str(path))
+        return logbook.get_run_info
+
+    raise ValueError(f"Unsupported LOG file type: {suffix}")
+
+
+''' Design Statutes 
+
+We want to convert all data into pkl files so that we do not have to parse new data to save/modify it. This will also compress the data.
+When loading data, if a .pkl exists, we should SKIP all other processing. There should be an option to create new and compare keys between the new data and the pkl (non destructive)
+Each DEVICE gets its own .pkl, but then remains the question what constitutes a device? 
+We will classify each measurement folder as its own device, meaning that any future measurements should be placed into the same folder (preferably with dates on the file)
+If a device has subdevices, these must be in the logbook - otherwise, we will always assume that "device_x" has subdevice "SD0"
+
+Raw Data dict key structure: filename -> RunID -> datakeys and settings
+If there is a matching logfile, we must check the devicename/subdevicename/RunID against the Raw data, to create a data dict structure that replace the filename with device->subdevice (and then puts filename into the datakeys section like we normally do) 
+
+Data dict key structure: numports->device->subdevice->RunID->[Data | Log | Settings] (note that Data is not a key, RunID simply contains e.g. "current/voltage" etc.)
+We can completely ignore the name to determine the portnumber, as we can simmply read the length of the "Instrument" key in filename->runID->Settings->Instrument and use len(val)+"port" for this.
+Why place numports at the front? no repeats, and all 2port measurements from all devices can be grouped
+
+To be able to match the log files, we need the format to make sense. But we also need to be flexible... So we need the following edge cases:
+We must accept: 
+    device->runID ("SD0" to be subdevice key)
+    runID->(force filename as device, and SD0 as subdevice key)
+
+file loading order:
+    check if pkl exists
+    if recalculate is enabled, create temp dict from the xls and log (if exists), comparing and merging contents (if new subdevice, add entire contents, if new runID, add to subdevice)
+    if recalculate is enabled, but no pkl exists, then we treat it as a first creation (see below)
+    if not, create new from the following logic:
+        load DATA xls files into a single dict (filename->RunID->datakeys and settings)
+        check for log
+        if log is xls, convert it to .json
+        if log is txt, convert it from .txt to .json (if direct conversion does not work, simply copy it to a same named .json and delete the .txt)
+        now that we have a .json, we load that as the log
+        from the data filename key, we must: strip any dates (e.g. 2026-01-01_2Term_Devicename_subdevicename -> 2Term_Devicename_subdevicename)
+        
+        We often use the naming convention (2Term|3Term|4Term|2port|3port|4port) to separate measurements from each other, as they cannot be saved in the same xls. 
+        Here, we run into some issues - as the individual xls files might actually have overlapping runIDs...
+        
+        Because I want the log to be easy to use, if you are exclusively using only 2port or 4port measurements (3port possible, so plan for reduncancy), then your run ID's should be easy to correlate.
+        The default log format should be any of the following:
+            
+        numports->Device->Subdevice->Runnum (either e.g. "123" or "Run123")->{"SMU1":val,"SMU2":val,...comment} 
+        Note that here, if only e.g. SMU1 and SMU2 are provided, SMU3 and SMU4 should be added with "SMU3":False,"SMU4":False. 
+        If no "comment" is provided, one should be added (so we can access and edit it later in the GUI)
+        If no "SMU Order" is provided, it should be presumed to be in numeric order [1,2,3,4] or [1,2] if only SMU1->SMU2
+        Ideally, these can be exposed in the GUI to be edited.
+        If not present, the field "Light Microscope" can be set to "unknown" (I'd prefer this to be a bool, but you can't set unknown as a bool)
+        Also, it should work if the log just contains RunID's. In this case, we fallback on the Filename + SD0 I described earlier, but of course add numports based on the Instrument field. 
+        More importantly, if NO LOG IS PROVIDED, we should build it from the data we have, but fill the comment field with "NO LOG" and the SMU's measured on with "Probe1" and "Probe2" in order
+        
+        Finally, the old log conversion (from old XLS, further down) needs to be rewritten to respect this. 
+        There needs to be a GUI button that allows wildcard forms to identify device and subdevice.
+        
+        Example: DFR1-GG-BL1 -> Device: DFR1-GG, subdevice: BL1 (this conversion process should let the user know if it could not cleanly find these names, or was able to split it, and in that case each such instance should be fixable by the user with a name entry exceptions) 
+        
+
+'''    
 # =============================================================================
 # LogBook class
 # =============================================================================
@@ -263,7 +499,9 @@ class KeithleyDataReader:
             for sheet_name in run_sheets:
                 if sheet_name == "Calc":
                     continue
-                run_key = self._extract_run_key(sheet_name)
+                run_key = sheet_name
+
+                
                 if run_key is None:
                     continue
                 settings = file_data.get("Settings", {}).get(run_key)
@@ -280,7 +518,11 @@ class KeithleyDataReader:
                 self._detect_emitter_detector(cols, stats)
 
                 cols['Settings'] = stats
-                file_data[sheet_name] = cols
+                cols['_sheet_name'] = sheet_name          # keep original for debugging
+                cols['_run_key'] = run_key                # 'Run65'
+                if run_key in file_data:
+                    logger.warning(f"Duplicate run key {run_key} in {file_path}; overwriting")
+                file_data[run_key] = cols
 
             return file_data
         finally:
@@ -327,13 +569,6 @@ class KeithleyDataReader:
                     run_settings[self.keydef[key]] = run_settings.pop(key)
         return settings_data
 
-    def _extract_run_key(self, sheet_name: str) -> Optional[str]:
-        match = re.search(r"Run\s*(\d+)", sheet_name, re.IGNORECASE)
-        if match:
-            return f"Run{match.group(1)}"
-        if sheet_name.isdigit():
-            return f"Run{sheet_name}"
-        return None
 
     def _parse_run_sheet(self, xls, sheet_name: str, file_path: str, settings: Dict) -> Optional[Dict]:
         sheet = xls.sheet_by_name(sheet_name)
@@ -537,40 +772,7 @@ class KeithleyDataReader:
         cols["emitter"] = emitter_dict
         cols["detector"] = detector_dict
 
-def _find_matching_log(data_stem: str, log_files: List[Path]) -> Optional[Path]:
-    """
-    Given a data file stem (without extension) and a list of LOG file Paths,
-    return the LOG file Path whose stem best matches the data file stem.
-    Dashes and underscores are treated as identical for matching.
 
-    Strategy:
-      1. Perfect candidate: data_stem with last '_...' replaced by '_LOG'.
-         Example: DFR1_IG_BL3_2Term -> DFR1_IG_BL3_LOG
-      2. Longest common prefix with any log file stem (minimum 50% length of data_stem).
-    """
-    # Normalise dashes/underscores for comparison
-    data_clean = data_stem.replace('-', '_')
-
-    # --- perfect candidate ---
-    if '_' in data_clean:
-        candidate = data_clean.rsplit('_', 1)[0] + '_LOG'
-        for lf in log_files:
-            if lf.stem.replace('-', '_') == candidate:
-                return lf
-
-    # --- longest common prefix fallback ---
-    best_match = None
-    best_len = 0
-    min_len = max(1, len(data_clean) // 2)
-
-    for lf in log_files:
-        log_clean = lf.stem.replace('-', '_')
-        common = os.path.commonprefix([data_clean, log_clean])
-        if len(common) >= min_len and len(common) > best_len:
-            best_len = len(common)
-            best_match = lf
-
-    return best_match
 
 
 # =============================================================================
@@ -578,74 +780,72 @@ def _find_matching_log(data_stem: str, log_files: List[Path]) -> Optional[Path]:
 # =============================================================================
 
 
-def Keithley_xls_read_file(file_path: str, logbook: Optional[LogBook] = None) -> Dict[str, Any]:
+def Keithley_xls_read_file(file_path: str,
+                           logbook: Optional[LogBook] = None,
+                           log_source: Optional[Any] = None) -> Dict[str, Any]:
     """
-    Read a single Keithley .xls file.
-    If logbook is not provided, the function automatically searches for a matching
-    LOG file in the same directory (using _find_matching_log).
+    Read a single Keithley .xls file and associate logbook data.
+
+    LOG resolution priority:
+      1. explicit `log_source` callable (run_key -> dict), if supplied
+      2. explicit `logbook` (legacy)
+      3. auto-discovered LOG file in the same folder (JSON > TXT > XLS)
     """
-    # Auto-detect logbook if none supplied
-    if logbook is None:
-        directory = Path(file_path).parent
-        log_files = [f for f in directory.glob("*.xls") if "LOG" in f.stem.upper()]
-        matched = _find_matching_log(Path(file_path).stem, log_files)
+    if log_source is None and logbook is None:
+        matched, kind = _find_matching_log(Path(file_path).stem, Path(file_path).parent)
         if matched is not None:
             try:
-                logbook = LogBook(str(matched))
+                log_source = _load_log_source(matched)
+                
+                logger.info(f"Using LOG file: {matched.name} ({kind})")
+                
             except Exception as e:
                 logger.warning(f"Could not parse logbook {matched.name}: {e}")
 
+    if log_source is None and logbook is not None:
+        log_source = logbook.get_run_info
+    
     reader = KeithleyDataReader(logbook)
+    
     file_data = reader.read_file(file_path)
-    result = {}
+    result: Dict[str, Any] = {}
 
     if "Settings" in file_data:
         settings_dict = file_data.pop("Settings")
         for run_key, run_data in file_data.items():
-            if run_key in settings_dict:
-                run_data['Settings'] = settings_dict[run_key]
-            else:
-                num_part = run_key.replace("Run", "")
-                if num_part in settings_dict:
-                    run_data['Settings'] = settings_dict[num_part]
-                else:
-                    run_data['Settings'] = {}
+            run_data['Settings'] = settings_dict.get(run_key, {})
             result[run_key] = run_data
     else:
-        result = file_data
-
-    if logbook is not None:
+        result = dict(file_data)
+    
+    if log_source is not None:
+        
         for run_key, run_data in result.items():
-            log_info = logbook.get_run_info(run_key)
+            
+            log_info = log_source(run_key)
             if log_info:
-                run_data['LOG'] = log_info
-
+                result[run_key]['LOG'] = log_info  
+                
     return result
 
 
 def Keithley_xls_read(directory: str, **kwargs) -> Dict[str, Any]:
     """
-    Read all .xls Keithley data files in a directory.
-    For each data file, the best matching LOG file is automatically detected
-    (using _find_matching_log) and used as the logbook.
+    Read every Keithley .xls data file in a directory.
+
+    LOG files are auto-discovered per data file, preferring:
+        *_LOG.json  >  *_LOG.txt  >  *_LOG.xls
     """
     directory = Path(directory)
-    all_files = list(directory.glob("*.xls"))
-    log_files = [f for f in all_files if "LOG" in f.stem.upper()]
-    data_files = [f for f in all_files if "LOG" not in f.stem.upper()]
+    data_files = [
+        f for f in directory.glob("*.xls")
+        if "LOG" not in f.stem.upper()
+    ]
 
-    results = {}
+    results: Dict[str, Any] = {}
     for df in data_files:
-        matched = _find_matching_log(df.stem, log_files)
-        logbook = None
-        if matched is not None:
-            try:
-                logbook = LogBook(str(matched))
-            except Exception as e:
-                logger.warning(f"Could not parse logbook {matched.name}: {e}")
-
         try:
-            results[df.stem] = Keithley_xls_read_file(str(df), logbook)
+            results[df.stem] = Keithley_xls_read_file(str(df))
         except Exception as e:
             logger.error(f"Error reading {df.name}: {e}")
 

@@ -274,7 +274,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PalmSens Data Browser")
+        self.setWindowTitle("Data Browser")
         self.resize(1300, 800)
         
         self.current_folder: Optional[Path] = None
