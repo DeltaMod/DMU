@@ -96,6 +96,40 @@ file loading order:
 # =============================================================================
 #  Keithley data importer Helper functions
 # =============================================================================
+
+KNOWN_MATERIALS = {
+    "ALD":    "Al2O3",
+    "PMMA":   "PMMA",
+    "Al2O3":  "Al2O3",
+    "S1813":  "S1813",
+}
+
+def detect_material_from_path(path) -> str:
+    """Scan every path component (case-insensitively) for a known
+    material flag. First match wins. Returns 'AIR' if nothing matches."""
+    for part in Path(path).parts:
+        lowered = part.lower()
+        for flag, material in KNOWN_MATERIALS.items():
+            if flag.lower() in lowered:
+                return material
+    return "AIR"
+
+def migrate_logs_to_json(root_dir, force=False):
+    """Walk root_dir, convert every *LOG*.xls to a sibling .json using the
+    existing convert_log_xls_to_dict(). Skips files whose .json already
+    exists unless force=True. Returns list of (xls, json) pairs written."""
+    root = Path(root_dir)
+    written = []
+    for xls in root.rglob("*LOG*.xls"):
+        json_path = xls.with_suffix(".json")
+        if json_path.exists() and not force:
+            continue
+        data = convert_log_xls_to_dict(xls)   # your existing converter
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+        written.append((xls, json_path))
+    return written
+
 def save_device_data(folder: Path, data: dict, cache_name: Optional[str] = None) -> Path:
     """Write the device_data dict back to its pkl. Returns the pkl path."""
     folder = Path(folder)
@@ -1137,17 +1171,23 @@ def _save_pickle(path: Path, data):
         pickle.dump(data, f)
 
 
-def _merge_device_data(old: dict, new: dict) -> dict:
-    """Merge new runs into old data non-destructively."""
-    merged = copy.deepcopy(old)
+def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) -> dict:
+    merged.setdefault("_meta", {"material": "AIR", "material_stack": {}})
 
     for np, devices in new.items():
+        if np == "_meta":
+            merged["_meta"] = {**merged.get("_meta", {}), **devices}
+            continue
+
         for dev, subs in devices.items():
             for sub, runs in subs.items():
                 for run, data in runs.items():
-                    merged.setdefault(np, {}) \
-                          .setdefault(dev, {}) \
-                          .setdefault(sub, {})[run] = data
+                    target = (merged.setdefault(np, {})
+                                    .setdefault(dev, {})
+                                    .setdefault(sub, {}))
+                    if not overwrite_existing and run in target:
+                        continue
+                    target[run] = data
 
     return merged
 
@@ -1155,7 +1195,8 @@ def _merge_device_data(old: dict, new: dict) -> dict:
 def build_device_data(folder: Path,
                       force_reload: bool = False,
                       compare: bool = False,
-                      cache_name: Optional[str] = None) -> dict:
+                      cache_name: Optional[str] = None,
+                      overwrite_existing: bool = True) -> dict:
     """
     Build/load one device folder as:
         numports -> device -> subdevice -> RunID -> run_data
@@ -1204,9 +1245,14 @@ def build_device_data(folder: Path,
                  .setdefault(dev, {}) \
                  .setdefault(sub, {})[run_key] = run_data
 
+    fresh["_meta"] = {
+    "material": detect_material_from_path(folder),
+    "material_stack": {},
+    }
+    
     if compare and cache_path.exists():
         old = _load_pickle(cache_path)
-        merged = _merge_device_data(old, fresh)
+        merged = _merge_device_data(old, fresh, overwrite_existing=overwrite_existing)
         _save_pickle(cache_path, merged)
         return merged
 

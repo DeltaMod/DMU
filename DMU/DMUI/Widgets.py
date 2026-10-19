@@ -39,7 +39,8 @@ Design Principles
 
 import numpy as np
 
-from PyQt5 import QtWidgets, QtGui
+from PyQt5 import QtWidgets, QtGui, QtCore
+
 
 
 HEADER_BG = QtGui.QColor("#c8c8c8")
@@ -458,4 +459,43 @@ class MultiParamRow(QtWidgets.QWidget):
         finally:
             self._is_updating = False
 
+class CollapsibleSection(QtWidgets.QWidget):
+    """A titled section with a toggle arrow that shows/hides its content."""
+
+    def __init__(self, title: str, parent=None, expanded: bool = False):
+        super().__init__(parent)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 2, 0, 2)
+        outer.setSpacing(0)
+
+        self.toggle_btn = QtWidgets.QToolButton()
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setChecked(expanded)
+        self.toggle_btn.setText(title)
+        self.toggle_btn.setStyleSheet(
+            "QToolButton { border: none; font-weight: bold; text-align: left; padding: 2px; }"
+        )
+        self.toggle_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self._update_arrow(expanded)
+        self.toggle_btn.toggled.connect(self._on_toggled)
+        outer.addWidget(self.toggle_btn)
+
+        self.content = QtWidgets.QWidget()
+        self.content.setVisible(expanded)
+        outer.addWidget(self.content)
+
+    def _update_arrow(self, expanded):
+        self.toggle_btn.setArrowType(
+            QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow
+        )
+
+    def _on_toggled(self, checked):
+        self._update_arrow(checked)
+        self.content.setVisible(checked)
+
+    def set_layout(self, layout):
+        self.content.setLayout(layout)
+
+    def set_expanded(self, expanded):
+        self.toggle_btn.setChecked(expanded)
                 

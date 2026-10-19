@@ -254,6 +254,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_meas_index: Optional[int] = None
         self.current_filename: Optional[str] = None
         
+        # Ticked-measurement model (file_path, meas_index) -> ticked.
+        self._ticked_measurements_from_workspace: set = set()
+        self.device_registry: dict = {}
         
         ## -- plotting parameters:
         
@@ -421,6 +424,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #USER overrides
         if hasattr(self, '_user_rcparams') and self._user_rcparams:
             mpl.rcParams.update(self._user_rcparams)
+            
     def _update_ui_from_config(self):
         """Update all UI elements from EDIT_* variables"""
 
@@ -472,6 +476,149 @@ class MainWindow(QtWidgets.QMainWindow):
                 val = getattr(self, row.param_name, None)
                 row.line_edit.setText(val if val is not None else "")
                 row._update_placeholder()   # refresh grey placeholder text
+    # -- Data-management actions ---------------------------------------------
+
+    def _get_ticked_folders(self) -> list[Path]:
+        out = []
+        for i in range(self.folder_list.count()):
+            it = self.folder_list.item(i)
+            if it.checkState() == QtCore.Qt.Checked:
+                out.append(Path(it.text()))
+        return out
+    
+    def _import_dit(self):
+        """Local import shim so this class can live in either package layout."""
+        try:
+            from . import data_import_tools as dit
+        except ImportError:
+            from DMU import data_import_tools as dit
+        return dit
+    
+    def _convert_logs_to_json(self):
+        folders = self._get_ticked_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+        dit = self._import_dit()
+        total = []
+        for folder in folders:
+            try:
+                total.extend(dit.migrate_logs_to_json(folder))
+            except Exception as e:
+                logger.error(f"LOG conversion failed in {folder}: {e}")
+        QtWidgets.QMessageBox.information(
+            self, "Conversion complete",
+            f"Wrote {len(total)} .json log(s) across {len(folders)} folder(s)."
+        )
+    
+    def _add_new_measurements(self):
+        self._run_sync(overwrite_existing=False,
+                       title="Add new measurements")
+    
+    def _full_sync_measurements(self):
+        self._run_sync(overwrite_existing=True,
+                       title="Full sync")
+    
+    def _run_sync(self, overwrite_existing: bool, title: str):
+        folders = self._get_ticked_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+        dit = self._import_dit()
+        ok, failed = 0, []
+        for folder in folders:
+            try:
+                dit.build_device_data(
+                    folder,
+                    force_reload=True,
+                    compare=True,
+                    overwrite_existing=overwrite_existing,
+                )
+                ok += 1
+            except Exception as e:
+                failed.append(f"{folder.name}: {e}")
+        self._evict_loaded_files_for(folders)
+        msg = f"{title}: synced {ok} folder(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
+        QtWidgets.QMessageBox.information(self, title, msg)
+    
+    def _force_rebuild_current_pkl(self):
+        folder = self.current_folder
+        if folder is None:
+            QtWidgets.QMessageBox.information(self, "No folder", "Focus a folder first.")
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Confirm rebuild",
+            f"Rebuild the pkl for:\n{folder}\n\n"
+            "Any LOG edits stored in the pkl will be lost. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        dit = self._import_dit()
+        try:
+            dit.build_device_data(folder, force_reload=True, compare=False)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Rebuild failed", str(e))
+            return
+        self._evict_loaded_files_for([folder])
+        QtWidgets.QMessageBox.information(
+            self, "Rebuilt", f"Rebuilt pkl for {folder.name}.")
+    
+    def _evict_loaded_files_for(self, folders):
+        """Drop in-memory LoadedFile instances whose path sits under any folder."""
+        roots = [str(Path(f).resolve()) for f in folders]
+        drop = []
+        for fp in list(self.loaded_files.keys()):
+            try:
+                rp = str(Path(fp).resolve())
+            except Exception:
+                continue
+            if any(rp.startswith(r + os.sep) or rp == r for r in roots):
+                drop.append(fp)
+        for fp in drop:
+            del self.loaded_files[fp]
+        # Reset active pointer if we just evicted it.
+        if self.current_file_path in drop:
+            self._reset_loaded_data()
+        self._rebuild_measurements_tree()
+    
+    def _update_device_registry(self):
+        folders = self._get_ticked_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+        registry = {}
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            pkl_path = folder / f".dmui_{folder.name}.pkl"
+            for f in folder.iterdir():
+                if not f.is_file():
+                    continue
+                if self.registry.find(f) is None:
+                    continue
+                dev, sub = self._classify_path(f)
+                registry[str(f)] = {
+                    "device": dev,
+                    "subdevice": sub,
+                    "folder": str(folder),
+                    "pkl_present": pkl_path.exists(),
+                }
+        self.device_registry = registry
+        if hasattr(self, "_registry_status"):
+            self._registry_status.setText(
+                f"Registry: {len(registry)} file(s) indexed."
+            )
+        QtWidgets.QMessageBox.information(
+            self, "Registry updated",
+            f"Indexed {len(registry)} data file(s) across {len(folders)} folder(s)."
+        )
+    
     # -- UI construction ----------------------------------------------------
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -510,7 +657,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_list.itemSelectionChanged.connect(self._on_selection_changed)
         self.file_list.setHeaderHidden(True)
         self.file_list.itemClicked.connect(self._on_entry_selected)
-        self.file_list.itemChanged.connect(self._on_file_item_check_changed)
+        self.file_list.itemChanged.connect(self._on_item_check_changed)
         col.addWidget(self.file_list)
 
         return col
@@ -702,7 +849,39 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.disable_multiload_toggle.toggled.connect(self._toggle_disable_multiload)
         layout.addWidget(self.disable_multiload_toggle)
-    
+        # ---- Data management ----
+        dm_lbl = QtWidgets.QLabel("Data management (acts on ticked folders)")
+        dm_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(dm_lbl)
+        
+        btn_logs = QtWidgets.QPushButton("Convert LOGs to JSON")
+        btn_logs.setToolTip("Convert every *LOG*.xls in ticked folders to a sibling .json.")
+        btn_logs.clicked.connect(self._convert_logs_to_json)
+        layout.addWidget(btn_logs)
+        
+        btn_add = QtWidgets.QPushButton("Find & add new measurements")
+        btn_add.setToolTip("Add any run that isn't in the pkl yet. Existing entries untouched.")
+        btn_add.clicked.connect(self._add_new_measurements)
+        layout.addWidget(btn_add)
+        
+        btn_merge = QtWidgets.QPushButton("Full sync (compare + merge)")
+        btn_merge.setToolTip("Re-parse every .xls and overwrite existing pkl entries.")
+        btn_merge.clicked.connect(self._full_sync_measurements)
+        layout.addWidget(btn_merge)
+        
+        btn_rebuild = QtWidgets.QPushButton("Force rebuild pkl (focused folder)")
+        btn_rebuild.setToolTip("Rebuild the focused folder's pkl from scratch.")
+        btn_rebuild.clicked.connect(self._force_rebuild_current_pkl)
+        layout.addWidget(btn_rebuild)
+        
+        btn_reg = QtWidgets.QPushButton("Update device registry")
+        btn_reg.setToolTip("Build an index of every measurement file across ticked folders.")
+        btn_reg.clicked.connect(self._update_device_registry)
+        layout.addWidget(btn_reg)
+        
+        self._registry_status = QtWidgets.QLabel("")
+        self._registry_status.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(self._registry_status)
         layout.addStretch(1)
         self.tab_widget.addTab(tab, "Advanced")
     
@@ -885,30 +1064,51 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_logbook_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-        layout.addWidget(QtWidgets.QLabel("LOG entry for active measurement"))
+    
+        # ---- Active measurement (editable, always visible) ----
+        active_lbl = QtWidgets.QLabel("Active measurement")
+        active_lbl.setStyleSheet("font-weight: bold;")
+        layout.addWidget(active_lbl)
     
         form = QtWidgets.QFormLayout()
         self._log_fields = {}
     
-        # Comment gets its own multi-line edit
         self._log_comment = QtWidgets.QPlainTextEdit()
         self._log_comment.setFixedHeight(80)
         self._log_comment.textChanged.connect(self._on_log_comment_changed)
         form.addRow("Comment:", self._log_comment)
     
-        for key in ("Timestamp", "Device", "Subdevice", "RunID", "SMU Order", "LightMicroscope",
-                    "SMU1", "SMU2", "SMU3", "SMU4"):
+        for key in ("Timestamp", "Device", "Subdevice", "RunID", "SMU Order",
+                    "LightMicroscope", "SMU1", "SMU2", "SMU3", "SMU4"):
             le = QtWidgets.QLineEdit()
             le.editingFinished.connect(lambda k=key: self._on_log_field_changed(k))
             self._log_fields[key] = le
             form.addRow(f"{key}:", le)
     
         layout.addLayout(form)
-        layout.addStretch(1)
+    
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        layout.addWidget(line)
+    
+        # ---- Collapsible list of other selected/ticked measurements ----
+        others_lbl = QtWidgets.QLabel("Other selected / ticked measurements")
+        others_lbl.setStyleSheet("font-weight: bold;")
+        layout.addWidget(others_lbl)
+    
+        self._log_other_scroll = QtWidgets.QScrollArea()
+        self._log_other_scroll.setWidgetResizable(True)
+        self._log_other_container = QtWidgets.QWidget()
+        self._log_other_layout = QtWidgets.QVBoxLayout(self._log_other_container)
+        self._log_other_layout.setContentsMargins(0, 0, 0, 0)
+        self._log_other_layout.addStretch(1)
+        self._log_other_scroll.setWidget(self._log_other_container)
+        layout.addWidget(self._log_other_scroll, stretch=1)
+    
         self.tab_widget.addTab(tab, "Logbook")
     
     def _refresh_logbook_tab(self):
-        """Populate the Logbook tab from the active measurement's log dict."""
+        # ---------- Active section ----------
         for w in (self._log_comment, *self._log_fields.values()):
             w.blockSignals(True)
     
@@ -926,6 +1126,60 @@ class MainWindow(QtWidgets.QMainWindow):
     
         for w in (self._log_comment, *self._log_fields.values()):
             w.blockSignals(False)
+    
+        # ---------- Other selected / ticked sections ----------
+        while self._log_other_layout.count() > 1:  # keep trailing stretch
+            item = self._log_other_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+    
+        if not hasattr(self, "_log_other_layout"):
+            return
+    
+        active = (
+            (self.current_file_path, self.current_meas_index)
+            if self.current_file_path is not None else None
+        )
+        combined = self._get_ticked_measurements() | set(self.selected_measurements)
+        others = sorted(t for t in combined if t != active)
+    
+        if not others:
+            hint = QtWidgets.QLabel("(nothing else ticked or highlighted)")
+            hint.setStyleSheet("color: gray; font-style: italic;")
+            self._log_other_layout.insertWidget(0, hint)
+            return
+    
+        readonly_keys = ("Timestamp", "Device", "Subdevice", "RunID", "SMU Order",
+                         "LightMicroscope", "SMU1", "SMU2", "SMU3", "SMU4")
+    
+        for fp, mi in others:
+            lf = self.loaded_files.get(fp)
+            if lf is None or mi >= len(lf.measurements):
+                continue
+            meas = lf.measurements[mi]
+            log = getattr(meas, "log", {}) or {}
+            title = f"{Path(fp).name}  ::  {meas.title}"
+            section = CollapsibleSection(title, expanded=False)
+    
+            inner = QtWidgets.QFormLayout()
+            inner.setContentsMargins(20, 2, 2, 2)
+    
+            cv = QtWidgets.QPlainTextEdit(str(log.get("Comment", meas.comment or "")))
+            cv.setReadOnly(True)
+            cv.setFixedHeight(50)
+            inner.addRow("Comment:", cv)
+    
+            for k in readonly_keys:
+                v = log.get(k, "")
+                le = QtWidgets.QLineEdit("" if v is None else str(v))
+                le.setReadOnly(True)
+                inner.addRow(f"{k}:", le)
+    
+            section.set_layout(inner)
+            self._log_other_layout.insertWidget(
+                self._log_other_layout.count() - 1, section
+            )
     
     def _on_log_comment_changed(self):
         if self.loaded_file is None or self.current_meas_index is None:
@@ -960,19 +1214,30 @@ class MainWindow(QtWidgets.QMainWindow):
         active measurement, then dump to pkl."""
         if self.loaded_file is None or self.loaded_file.device_data is None:
             return
+    
         run_key = self.loaded_file.measurements[self.current_meas_index].metadata.get("run_key")
         if run_key is None:
             return
-        # find and replace in device_data
+    
+        # Find and replace in device_data.
         target = None
         for np_k, devs in self.loaded_file.device_data.items():
+            if np_k == "_meta":
+                # _meta is not part of the numports tree; skip it.
+                continue
             for dev, subs in devs.items():
                 for sub, runs in subs.items():
                     if run_key in runs:
                         target = runs[run_key]
                         break
+                if target is not None:
+                    break
+            if target is not None:
+                break
+    
         if target is None:
             return
+    
         target["LOG"] = dict(self.loaded_file.measurements[self.current_meas_index].log)
         self.loaded_file.save()
     
@@ -1105,10 +1370,16 @@ class MainWindow(QtWidgets.QMainWindow):
             item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
             self.folder_list.addItem(item)
         self.folder_list.blockSignals(False)
-    
-        # Cache the ticked-file set from the workspace so the first
-        # _rebuild_measurements_tree call has somewhere to read it from.
+
         self._ticked_files_from_workspace = set(workspace.get("ticked_files", []))
+        self._ticked_measurements_from_workspace = set()
+        for row in workspace.get("ticked_measurements", []):
+            try:
+                fp, mi = row
+                self._ticked_measurements_from_workspace.add((str(fp), int(mi)))
+            except (TypeError, ValueError):
+                continue
+
         self._rebuild_measurements_tree()
 
     def _add_folder(self):
@@ -1212,6 +1483,7 @@ class MainWindow(QtWidgets.QMainWindow):
             payloads = [i.data(0, QtCore.Qt.UserRole) for i in self.file_list.selectedItems()]
             self._set_active_measurement(fp, 0, mi)
             return
+        self._refresh_logbook_tab()
         self._refresh_plot()
     
     def _on_curve_selection_changed(self):
@@ -1366,6 +1638,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.file_list.expandAll()
             self.file_list.blockSignals(False)
             self._refresh_curves_tab()
+            self._refresh_logbook_tab()
             return
         
         for folder_path in ticked_folders:
@@ -1405,10 +1678,24 @@ class MainWindow(QtWidgets.QMainWindow):
                     continue
     
                 for meas_index, meas_title in measurements:
-                    child = QtWidgets.QTreeWidgetItem([f"    {meas_index}: {meas_title}"])
-                    child.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-                    child.setData(0, QtCore.Qt.UserRole,
-                                  ("meas", str(f), 0, meas_index))
+                    child = QtWidgets.QTreeWidgetItem(
+                        [f"    {meas_index}: {meas_title}"]
+                    )
+                    child.setFlags(
+                        QtCore.Qt.ItemIsEnabled
+                        | QtCore.Qt.ItemIsSelectable
+                        | QtCore.Qt.ItemIsUserCheckable
+                    )
+                    was_ticked = (
+                        (str(f), meas_index) in self._ticked_measurements_from_workspace
+                        or str(f) in self._ticked_files_from_workspace
+                    )
+                    child.setCheckState(
+                        0, QtCore.Qt.Checked if was_ticked else QtCore.Qt.Unchecked
+                    )
+                    child.setData(
+                        0, QtCore.Qt.UserRole, ("meas", str(f), 0, meas_index)
+                    )
                     header.addChild(child)
     
                 header.setExpanded(True)
@@ -1491,7 +1778,6 @@ class MainWindow(QtWidgets.QMainWindow):
         return ticked
     
     def _save_workspace(self):
-        """Persist folder list (with check states) and ticked file paths."""
         folders = [
             {
                 "path": self.folder_list.item(i).text(),
@@ -1499,60 +1785,131 @@ class MainWindow(QtWidgets.QMainWindow):
             }
             for i in range(self.folder_list.count())
         ]
-        ticked_files = list(self._get_ticked_file_paths())
-        save_workspace({"folders": folders, "ticked_files": ticked_files})    
-    def _on_file_item_check_changed(self, item, column):
-        """Tick/untick a file row. Cascades to measurement children, loads
-        the file into memory if newly ticked, and persists tick state."""
+        ticked = self._get_ticked_measurements()
+        save_workspace({
+            "folders": folders,
+            "ticked_files": list({fp for fp, _ in ticked}),   # legacy compatibility
+            "ticked_measurements": [list(t) for t in sorted(ticked)],
+        })
+        
+        # -- Tick / check handling ------------------------------------------------
+
+    def _on_item_check_changed(self, item, column):
         if column != 0:
             return
         payload = item.data(0, QtCore.Qt.UserRole)
-        if payload is None or payload[0] != "file":
+        if payload is None:
             return
+        kind = payload[0]
+        if kind == "file":
+            self._on_file_check_changed(item)
+        elif kind == "meas":
+            self._on_measurement_check_changed(item)
+
+    def _load_file_for_tick(self, file_path: str, item_to_revert) -> bool:
+        """Ensure the file is in memory; on failure, revert the checkbox and
+        return False."""
+        if file_path in self.loaded_files:
+            return True
+        if getattr(self, "EDIT_DISABLE_MULTILOAD", False):
+            others = [p for p in self.loaded_files.keys() if p != file_path]
+            if others:
+                self.file_list.blockSignals(True)
+                item_to_revert.setCheckState(0, QtCore.Qt.Unchecked)
+                self.file_list.blockSignals(False)
+                QtWidgets.QMessageBox.information(
+                    self, "Multi-load disabled",
+                    "Advanced settings forbid loading more than one file at a time."
+                )
+                return False
+        try:
+            self.loaded_files[file_path] = self.registry.load(Path(file_path))
+            return True
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Load failed", f"Could not load {file_path}:\n{exc}"
+            )
+            self.file_list.blockSignals(True)
+            item_to_revert.setCheckState(0, QtCore.Qt.Unchecked)
+            self.file_list.blockSignals(False)
+            return False
+
+    def _on_file_check_changed(self, item):
+        payload = item.data(0, QtCore.Qt.UserRole)
         _, file_path, _ = payload
         ticked = item.checkState(0) == QtCore.Qt.Checked
 
-        # --- cascade to measurement children ---
+        # Cascade to children.
         self.file_list.blockSignals(True)
         for j in range(item.childCount()):
             child = item.child(j)
             cpayload = child.data(0, QtCore.Qt.UserRole)
             if cpayload is None or cpayload[0] != "meas":
                 continue
-            child.setCheckState(0, QtCore.Qt.Checked if ticked else QtCore.Qt.Unchecked)
+            child.setCheckState(
+                0, QtCore.Qt.Checked if ticked else QtCore.Qt.Unchecked
+            )
         self.file_list.blockSignals(False)
 
-        if ticked:
-            # Multi-load guard.
-            if getattr(self, "EDIT_DISABLE_MULTILOAD", False):
-                others = [p for p in self.loaded_files.keys() if p != file_path]
-                if others:
-                    self.file_list.blockSignals(True)
-                    item.setCheckState(0, QtCore.Qt.Unchecked)
-                    self.file_list.blockSignals(False)
-                    QtWidgets.QMessageBox.information(
-                        self, "Multi-load disabled",
-                        "Advanced settings forbid loading more than one file "
-                        "at a time. Untick the current one first."
-                    )
-                    return
-            # Load into memory if not already loaded.
-            if file_path not in self.loaded_files:
-                try:
-                    self.loaded_files[file_path] = self.registry.load(Path(file_path))
-                except Exception as exc:
-                    QtWidgets.QMessageBox.warning(
-                        self, "Load failed", f"Could not load {file_path}:\n{exc}"
-                    )
-                    self.file_list.blockSignals(True)
-                    item.setCheckState(0, QtCore.Qt.Unchecked)
-                    self.file_list.blockSignals(False)
-                    return
-        # Unticking does not evict from memory (cheap); it just drops the file
-        # from the Curves tab.
+        if ticked and not self._load_file_for_tick(file_path, item):
+            return
 
+        self._after_tick_changed()
+
+    def _on_measurement_check_changed(self, item):
+        payload = item.data(0, QtCore.Qt.UserRole)
+        _, file_path, _, _meas_index = payload
+        ticked = item.checkState(0) == QtCore.Qt.Checked
+
+        if ticked and not self._load_file_for_tick(file_path, item):
+            return
+
+        # Update parent's aggregate state.
+        parent = item.parent()
+        if parent is not None:
+            states = []
+            for j in range(parent.childCount()):
+                c = parent.child(j)
+                cpayload = c.data(0, QtCore.Qt.UserRole)
+                if cpayload is None or cpayload[0] != "meas":
+                    continue
+                states.append(c.checkState(0))
+            self.file_list.blockSignals(True)
+            if states and all(s == QtCore.Qt.Checked for s in states):
+                parent.setCheckState(0, QtCore.Qt.Checked)
+            elif states and all(s == QtCore.Qt.Unchecked for s in states):
+                parent.setCheckState(0, QtCore.Qt.Unchecked)
+            else:
+                parent.setCheckState(0, QtCore.Qt.PartiallyChecked)
+            self.file_list.blockSignals(False)
+
+        self._after_tick_changed()
+
+    def _after_tick_changed(self):
         self._save_workspace()
         self._refresh_curves_tab()
+        self._refresh_logbook_tab()
+        self._refresh_plot()
+
+    def _get_ticked_measurements(self) -> set:
+        """Return {(file_path, meas_index)} for every ticked measurement row."""
+        ticked = set()
+        for i in range(self.file_list.topLevelItemCount()):
+            folder_node = self.file_list.topLevelItem(i)
+            for j in range(folder_node.childCount()):
+                header = folder_node.child(j)
+                hpayload = header.data(0, QtCore.Qt.UserRole)
+                if hpayload is None or hpayload[0] != "file":
+                    continue
+                fp = hpayload[1]
+                for k in range(header.childCount()):
+                    child = header.child(k)
+                    cpayload = child.data(0, QtCore.Qt.UserRole)
+                    if cpayload is None or cpayload[0] != "meas":
+                        continue
+                    if child.checkState(0) == QtCore.Qt.Checked:
+                        ticked.add((fp, cpayload[3]))
+        return ticked
 
         
     def _refresh_curves_tab(self):
@@ -2109,12 +2466,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.canvas.draw()
             return
     
-        # --- target list ---
-        if self.EDIT_MULTIPLOT and self.selected_measurements:
-            targets = list(self.selected_measurements)
+        # --- target list: ticked ∪ Qt-selected ---
+        if self.EDIT_MULTIPLOT:
+            ticked = self._get_ticked_measurements()
+            highlighted = set(self.selected_measurements)
+            combined = ticked | highlighted
+            targets = list(combined) if combined else [
+                (self.current_file_path, self.current_meas_index)
+            ]
         else:
             targets = [(self.current_file_path, self.current_meas_index)]
-        # drop any targets whose file isn't in memory yet
+        
+        # Lazy-load any file we need but haven't read into memory yet.
+        for fp, _ in targets:
+            if fp not in self.loaded_files:
+                try:
+                    self.loaded_files[fp] = self.registry.load(Path(fp))
+                except Exception as exc:
+                    logger.error(f"Could not auto-load {fp}: {exc}")
         targets = [t for t in targets if t[0] in self.loaded_files]
     
         # active measurement's Measurement (for title etc)

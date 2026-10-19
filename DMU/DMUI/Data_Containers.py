@@ -155,6 +155,8 @@ class KeithleySource:
         measurements = []
         i = 0
         for np_key, devs in device_data.items():
+            if np_key == "_meta":
+                continue        # do not load "_meta" key
             for dev, subs in devs.items():
                 for sub, runs in subs.items():
                     for run_key, run_data in runs.items():
