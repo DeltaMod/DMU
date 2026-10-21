@@ -54,19 +54,218 @@ class LoadedFile:
     measurements: list[Measurement]
     group: Optional[str] = None
     subdevice: Optional[str] = None
-    # NEW: for write-back
-    device_data: Optional[dict] = None      # whole pkl structure in memory
+    device_data: Optional[dict] = None       # reference into the folder store
     pkl_path: Optional[Path] = None
+    folder_store: Optional["FolderStore"] = None
 
     def save(self):
-        """Persist edits (e.g. LOG) back into the folder's pkl."""
+        """
+        Deprecated: prefer FolderStore.save_log(run_key, log).
+        Kept for external callers that still edit device_data directly.
+        Bypasses the store's LoadedFile-mirroring; do not mix with save_log().
+        """
         if self.pkl_path is None or self.device_data is None:
             return
         import pickle
         with open(self.pkl_path, "wb") as f:
             pickle.dump(self.device_data, f)
+            
+# ---------------------------------------------------------------------------
+# FolderStore — one per (folder, source); owns the pkl-backed device_data
+# and the identity-stable LoadedFile cache. Plain class, not a @dataclass:
+# see module notes.
+# ---------------------------------------------------------------------------
+
+_STORE_CACHE: dict[tuple[Path, str], "FolderStore"] = {}
 
 
+def get_folder_store(folder: Path,
+                     source_type: str,
+                     build_measurement) -> "FolderStore":
+    """
+    Return (and lazily create) the singleton store for a folder.
+
+    build_measurement: callable(i, run_key, run_data) -> Measurement.
+                       Supplied by the DataSource so the store stays
+                       source-agnostic.
+    """
+    key = (Path(folder).resolve(), source_type)
+    if key not in _STORE_CACHE:
+        _STORE_CACHE[key] = FolderStore(folder, source_type, build_measurement)
+    return _STORE_CACHE[key]
+
+
+def evict_folder_store(folder: Path) -> None:
+    """Forget a folder's store (e.g. when the user removes it from the list)."""
+    resolved = Path(folder).resolve()
+    for key in [k for k in _STORE_CACHE if k[0] == resolved]:
+        _STORE_CACHE.pop(key, None)
+
+
+class FolderStore:
+    """
+    Owns one folder's pkl-backed `device_data` dict and every LoadedFile
+    derived from it.
+
+    Responsibilities:
+      * lazy-load the pkl (or build it from raw XLS + LOG if missing)
+      * hand out identity-stable LoadedFile instances per file
+      * provide a cheap peek() (titles only, no curve extraction)
+      * persist LOG edits back to the pkl and update live LoadedFiles
+      * reload from disk when the user asks for a full re-sync
+
+    Not thread-safe; the GUI is single-threaded.
+
+    Not a @dataclass — see module notes:
+      * `_data` / `_error` / `_loaded_files` are lazy-mutated internals
+      * `pkl_path` is derived, not an input
+      * identity is guaranteed by get_folder_store() (value semantics
+        would be wrong: two callers must share the same device_data).
+    """
+
+    def __init__(self, folder: Path, source_type: str, build_measurement):
+        self.folder: Path         = Path(folder).resolve()
+        self.source_type: str     = source_type
+        self.pkl_path: Path       = self.folder / f".dmui_{self.folder.name}.pkl"
+        self._build_measurement   = build_measurement
+
+        self._data: Optional[dict]                  = None
+        self._loaded_files: dict[Path, LoadedFile]  = {}
+        self._error: Optional[str]                  = None
+
+    # -- lazy load ----------------------------------------------------------
+
+    def _ensure(self) -> None:
+        """Populate self._data from the pkl, or build it if missing."""
+        if self._data is not None:
+            return
+        try:
+            self._data = build_device_data(self.folder)
+            self._error = None
+        except Exception as exc:
+            self._error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    @property
+    def error(self) -> Optional[str]:
+        return self._error
+
+    @property
+    def data(self) -> dict:
+        """Read-only view. Use save_log()/reload() to change it."""
+        self._ensure()
+        return self._data
+
+    # -- iteration ----------------------------------------------------------
+
+    def _iter_runs(self):
+        """Yield (numports, device, subdevice, run_key, run_data)."""
+        assert self._data is not None
+        for np_key, devices in self._data.items():
+            if np_key == "_meta" or not isinstance(devices, dict):
+                continue
+            for dev, subs in devices.items():
+                for sub, runs in subs.items():
+                    for run_key, run_data in runs.items():
+                        yield np_key, dev, sub, run_key, run_data
+
+    # -- public API ---------------------------------------------------------
+
+    def peek(self, file_name: str) -> list[tuple[int, str]]:
+        """
+        Cheap listing: (measurement_id, title) for each run in this file.
+        Does not extract curves. Returns [] on a load failure so that
+        callers populating a tree can degrade gracefully.
+        """
+        try:
+            self._ensure()
+        except Exception:
+            return []
+        out: list[tuple[int, str]] = []
+        i = 0
+        for _np, _dev, _sub, run_key, run_data in self._iter_runs():
+            if run_data.get("filename") != file_name:
+                continue
+            title = (run_data.get("Settings") or {}).get("Test Name", "")
+            out.append((i, f"{run_key}: {title}".strip(": ")))
+            i += 1
+        return out
+
+    def load_file(self, path: Path) -> LoadedFile:
+        """Return the (cached) LoadedFile for this file, backed by self._data."""
+        path = Path(path).resolve()
+        if path in self._loaded_files:
+            return self._loaded_files[path]
+
+        self._ensure()
+        file_name = path.name
+        measurements: list[Measurement] = []
+        first_dev = first_sub = None
+        i = 0
+        for _np, dev, sub, run_key, run_data in self._iter_runs():
+            if run_data.get("filename") != file_name:
+                continue
+            if first_dev is None:
+                first_dev, first_sub = dev, sub
+            measurements.append(self._build_measurement(i, run_key, run_data))
+            i += 1
+
+        lf = LoadedFile(
+            path=path,
+            source_type=self.source_type,
+            measurements=measurements,
+            device_data=self._data,    # reference, not copy — single truth
+            pkl_path=self.pkl_path,
+            group=first_dev,
+            subdevice=first_sub,
+            folder_store=self,
+        )
+        self._loaded_files[path] = lf
+        return lf
+
+    def save_log(self, run_key: str, log: dict) -> bool:
+        """
+        Persist `log` for `run_key` into device_data and the pkl, and
+        mirror the change into any live LoadedFile holding that run.
+        Returns True if the run was found.
+        """
+        self._ensure()
+        for _np, _dev, _sub, rk, run_data in self._iter_runs():
+            if rk != run_key:
+                continue
+            log_copy = dict(log)
+            run_data["LOG"] = log_copy
+            save_device_data(self.folder, self._data)
+
+            # Mirror into live LoadedFiles so callers holding a
+            # Measurement reference see the update without reloading.
+            for lf in self._loaded_files.values():
+                for meas in lf.measurements:
+                    if meas.metadata.get("run_key") == run_key:
+                        meas.log = dict(log_copy)
+                        meas.comment = log_copy.get("Comment", "")
+            return True
+        return False
+
+    def reload(self, force: bool = False, compare: bool = False,
+               overwrite_existing: bool = True) -> None:
+        """
+        Re-read (or re-build) the pkl from disk and drop every cached
+        LoadedFile. Call after any operation that mutates the pkl on disk
+        outside this store (Force-rebuild, Full-sync, LOG migration).
+        """
+        self._loaded_files.clear()
+        self._data = build_device_data(
+            self.folder,
+            force_reload=force,
+            compare=compare,
+            overwrite_existing=overwrite_existing,
+        )
+
+    def invalidate_file(self, path: Path) -> None:
+        """Drop one file's cached LoadedFile (rarely needed)."""
+        self._loaded_files.pop(Path(path).resolve(), None)
+            
 """
 ################################################################### 
 ###         DATA HANDLING, LOADING, AND CATEGORISATION            #
@@ -136,51 +335,37 @@ class PalmSensSource:
 class KeithleySource:
     name = "keithley"
 
-    # Which column pairs do we plot? (applied_col, measured_col)
-    # Configurable via self.column_map below.
-    DEFAULT_PAIRS = [("voltage", "current")]
-
     def can_load(self, path: Path) -> bool:
         return path.suffix.lower() == ".xls" and "LOG" not in path.stem.upper()
 
     def load(self, path: Path, **kwargs) -> LoadedFile:
-        folder = path.parent
-        pkl_path = folder / f".dmui_{folder.name}.pkl"
-    
-        # build_device_data loads from pkl if present, else parses xls and writes pkl
-        device_data = build_device_data(folder)
-    
-        # filter to runs that came from *this* file
-        file_name = path.name
-        measurements = []
-        i = 0
-        for np_key, devs in device_data.items():
-            if np_key == "_meta":
-                continue        # do not load "_meta" key
-            for dev, subs in devs.items():
-                for sub, runs in subs.items():
-                    for run_key, run_data in runs.items():
-                        if run_data.get("filename") != file_name:
-                            continue
-                        curves = self._extract_curves(run_data)
-                        settings = run_data.get("Settings", {})
-                        log = run_data.get("LOG", {}) or {}
-                        measurements.append(Measurement(
-                            measurement_id=i,
-                            title=f"{run_key}: {settings.get('Test Name', '')}".strip(": "),
-                            timestamp=settings.get("Execution Time", ""),
-                            comment=log.get("Comment", ""),
-                            curves=curves,
-                            metadata={"run_key": run_key, "settings": settings},
-                            log=log,
-                        ))
-                        i += 1
-    
-        return LoadedFile(
-            path=path, source_type=self.name, measurements=measurements,
-            group=kwargs.get("group"), subdevice=kwargs.get("subdevice"),
-            device_data=device_data, pkl_path=pkl_path,
+        store = get_folder_store(
+            path.parent, self.name, self._build_measurement,
         )
+        return store.load_file(path)
+
+    def list_measurements(self, path: Path) -> list[tuple[int, str]]:
+        store = get_folder_store(
+            path.parent, self.name, self._build_measurement,
+        )
+        return store.peek(path.name)
+
+    # -- measurement builder (unchanged logic, now called by FolderStore) --
+
+    def _build_measurement(self, i: int, run_key: str,
+                           run_data: dict) -> Measurement:
+        settings = run_data.get("Settings", {}) or {}
+        log      = run_data.get("LOG", {}) or {}
+        return Measurement(
+            measurement_id=i,
+            title=f"{run_key}: {settings.get('Test Name', '')}".strip(": "),
+            timestamp=settings.get("Execution Time", ""),
+            comment=log.get("Comment", ""),
+            curves=self._extract_curves(run_data),
+            metadata={"run_key": run_key, "settings": settings},
+            log=log,
+        )
+
 
     def _extract_curves(self, run_data: dict) -> list[CurveData]:
         curves = []
