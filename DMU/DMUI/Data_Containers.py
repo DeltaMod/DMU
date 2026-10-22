@@ -34,6 +34,10 @@ class CurveData:
     x_unit: str = ""
     y_unit: str = ""
     source_key: str = ""           # for Keithley: the column name in the file
+    segments: Optional[list[list[int]]] = None   # [[start, end], …] or None
+    @property
+    def unit_pair(self) -> tuple[str, str]:
+        return (self.x_unit, self.y_unit)
 
 @dataclass
 class Measurement:
@@ -369,30 +373,42 @@ class KeithleySource:
 
     def _extract_curves(self, run_data: dict) -> list[CurveData]:
         curves = []
-        applied = run_data.get("applied_cols", [])
-        measured = run_data.get("measured_cols", [])
-        settings = run_data.get("Settings", {})
-        colnames = settings.get("Colname", [])
+        applied  = run_data.get("applied_cols",  []) or []
+        measured = run_data.get("measured_cols", []) or []
+        settings = run_data.get("Settings", {}) or {}
+    
+        # Segment boundaries — None means "not segmented" (single sweep)
+        raw_segments = run_data.get("sweep_segments", []) or []
+        segments = [list(s) for s in raw_segments] if len(raw_segments) > 1 else None
+    
+        colnames = settings.get("Colname", []) or []
         if isinstance(colnames, str):
             colnames = [colnames]
-
+    
+        op_modes = settings.get("Operation Mode", []) or []
+        if isinstance(op_modes, str):
+            op_modes = [op_modes]
+    
         for idx, (a_col, m_col) in enumerate(zip(applied, measured)):
             x = np.asarray(run_data.get(a_col, []), dtype=float)
             y = np.asarray(run_data.get(m_col, []), dtype=float)
             if x.size == 0 or y.size == 0:
                 continue
-            # Display name: use Colname if available, else "sweepN"
+    
+            x_unit, y_unit = self._infer_units(m_col, op_modes, idx)
+    
             if idx < len(colnames) and colnames[idx]:
                 disp = str(colnames[idx])
             else:
                 disp = f"sweep{idx + 1}"
+    
             curves.append(CurveData(
                 name=disp, x=x, y=y,
-                x_unit="V", y_unit="A",
+                x_unit=x_unit, y_unit=y_unit,
                 source_key=f"{a_col}|{m_col}",
+                segments=[list(s) for s in segments] if segments else None,
             ))
-
-        # Fallback: if no pairs found, try the legacy single pair
+    
         if not curves and "voltage" in run_data and "current" in run_data:
             curves.append(CurveData(
                 name="sweep1",
@@ -400,8 +416,42 @@ class KeithleySource:
                 y=np.asarray(run_data["current"], dtype=float),
                 x_unit="V", y_unit="A",
                 source_key="voltage|current",
+                segments=[list(s) for s in segments] if segments else None,
             ))
         return curves
+    
+    
+    @staticmethod
+    def _infer_units(m_col: str, op_modes: list, idx: int) -> tuple[str, str]:
+        m = str(m_col).lower()
+        if   "current" in m: y_unit = "A"
+        elif "volt"    in m: y_unit = "V"
+        elif "time"    in m: y_unit = "s"
+        elif "resist"  in m: y_unit = "Ω"
+        else:                y_unit = ""
+    
+        op = ""
+        if idx < len(op_modes):
+            op = str(op_modes[idx]).lower()
+        else:
+            for candidate in op_modes:
+                if "sweep" in str(candidate).lower():
+                    op = str(candidate).lower()
+                    break
+    
+        if   "voltage" in op: x_unit = "V"
+        elif "current" in op: x_unit = "A"
+        elif y_unit == "A":   x_unit = "V"
+        elif y_unit == "V":   x_unit = "A"
+        else:                 x_unit = "V"
+    
+        # Guard: x and y cannot both be V or both be A on a source-measure pair.
+        # A contradictory record means the raw data is suspect; prefer the
+        # measured column's unit for y, and mark x as unknown rather than lie.
+        if x_unit == y_unit and x_unit in ("V", "A"):
+            x_unit = ""
+    
+        return x_unit, y_unit
 
     def list_measurements(self, path: Path) -> list[tuple[int, str]]:
         lf = self.load(path)

@@ -706,20 +706,27 @@ class KeithleyDataReader:
             sweep_indices = [0, npts]
     
         print(f"{os.sep.join(file_path.split(os.sep)[-3:])} - {sheet_name}: {stats['Operation Mode'][main_col]}")
-    
+        
+        
+        # We no longer split the raw data, but rather we tell it where the indices of turning points are. This means we can check this later in the plotting tool to plot all as separate, or just the first/second etc.
+        sweep_segments: list[tuple[int, int]] = []
+
         # ---------- Segment sweep for linear sweeps ----------
-        if "Voltage Linear Sweep" in stats["Operation Mode"]:
-            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("Data directory", "column_order")]
-            for k in list_keys:
-                cols[k] = segment_sweep(cols[k], sweep_indices)
+        if ("Voltage Linear Sweep" in stats["Operation Mode"]and len(sweep_indices) > 2):
+            
+            sweep_segments = [
+                (int(sweep_indices[i]), int(sweep_indices[i + 1]))
+                for i in range(len(sweep_indices) - 1)
+            ]
     
         # ---------- Special handling for curing sweeps ----------
-        if ("Voltage List Sweep" in stats["Operation Mode"] and
-            "curing" in stats["Test Name"].lower()):
-            list_keys = [k for k, v in cols.items() if isinstance(v, list) and k not in ("Data directory", "column_order")]
+        elif ("Voltage List Sweep" in stats["Operation Mode"] and "curing" in stats["Test Name"].lower()):
             tps = turning_points(cols["voltage"])
-            for k in list_keys:
-                cols[k] = segment_sweep(cols[k], tps)
+            sweep_segments = [
+                (int(tps[i]), int(tps[i + 1]))
+                for i in range(len(tps) - 1)]
+            
+        cols["sweep_segments"] = sweep_segments
 
     
     def _detect_emitter_detector(self, cols: Dict, stats: Dict):
@@ -967,6 +974,13 @@ def build_log_lookup(log_data: dict,
         numports -> device -> run -> info
         device -> run -> info
         run -> info
+
+    The numports prefix is detected by scanning only the ANCESTORS of
+    each info leaf (`path[:-1]`) — never the leaf itself. Otherwise a
+    numeric run ID such as "84" would be mistaken for a numports=84
+    key and shadow the real numports="2port" prefix found higher up.
+    This would silently write every run into the pkl under the wrong
+    numports bucket.
     """
     lookup = {}
 
@@ -990,8 +1004,9 @@ def build_log_lookup(log_data: dict,
     def walk(obj, path):
         if isinstance(obj, dict):
             if _is_log_info(obj):
+                # ── FIX: scan ancestors only, never the run key. ──
                 np = None
-                for part in path:
+                for part in path[:-1]:
                     np2 = _extract_numports_key(part)
                     if np2 is not None:
                         np = np2
@@ -1065,7 +1080,9 @@ def parse_keithley_file(file_path: Path,
     if "Settings" in file_data:
         settings_dict = file_data.pop("Settings")
         for run_key, run_data in file_data.items():
-            run_data["Settings"] = settings_dict.get(run_key, {})
+            base     = settings_dict.get(run_key, {})
+            existing = run_data.get("Settings") or {}   # ← already-processed (has Time Per Point, NWID, fixed VStep)
+            run_data["Settings"] = {**base, **existing}  # existing wins where they overlap
 
     result = {}
 
@@ -1172,6 +1189,7 @@ def _save_pickle(path: Path, data):
 
 
 def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) -> dict:
+    merged = copy.deepcopy(old)                                      # ← the fix
     merged.setdefault("_meta", {"material": "AIR", "material_stack": {}})
 
     for np, devices in new.items():

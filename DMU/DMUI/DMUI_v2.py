@@ -2605,8 +2605,26 @@ class MainWindow(QtWidgets.QMainWindow):
                     if remove_bg and baseline is not None:
                         y_plot = y - baseline
     
-                label = prefix + disp
-                ax.plot(x, y_plot, label=label)
+                unit_tag = f" [{curve.y_unit}]" if curve.y_unit else ""
+                label = prefix + disp + unit_tag     # → "[m2] Sweep 1 [A]"
+                
+                if getattr(curve, "segments", None):
+                    # Dual-sweep data: draw forward and reverse as separate
+                    # lines on the same axes. x / y_plot are still the full
+                    # 1-D trajectories — we only slice them for display.
+                    _SEG_STYLES = ("-", "--", ":", "-.")
+                    for seg_idx, (start, end) in enumerate(curve.segments):
+                        ls = _SEG_STYLES[seg_idx % len(_SEG_STYLES)]
+                        if seg_idx == 0:
+                            seg_label = label
+                        elif seg_idx == 1:
+                            seg_label = f"{label} (rev)"
+                        else:
+                            seg_label = f"{label} ({seg_idx})"
+                        ax.plot(x[start:end], y_plot[start:end],
+                                linestyle=ls, label=seg_label)
+                else:
+                    ax.plot(x, y_plot, label=label)
     
                 # Baseline visualisation (only if not removed and not hidden)
                 if (baseline is not None and not remove_bg
