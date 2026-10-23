@@ -38,6 +38,7 @@ Design Principles
 """
 
 import os
+import re
 import sys
 import json
 import textwrap
@@ -569,7 +570,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Rebuilt", f"Rebuilt pkl for {folder.name}.")
     
     def _evict_loaded_files_for(self, folders):
-        """Drop in-memory LoadedFile instances whose path sits under any folder."""
+        """Drop in-memory LoadedFile + FolderStore instances for those folders."""
         roots = [str(Path(f).resolve()) for f in folders]
         drop = []
         for fp in list(self.loaded_files.keys()):
@@ -581,6 +582,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 drop.append(fp)
         for fp in drop:
             del self.loaded_files[fp]
+        # ── NEW: also evict the FolderStore so _ensure re-reads the pkl ──
+        for f in folders:
+            evict_folder_store(Path(f))
         # Reset active pointer if we just evicted it.
         if self.current_file_path in drop:
             self._reset_loaded_data()
@@ -714,6 +718,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_curves_tab()
         self._build_logbook_tab()
         self._build_classify_tab()
+        self._build_problems_tab()     
+
         col.addStretch(1)
         return col
 
@@ -1245,11 +1251,26 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
     
-        layout.addWidget(QtWidgets.QLabel("Regex (must name groups 'device' and 'subdevice')"))
-        self.classify_pattern_edit = QtWidgets.QLineEdit(self.EDIT_CLASSIFY_PATTERN)
+        info = QtWidgets.QLabel(
+            "The classified view groups every run by its device and subdevice.\n\n"
+            "• Files with a logbook (Keithley): device and subdevice come\n"
+            "   directly from each run's log entry.\n"
+            "• Files without a logbook (e.g. PalmSens): the fallback below\n"
+            "   is used — leave the pattern empty for 'folder / filename'."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(info)
+    
+        layout.addWidget(QtWidgets.QLabel(
+            "Fallback pattern (optional, for files without logbooks):"))
+        self.classify_pattern_edit = QtWidgets.QLineEdit(
+            self.EDIT_CLASSIFY_PATTERN)
+        self.classify_pattern_edit.setPlaceholderText(
+            "(empty → folder name / file stem)")
         layout.addWidget(self.classify_pattern_edit)
     
-        apply_btn = QtWidgets.QPushButton("Apply pattern & switch view")
+        apply_btn = QtWidgets.QPushButton("Apply fallback pattern")
         apply_btn.clicked.connect(self._apply_classify_pattern)
         layout.addWidget(apply_btn)
     
@@ -1275,19 +1296,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebuild_measurements_tree()
     
     def _classify_path(self, path: Path) -> tuple[str, str]:
-        """Return (device, subdevice) for a file/folder name, cached."""
+        """Return (device, subdevice) for a file, cached.
+    
+        Used only as a *fallback* for files without log data (e.g.
+        PalmSens). Keithley files get their device/subdevice from the
+        logbook via FolderStore.peek_classified().
+    
+        Fallback scheme:
+          • Empty EDIT_CLASSIFY_PATTERN → folder name / file stem
+          • Custom regex (must name groups 'device' and 'subdevice')
+        """
         key = str(path)
         if key in self._classify_cache:
             return self._classify_cache[key]
-        import re as _re
-        try:
-            m = _re.search(self.EDIT_CLASSIFY_PATTERN, path.stem)
-            if m and "device" in m.groupdict() and "subdevice" in m.groupdict():
-                result = (m.group("device"), m.group("subdevice"))
-            else:
-                result = ("unclassified", path.stem)
-        except _re.error:
-            result = ("unclassified", path.stem)
+    
+        pattern = (self.EDIT_CLASSIFY_PATTERN or "").strip()
+        result: tuple[str, str]
+    
+        if not pattern:
+            result = (path.parent.name, path.stem)
+        else:
+            try:
+                m = re.search(pattern, path.stem)
+                if (m and "device" in m.groupdict()
+                        and "subdevice" in m.groupdict()):
+                    result = (m.group("device"), m.group("subdevice"))
+                else:
+                    result = (path.parent.name, path.stem)
+            except re.error:
+                result = (path.parent.name, path.stem)
+    
         self._classify_cache[key] = result
         return result
 
@@ -1356,31 +1394,202 @@ class MainWindow(QtWidgets.QMainWindow):
                     meas_root.setCheckState(0, QtCore.Qt.Unchecked)
         self.curves_tree.blockSignals(False)
     
-
+    
+    def _build_problems_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+    
+        hint = QtWidgets.QLabel(
+            "Issues found while loading every ticked folder. "
+            "Click a folder name to expand. If a folder's data looks wrong, "
+            "use Advanced → Force rebuild pkl."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(hint)
+    
+        self.problems_tree = QtWidgets.QTreeWidget()
+        self.problems_tree.setHeaderLabels(["Issue", "Path", "Where"])
+        self.problems_tree.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.problems_tree.setColumnWidth(0, 480)
+        layout.addWidget(self.problems_tree, stretch=1)
+    
+        btn_row = QtWidgets.QHBoxLayout()
+        refresh_btn = QtWidgets.QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_problems_tab)
+        copy_btn = QtWidgets.QPushButton("Copy all")
+        copy_btn.clicked.connect(self._copy_problems_to_clipboard)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addWidget(copy_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+    
+        self.tab_widget.addTab(tab, "Problems")
+    
+    def _refresh_problems_tab(self):
+    
+        if not hasattr(self, "problems_tree"):
+            return
+        from Data_Containers import _STORE_CACHE
+        self.problems_tree.clear()
+    
+        ticked = self._get_ticked_folders()
+        if not ticked:
+            item = QtWidgets.QTreeWidgetItem(["(no folders ticked)"])
+            item.setForeground(0, QtGui.QColor("gray"))
+            self.problems_tree.addTopLevelItem(item)
+            return
+    
+        total = 0
+        any_store_seen = False
+    
+        for folder in ticked:
+            key = (Path(folder).resolve(), "keithley")
+            store = _STORE_CACHE.get(key)
+            if store is None:
+                continue
+            any_store_seen = True
+            if not store.problems:
+                continue
+    
+            folder_item = QtWidgets.QTreeWidgetItem(
+                [f"{folder.name}  ({len(store.problems)} issue(s))",
+                 str(folder), ""])
+            font = folder_item.font(0)
+            font.setBold(True)
+            folder_item.setFont(0, font)
+            folder_item.setExpanded(True)
+            self.problems_tree.addTopLevelItem(folder_item)
+    
+            for p in store.problems:
+                sev = (p.get("severity") or "error").lower()
+                msg = p.get("message") or ""
+                path = p.get("path") or ""
+                line = p.get("line")
+                col  = p.get("column")
+                loc = ""
+                if line is not None:
+                    loc = f"L{line}"
+                    if col is not None:
+                        loc += f":{col}"
+    
+                text = f"[{sev.upper():7}] {msg}"
+                child = QtWidgets.QTreeWidgetItem([text, path, loc])
+    
+                if sev == "error":
+                    child.setForeground(0, QtGui.QColor("#b00020"))
+                elif sev == "warning":
+                    child.setForeground(0, QtGui.QColor("#a05000"))
+                else:
+                    child.setForeground(0, QtGui.QColor("#404040"))
+    
+                folder_item.addChild(child)
+                total += 1
+    
+        if total == 0:
+            label = ("No problems in any loaded folder."
+                     if any_store_seen
+                     else "No folders have been loaded yet.")
+            item = QtWidgets.QTreeWidgetItem([label])
+            item.setForeground(0, QtGui.QColor("darkgreen"))
+            self.problems_tree.addTopLevelItem(item)
+    
+    def _copy_problems_to_clipboard(self):
+        lines = []
+        for i in range(self.problems_tree.topLevelItemCount()):
+            folder_item = self.problems_tree.topLevelItem(i)
+            lines.append(folder_item.text(0))
+            for j in range(folder_item.childCount()):
+                child = folder_item.child(j)
+                lines.append(f"  - {child.text(0)}")
+        QtWidgets.QApplication.clipboard().setText("\n".join(lines))
     # -- Folder management ----------------------------------------------------
 
     def _restore_folders(self):
         workspace = load_workspace()
+
+        # 1. Populate folder list
         self.folder_list.blockSignals(True)
         for entry in workspace.get("folders", []):
             path = entry["path"]
             checked = entry.get("checked", False)
             item = QtWidgets.QListWidgetItem(path)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
+            item.setCheckState(
+                QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
             self.folder_list.addItem(item)
         self.folder_list.blockSignals(False)
 
-        self._ticked_files_from_workspace = set(workspace.get("ticked_files", []))
+        # 2. Clear accidental focus (prevents currentItemChanged from firing
+        #    on the auto-set index 0 when Qt populates the widget)
+        self.folder_list.blockSignals(True)
+        self.folder_list.clearSelection()
+        self.folder_list.setCurrentItem(None)
+        self.folder_list.blockSignals(False)
+
+        # 3. Restore ticked-measurement sets
+        self._ticked_files_from_workspace = set(
+            workspace.get("ticked_files", []))
         self._ticked_measurements_from_workspace = set()
         for row in workspace.get("ticked_measurements", []):
             try:
                 fp, mi = row
-                self._ticked_measurements_from_workspace.add((str(fp), int(mi)))
+                self._ticked_measurements_from_workspace.add(
+                    (str(fp), int(mi)))
             except (TypeError, ValueError):
                 continue
 
+        # 4. Determine active measurement + folder focus
+        active = workspace.get("active_measurement")
+        active_fp = active_mi = None
+        if isinstance(active, list) and len(active) == 2:
+            try:
+                active_fp = str(active[0])
+                active_mi = int(active[1])
+            except (ValueError, TypeError):
+                active_fp = active_mi = None
+
+        saved_focus = workspace.get("current_folder")
+        focus_path  = (
+            str(Path(active_fp).parent) if active_fp is not None
+            else saved_focus
+        )
+
+        # 5. If active measurement's folder isn't explicitly ticked,
+        #    transiently tick it so the tree shows the file.
+        if active_fp is not None:
+            parent = str(Path(active_fp).parent)
+            for k in range(self.folder_list.count()):
+                item = self.folder_list.item(k)
+                if item.text() != parent:
+                    continue
+                if item.checkState() != QtCore.Qt.Checked:
+                    self.folder_list.blockSignals(True)
+                    item.setCheckState(QtCore.Qt.Checked)
+                    self.folder_list.blockSignals(False)
+                    self._temp_ticked_folders.add(parent)
+                break
+
+        # 6. Restore folder focus without triggering _on_folder_selected
+        if focus_path:
+            for k in range(self.folder_list.count()):
+                if self.folder_list.item(k).text() == focus_path:
+                    self.folder_list.blockSignals(True)
+                    self.folder_list.setCurrentItem(
+                        self.folder_list.item(k))
+                    self.folder_list.blockSignals(False)
+                    break
+
+        # 7. Rebuild tree
         self._rebuild_measurements_tree()
+
+        # 8. Load active measurement
+        if active_fp is not None and active_mi is not None:
+            try:
+                self._set_active_measurement(active_fp, 0, active_mi)
+            except Exception as e:
+                print(f"Could not restore active measurement: {e}")
 
     def _add_folder(self):
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Add data folder")
@@ -1591,16 +1800,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._selected_row = None
         self._refresh_curves_tab()
         self._refresh_range_list()
-        self._refresh_logbook_tab()          # NEW
-        self._refresh_curve_editor()         # NEW
+        self._refresh_logbook_tab()          
+        self._refresh_curve_editor()         
         self._refresh_plot()
     
     def _rebuild_measurements_tree(self):
-        """Populate self.file_list with the union of every ticked folder's files."""
-        # Remember which files were ticked so we can restore tick state after rebuild.
-        previously_ticked = self._get_ticked_file_paths()
-        if not previously_ticked:
-            previously_ticked = getattr(self, "_ticked_files_from_workspace", set())
+        """Populate self.file_list from every ticked folder."""
+        # ── Snapshot current tick state (works in flat AND classified) ──
+        previously_ticked_meas = self._get_ticked_measurements()
+        if not previously_ticked_meas:
+            previously_ticked_meas = set(
+                getattr(self, "_ticked_measurements_from_workspace", set()))
+        previously_ticked_files = self._get_ticked_file_paths()
+        if not previously_ticked_files:
+            previously_ticked_files = set(
+                getattr(self, "_ticked_files_from_workspace", set()))
     
         self.file_list.blockSignals(True)
         self.file_list.clear()
@@ -1610,99 +1824,154 @@ class MainWindow(QtWidgets.QMainWindow):
             for i in range(self.folder_list.count())
             if self.folder_list.item(i).checkState() == QtCore.Qt.Checked
         ]
+    
+        # ── Classified view ─────────────────────────────────────────
         if self.EDIT_TREE_VIEW == "classified":
-            # Build a {device: {subdevice: [file_path, ...]}} map across all ticked folders
-            tree: dict[str, dict[str, list[Path]]] = {}
+            # tree[dev][sub] = [(file_path, meas_id, title), …]
+            tree: dict[str, dict[str, list[tuple[str, int, str]]]] = {}
+    
             for folder_path in ticked_folders:
                 if not folder_path.is_dir():
                     continue
-                for f in sorted(p for p in folder_path.iterdir() if p.is_file()):
-                    if self.registry.find(f) is None:
+                try:
+                    all_paths = sorted(p for p in folder_path.iterdir()
+                                       if p.is_file())
+                except OSError:
+                    continue
+    
+                for f in all_paths:
+                    src = self.registry.find(f)
+                    if src is None:
                         continue
-                    dev, sub = self._classify_path(f)
-                    tree.setdefault(dev, {}).setdefault(sub, []).append(f)
-        
+                
+                    file_dev, file_sub = self._classify_path(f)
+                
+                    try:
+                        classified = src.peek_classified(f)
+                    except Exception as exc:
+                        logger.error(
+                            f"peek_classified failed for {f}: {exc}")
+                        continue
+                
+                    for meas_id, title, log_dev, log_sub in classified:
+                        dev = log_dev or file_dev
+                        sub = log_sub or file_sub
+                        tree.setdefault(dev, {}) \
+                            .setdefault(sub, []) \
+                            .append((str(f), int(meas_id), title))
+    
+            def _run_sort(entry):
+                # entry = (file_path, meas_id, title); sort by 'Run<n>' if present
+                m = re.search(r"Run(\d+)", entry[2])
+                if m:
+                    return (0, int(m.group(1)), entry[2])
+                return (1, 0, entry[2])
+    
             for dev, subs in sorted(tree.items()):
                 dev_node = QtWidgets.QTreeWidgetItem([dev])
                 dev_node.setFlags(QtCore.Qt.ItemIsEnabled)
                 dev_node.setExpanded(True)
                 self.file_list.addTopLevelItem(dev_node)
-                for sub, files in sorted(subs.items()):
+    
+                for sub, entries in sorted(subs.items()):
                     sub_node = QtWidgets.QTreeWidgetItem([sub])
                     sub_node.setFlags(QtCore.Qt.ItemIsEnabled)
                     sub_node.setExpanded(True)
                     dev_node.addChild(sub_node)
-                    for f in files:
-                        # ... same header + measurement children code as the flat branch ...
-                        pass
+    
+                    for fp, meas_id, title in sorted(entries, key=_run_sort):
+                        was_ticked = (
+                            (fp, meas_id) in previously_ticked_meas
+                            or fp in previously_ticked_files
+                        )
+                        child = QtWidgets.QTreeWidgetItem([title])
+                        child.setFlags(
+                            QtCore.Qt.ItemIsEnabled
+                            | QtCore.Qt.ItemIsSelectable
+                            | QtCore.Qt.ItemIsUserCheckable
+                        )
+                        child.setCheckState(
+                            0, QtCore.Qt.Checked if was_ticked
+                               else QtCore.Qt.Unchecked)
+                        child.setData(0, QtCore.Qt.UserRole,
+                                      ("meas", fp, 0, meas_id))
+                        sub_node.addChild(child)
+    
             self.file_list.expandAll()
             self.file_list.blockSignals(False)
             self._refresh_curves_tab()
             self._refresh_logbook_tab()
+            self._refresh_problems_tab()
             return
-        
+    
+        # ── Flat view ──────────────────────────────────────────────
         for folder_path in ticked_folders:
             if not folder_path.is_dir():
                 continue
-    
-            # Top-level node per folder, so the user can see which folder a file belongs to.
+        
             folder_node = QtWidgets.QTreeWidgetItem([str(folder_path.name)])
             folder_node.setFlags(QtCore.Qt.ItemIsEnabled)
             folder_node.setExpanded(True)
             self.file_list.addTopLevelItem(folder_node)
-    
+        
             try:
-                all_paths = sorted([p for p in folder_path.iterdir() if p.is_file()])
+                all_paths = sorted(
+                    p for p in folder_path.iterdir() if p.is_file())
             except OSError:
                 continue
-    
+        
             for f in all_paths:
                 src = self.registry.find(f)
                 if src is None:
                     continue
-    
+        
                 header = QtWidgets.QTreeWidgetItem([f.name])
-                header.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable)
-                was_ticked = str(f) in previously_ticked
-                header.setCheckState(0, QtCore.Qt.Checked if was_ticked else QtCore.Qt.Unchecked)
+                header.setFlags(
+                    QtCore.Qt.ItemIsEnabled
+                    | QtCore.Qt.ItemIsUserCheckable)
+                was_ticked = str(f) in previously_ticked_files
+                header.setCheckState(
+                    0, QtCore.Qt.Checked if was_ticked
+                       else QtCore.Qt.Unchecked)
                 header.setData(0, QtCore.Qt.UserRole, ("file", str(f), 0))
                 folder_node.addChild(header)
-    
+        
                 try:
                     measurements = src.list_measurements(f)
                 except Exception as exc:
-                    err = QtWidgets.QTreeWidgetItem([f"    (failed to load: {exc})"])
+                    err = QtWidgets.QTreeWidgetItem(
+                        [f"    (failed to load: {exc})"])
                     err.setFlags(QtCore.Qt.NoItemFlags)
                     header.addChild(err)
                     header.setExpanded(True)
                     continue
-    
+        
                 for meas_index, meas_title in measurements:
                     child = QtWidgets.QTreeWidgetItem(
-                        [f"    {meas_index}: {meas_title}"]
-                    )
+                        [f"    {meas_index}: {meas_title}"])
                     child.setFlags(
                         QtCore.Qt.ItemIsEnabled
                         | QtCore.Qt.ItemIsSelectable
-                        | QtCore.Qt.ItemIsUserCheckable
-                    )
+                        | QtCore.Qt.ItemIsUserCheckable)
                     was_ticked = (
-                        (str(f), meas_index) in self._ticked_measurements_from_workspace
-                        or str(f) in self._ticked_files_from_workspace
-                    )
+                        (str(f), meas_index) in previously_ticked_meas
+                        or str(f) in previously_ticked_files)
                     child.setCheckState(
-                        0, QtCore.Qt.Checked if was_ticked else QtCore.Qt.Unchecked
-                    )
+                        0, QtCore.Qt.Checked if was_ticked
+                           else QtCore.Qt.Unchecked)
                     child.setData(
-                        0, QtCore.Qt.UserRole, ("meas", str(f), 0, meas_index)
-                    )
+                        0, QtCore.Qt.UserRole,
+                        ("meas", str(f), 0, meas_index))
                     header.addChild(child)
-    
+        
                 header.setExpanded(True)
-    
+        
         self.file_list.expandAll()
         self.file_list.blockSignals(False)
         self._refresh_curves_tab()
+        self._refresh_logbook_tab()
+        self._refresh_problems_tab()
+        
         
     def _activate_measurement(self, file_path, file_index, meas_index):
         """Load (from cache if possible) and display a single measurement.
@@ -1761,35 +2030,53 @@ class MainWindow(QtWidgets.QMainWindow):
         self._selected_row = None
         self._refresh_curves_tab()
         self._refresh_range_list()
+        self._refresh_problems_tab() 
         self._refresh_plot()
         
-    def _get_ticked_file_paths(self) -> set:
-        """Return the set of file paths whose rows are currently ticked."""
-        ticked = set()
-        for i in range(self.file_list.topLevelItemCount()):
-            folder_node = self.file_list.topLevelItem(i)
-            for j in range(folder_node.childCount()):
-                header = folder_node.child(j)
-                payload = header.data(0, QtCore.Qt.UserRole)
-                if payload is None or payload[0] != "file":
-                    continue
-                if header.checkState(0) == QtCore.Qt.Checked:
-                    ticked.add(payload[1])
-        return ticked
+    def _iter_all_items(self):
+        """Yield every tree item in file_list (DFS), regardless of shape."""
+        stack = [self.file_list.topLevelItem(i)
+                 for i in range(self.file_list.topLevelItemCount())]
+        while stack:
+            item = stack.pop()
+            yield item
+            for j in range(item.childCount()):
+                stack.append(item.child(j))    
+    
+    
     
     def _save_workspace(self):
         folders = [
             {
                 "path": self.folder_list.item(i).text(),
-                "checked": self.folder_list.item(i).checkState() == QtCore.Qt.Checked,
+                "checked": (
+                    self.folder_list.item(i).checkState() == QtCore.Qt.Checked
+                    and self.folder_list.item(i).text()
+                        not in self._temp_ticked_folders      # ← NEW
+                ),
             }
             for i in range(self.folder_list.count())
         ]
         ticked = self._get_ticked_measurements()
+    
+        # Save active selection (which measurement was focused)
+        active = None
+        if (self.current_file_path is not None
+                and self.current_meas_index is not None):
+            active = [str(self.current_file_path),
+                      int(self.current_meas_index)]
+    
+        # Save folder focus (which folder row had the highlight)
+        current_folder = None
+        if self.folder_list.currentItem() is not None:
+            current_folder = self.folder_list.currentItem().text()
+    
         save_workspace({
             "folders": folders,
-            "ticked_files": list({fp for fp, _ in ticked}),   # legacy compatibility
+            "ticked_files": list({fp for fp, _ in ticked}),
             "ticked_measurements": [list(t) for t in sorted(ticked)],
+            "active_measurement": active,          # ← NEW
+            "current_folder": current_folder,      # ← NEW
         })
         
         # -- Tick / check handling ------------------------------------------------
@@ -1889,26 +2176,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_workspace()
         self._refresh_curves_tab()
         self._refresh_logbook_tab()
+        self._refresh_problems_tab()
         self._refresh_plot()
 
     def _get_ticked_measurements(self) -> set:
-        """Return {(file_path, meas_index)} for every ticked measurement row."""
         ticked = set()
-        for i in range(self.file_list.topLevelItemCount()):
-            folder_node = self.file_list.topLevelItem(i)
-            for j in range(folder_node.childCount()):
-                header = folder_node.child(j)
-                hpayload = header.data(0, QtCore.Qt.UserRole)
-                if hpayload is None or hpayload[0] != "file":
-                    continue
-                fp = hpayload[1]
-                for k in range(header.childCount()):
-                    child = header.child(k)
-                    cpayload = child.data(0, QtCore.Qt.UserRole)
-                    if cpayload is None or cpayload[0] != "meas":
-                        continue
-                    if child.checkState(0) == QtCore.Qt.Checked:
-                        ticked.add((fp, cpayload[3]))
+        for item in self._iter_all_items():
+            payload = item.data(0, QtCore.Qt.UserRole)
+            if payload is None or payload[0] != "meas":
+                continue
+            if item.checkState(0) == QtCore.Qt.Checked:
+                ticked.add((payload[1], payload[3]))
+        return ticked
+
+    def _get_ticked_file_paths(self) -> set:
+        ticked = set()
+        for item in self._iter_all_items():
+            payload = item.data(0, QtCore.Qt.UserRole)
+            if payload is None or payload[0] != "file":
+                continue
+            if item.checkState(0) == QtCore.Qt.Checked:
+                ticked.add(payload[1])
         return ticked
 
         

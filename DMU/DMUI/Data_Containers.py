@@ -4,16 +4,20 @@ Data containers and file-loading logic for DMUI.
 from dataclasses import dataclass, field
 from typing import Protocol, Optional, Any
 import numpy as np
+import re
 from pathlib import Path
 
 #Local Packages:
 try:
-    
     from .Plotting_Tools import *
-    from ..data_import_tools import Keithley_xls_read_file, build_device_data, save_device_data
+    from ..data_import_tools import (
+        Keithley_xls_read_file, build_device_data, save_device_data,
+        find_log_file)
 except ImportError:
     from DMU.DMUI.Plotting_Tools import *
-    from DMU.data_import_tools import Keithley_xls_read_file, build_device_data, save_device_data
+    from DMU.data_import_tools import (
+        Keithley_xls_read_file, build_device_data, save_device_data,
+        find_log_file)
     
 
 """
@@ -132,24 +136,139 @@ class FolderStore:
         self.source_type: str     = source_type
         self.pkl_path: Path       = self.folder / f".dmui_{self.folder.name}.pkl"
         self._build_measurement   = build_measurement
-
+        
         self._data: Optional[dict]                  = None
         self._loaded_files: dict[Path, LoadedFile]  = {}
-        self._error: Optional[str]                  = None
-
+        self._error: Optional[str] = None
+        self.problems: list[dict] = [] 
+        
     # -- lazy load ----------------------------------------------------------
 
     def _ensure(self) -> None:
-        """Populate self._data from the pkl, or build it if missing."""
         if self._data is not None:
             return
+        self.problems.clear()
+
+        # ── Build path — failure here means the folder is unusable. ──
         try:
-            self._data = build_device_data(self.folder)
+            self._data = build_device_data(self.folder, problems=self.problems)
             self._error = None
         except Exception as exc:
             self._error = f"{type(exc).__name__}: {exc}"
+            self.problems.append({
+                "severity": "error",
+                "category": "build",
+                "folder":   str(self.folder.resolve()),
+                "path":     str(self.folder),
+                "run":      None,
+                "message":  self._error,
+                "line":     getattr(exc, "lineno", None),
+                "column":   getattr(exc, "colno",  None),
+            })
             raise
 
+        # ── Diagnostic path — failure here is a bug in our checker, ──
+        # ── not a problem with the folder. Never propagate.          ──
+        try:
+            self._check_folder_state()
+        except Exception as exc:
+            self.problems.append({
+                "severity": "warning",
+                "category": "diagnostic_error",
+                "folder":   str(self.folder.resolve()),
+                "path":     None,
+                "run":      None,
+                "message":  (f"Folder-state diagnostic check failed "
+                             f"(this is a bug in the checker, not your "
+                             f"data): {type(exc).__name__}: {exc}"),
+                "line":     getattr(exc, "lineno", None),
+                "column":   getattr(exc, "colno",  None),
+            })
+    def _check_folder_state(self) -> None:
+        """Walk the loaded pkl and flag data-quality problems.
+
+        Runs after every successful build (including cached-pkl loads).
+        Does not re-parse any XLS file — just iterates the in-memory dict.
+        """
+        folder    = self.folder
+        log_path  = find_log_file(folder)
+        xls_files = [f for f in folder.glob("*.xls")
+                     if "LOG" not in f.stem.upper()]
+        data      = self._data or {}
+
+        no_log_comment: list[str] = []
+        no_device:      list[str] = []
+        no_subdevice:   list[str] = []
+        total = 0
+
+        for np_key, devs in data.items():
+            if np_key == "_meta":
+                continue
+            for dev, subs in devs.items():
+                for sub, runs in subs.items():
+                    for run_key, run_data in runs.items():
+                        total += 1
+                        log = run_data.get("LOG") or {}
+                        if log.get("Comment") == "NO LOG":
+                            no_log_comment.append(run_key)
+                        if not log.get("Device"):
+                            no_device.append(run_key)
+                        if not log.get("Subdevice"):
+                            no_subdevice.append(run_key)
+
+        if total == 0:
+            return
+
+        existing = {p.get("category") for p in self.problems}
+
+        def _add(sev, cat, msg):
+            if cat in existing:
+                return
+            self.problems.append({
+                "severity": sev,
+                "category": cat,
+                "folder":   str(folder.resolve()),
+                "path":     str(log_path) if log_path else None,
+                "run":      None,
+                "message":  msg,
+                "line":     None,
+                "column":   None,
+            })
+            existing.add(cat)
+
+        def _fmt(runs):
+            ordered = sorted(runs)
+            if len(ordered) <= 6:
+                return ", ".join(ordered)
+            return f"{', '.join(ordered[:6])}, … ({len(ordered)} total)"
+
+        if log_path is None and xls_files:
+            _add("warning", "missing_log",
+                 f"No LOG file in folder ({len(xls_files)} data file(s)). "
+                 f"Runs will show Comment='NO LOG'.")
+
+        if no_log_comment:
+            if len(no_log_comment) == total:
+                msg = (f"All {total} run(s) have Comment='NO LOG' — no "
+                       f"logbook entries were matched. Likely the pkl "
+                       f"was built without a log, or the log doesn't "
+                       f"match. Force rebuild after fixing the log.")
+            else:
+                msg = (f"{len(no_log_comment)}/{total} run(s) have no log "
+                       f"entry (Comment='NO LOG'): {_fmt(no_log_comment)}")
+            _add("warning", "no_log_entry", msg)
+
+        if no_device:
+            _add("warning", "no_device",
+                 f"{len(no_device)}/{total} run(s) have no Device name in "
+                 f"their logbook entry (fell back to folder name): "
+                 f"{_fmt(no_device)}")
+
+        if no_subdevice:
+            _add("warning", "no_subdevice",
+                 f"{len(no_subdevice)}/{total} run(s) have no Subdevice "
+                 f"name in their logbook entry (fell back to 'SD0'): "
+                 f"{_fmt(no_subdevice)}")
     @property
     def error(self) -> Optional[str]:
         return self._error
@@ -163,18 +282,67 @@ class FolderStore:
     # -- iteration ----------------------------------------------------------
 
     def _iter_runs(self):
-        """Yield (numports, device, subdevice, run_key, run_data)."""
+        """Yield (numports, device, subdevice, run_key, run_data) in
+        globally numeric run order.
+
+        Sorts ascending by the numeric part of each run key, across ALL
+        (device, subdevice) buckets. Sorting per-bucket is not enough:
+        a single XLS can contain runs from multiple subdevices (e.g.
+        Run84-97 in r1c1 and Run98-103 in r1c2), and the pkl's bucket
+        iteration order depends on XLS sheet insertion order — which is
+        often descending (Run133 first, Run84 last). Global sort gives a
+        stable, human-friendly order regardless of bucket layout.
+
+        Non-numeric run keys (rare) sort to the end, alphabetically.
+        """
         assert self._data is not None
+
+        def _key(row):
+            run_key = str(row[3])
+            m = re.search(r"(\d+)", run_key)
+            if m:
+                return (0, int(m.group(1)), run_key)
+            return (1, 0, run_key)
+
+        rows = []
         for np_key, devices in self._data.items():
             if np_key == "_meta" or not isinstance(devices, dict):
                 continue
             for dev, subs in devices.items():
                 for sub, runs in subs.items():
                     for run_key, run_data in runs.items():
-                        yield np_key, dev, sub, run_key, run_data
+                        rows.append((np_key, dev, sub, run_key, run_data))
+
+        rows.sort(key=_key)
+        yield from rows
 
     # -- public API ---------------------------------------------------------
-
+    def peek_classified(self, file_name: str):
+        """Return [(id, title, device, subdevice), …] per run.
+    
+        `device` / `subdevice` come from the run's log entry — None if the
+        pkl was built without a log (fallback logs don't set Device /
+        Subdevice). The caller decides how to substitute those.
+        """
+        try:
+            self._ensure()
+        except Exception:
+            return []
+        out: list[tuple[int, str, Optional[str], Optional[str]]] = []
+        i = 0
+        for _np, _dev, _sub, run_key, run_data in self._iter_runs():
+            if run_data.get("filename") != file_name:
+                continue
+            title = (run_data.get("Settings") or {}).get("Test Name", "")
+            log = run_data.get("LOG") or {}
+            out.append((
+                i,
+                f"{run_key}: {title}".strip(": "),
+                log.get("Device"),
+                log.get("Subdevice"),
+            ))
+            i += 1
+        return out
     def peek(self, file_name: str) -> list[tuple[int, str]]:
         """
         Cheap listing: (measurement_id, title) for each run in this file.
@@ -251,19 +419,20 @@ class FolderStore:
             return True
         return False
 
-    def reload(self, force: bool = False, compare: bool = False,
-               overwrite_existing: bool = True) -> None:
+    def reload(self, force=False, compare=False, overwrite_existing=True) -> None:
         """
         Re-read (or re-build) the pkl from disk and drop every cached
         LoadedFile. Call after any operation that mutates the pkl on disk
         outside this store (Force-rebuild, Full-sync, LOG migration).
         """
         self._loaded_files.clear()
+        self.problems.clear()
         self._data = build_device_data(
             self.folder,
             force_reload=force,
             compare=compare,
             overwrite_existing=overwrite_existing,
+            problems=self.problems,
         )
 
     def invalidate_file(self, path: Path) -> None:
@@ -286,7 +455,7 @@ class Data_Mapping:
     # Explicit overrides take priority
     "explicit_pairs": [],   # [["Voltage", "Current"], ...]
     }
-                
+
 class DataSource(Protocol):
     name: str  # "palmsens", "keithley"
 
@@ -298,6 +467,23 @@ class DataSource(Protocol):
         """Cheap peek — used to populate the tree without loading curves."""
         ...
 
+    def peek_classified(
+        self, path: Path
+    ) -> list[tuple[int, str, Optional[str], Optional[str]]]:
+        """Cheap peek that also returns per-measurement device/subdevice.
+
+        Return value: [(measurement_id, title, device, subdevice), …].
+
+        `device` / `subdevice` may be None for a source with no notion of
+        them (e.g. PalmSens has no logbook). The classified tree builder
+        falls back to the file-level regex classification in that case.
+
+        Must be cheap enough to call during tree rebuild — i.e. must NOT
+        extract curve arrays. Keithley implements it via FolderStore.peek
+        plus a log-dict read; PalmSens implements it via list_measurements.
+        """
+        ...
+        
 class PalmSensSource:
     name = "palmsens"
 
@@ -329,7 +515,12 @@ class PalmSensSource:
                 curves=curves,
             ))
         return LoadedFile(path=path, source_type=self.name, measurements=measurements)
-
+    
+    def peek_classified(self, path: Path):
+        """PalmSens has no per-measurement logbook; report no device/subdevice
+        so the classified tree falls back to file-level regex classification."""
+        return [(mid, title, None, None)
+                for mid, title in self.list_measurements(path)]
     def list_measurements(self, path: Path) -> list[tuple[int, str]]:
         # Reuse load() but discard curves — pypalmsens doesn't give a cheaper path
         lf = self.load(path)
@@ -353,7 +544,10 @@ class KeithleySource:
             path.parent, self.name, self._build_measurement,
         )
         return store.peek(path.name)
-
+    
+    def peek_classified(self, path: Path):
+        store = get_folder_store(path.parent, self.name, self._build_measurement)
+        return store.peek_classified(path.name)
     # -- measurement builder (unchanged logic, now called by FolderStore) --
 
     def _build_measurement(self, i: int, run_key: str,

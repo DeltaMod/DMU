@@ -130,6 +130,143 @@ def migrate_logs_to_json(root_dir, force=False):
         written.append((xls, json_path))
     return written
 
+def _parse_log_text(text: str, path: Path) -> tuple[dict, str]:
+    """Return (data, status).
+
+    status is 'strict_json' when the raw text parsed as strict JSON.
+    Anything else means a fallback was used and the file should be
+    migrated to the canonical (strict-JSON) format.
+    """
+    try:
+        return json.loads(text), "strict_json"
+    except json.JSONDecodeError as json_exc:
+        first_exc = json_exc
+
+    try:
+        return ast.literal_eval(text), "python_literal"
+    except (ValueError, SyntaxError):
+        pass
+
+    try:
+        return (json.loads(_normalise_lax_json(text, "json")),
+                "normalised_json")
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        return (ast.literal_eval(_normalise_lax_json(text, "py")),
+                "normalised_python")
+    except (ValueError, SyntaxError):
+        pass
+
+    raise LogParseError(
+        f"{path.name}: {first_exc.msg} at line "
+        f"{first_exc.lineno} col {first_exc.colno}",
+        lineno=first_exc.lineno,
+        colno=first_exc.colno,
+        original=first_exc,
+    )
+
+def _migrate_log_file(path: Path, parsed_data: dict,
+                      problems: Optional[list] = None) -> None:
+    """Back up a non-strict-JSON log and write a canonical version in its
+    place. Safe to call multiple times — subsequent calls hit 'strict_json'
+    and never reach this function."""
+    # Backup name: replace 'LOGBOOK' with 'BACKUP_LGF' (LGF does NOT
+    # contain 'LOG', so the backup will never match find_log_file's
+    # *LOG*.json glob → no confusion about which file to load).
+    name = path.name
+    backup_name = re.sub(r"LOGBOOK", "BACKUP_LGF", name, flags=re.IGNORECASE)
+    if backup_name == name:
+        backup_name = path.stem + "_BACKUP_LGF" + path.suffix
+
+    backup_path = path.parent / backup_name
+
+    # Don't clobber a pre-existing backup; append _N suffix
+    if backup_path.exists():
+        i = 1
+        while True:
+            candidate = path.parent / (
+                f"{backup_path.stem}_{i}{backup_path.suffix}")
+            if not candidate.exists():
+                backup_path = candidate
+                break
+            i += 1
+
+    # Move original → backup (atomic rename within same dir)
+    os.replace(str(path), str(backup_path))
+
+    # Write canonical version at the original path
+    canonical = _canonicalize_log_data(parsed_data)
+
+    def _json_default(obj):
+        if isinstance(obj, np.integer):  return int(obj)
+        if isinstance(obj, np.floating): return float(obj)
+        if isinstance(obj, np.ndarray):  return obj.tolist()
+        if isinstance(obj, (set, tuple)): return list(obj)
+        raise TypeError(
+            f"Cannot serialize {type(obj).__name__} to JSON")
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(canonical, f, indent=2, ensure_ascii=False,
+                      default=_json_default)
+    except Exception:
+        # Write failed — restore the backup so we don't lose data
+        if path.exists():
+            path.unlink()
+        os.replace(str(backup_path), str(path))
+        raise
+
+    if problems is not None:
+        problems.append({
+            "severity": "info",
+            "category": "log_migrated",
+            "folder":   str(path.parent.resolve()),
+            "path":     str(path),
+            "run":      None,
+            "message":  (f"Log was not strict JSON — original backed up to "
+                         f"{backup_path.name}, canonical version written to "
+                         f"{path.name}. Missing fields "
+                         f"(SMU1–4, SMU Order, LightMicroscope, Comment) "
+                         f"were filled with defaults."),
+            "line":     None,
+            "column":   None,
+        })
+def _canonicalize_log_data(data: dict) -> dict:
+    """Return a copy of the log dict with every run info normalised:
+    SMU1..SMU4 present, SMU Order computed, LightMicroscope + Comment
+    defaulted, Device/Subdevice/RunID ensured."""
+    out: dict = {}
+    for np_key, devices in data.items():
+        if not isinstance(devices, dict):
+            out[np_key] = devices
+            continue
+        new_devs = {}
+        for dev, subs in devices.items():
+            if not isinstance(subs, dict):
+                new_devs[dev] = subs
+                continue
+            new_subs = {}
+            for sub, runs in subs.items():
+                if not isinstance(runs, dict):
+                    new_subs[sub] = runs
+                    continue
+                new_runs = {}
+                for run_key, run_info in runs.items():
+                    if not isinstance(run_info, dict) or not _is_log_info(run_info):
+                        new_runs[run_key] = run_info
+                        continue
+                    info = normalise_log_info(dict(run_info))
+                    info.setdefault("Device", dev)
+                    info.setdefault("Subdevice", sub)
+                    info.setdefault("RunID", normalise_run_key(run_key))
+                    new_runs[run_key] = info
+                new_subs[sub] = new_runs
+            new_devs[dev] = new_subs
+        out[np_key] = new_devs
+    return out
+
 def save_device_data(folder: Path, data: dict, cache_name: Optional[str] = None) -> Path:
     """Write the device_data dict back to its pkl. Returns the pkl path."""
     folder = Path(folder)
@@ -201,7 +338,7 @@ def convert_log_xls_to_dict(xls_path: Path) -> dict:
 
         raw_device = str(entry.get("Device") or "Unlabelled")
         device, subdevice = _split_device_subdevice(raw_device)
-        run_id = normalize_run_key(key)
+        run_id = normalise_run_key(key)
 
         # SMU1..SMU4 -> nanowire label or False.
         smu_assignments: dict[str, Any] = {}
@@ -804,7 +941,7 @@ class KeithleyDataReader:
 # Run-key and instrument helpers
 # ---------------------------------------------------------------------------
 
-def normalize_run_key(key: Any) -> str:
+def normalise_run_key(key: Any) -> str:
     """Normalise run keys to 'Runxx' where possible."""
     s = str(key).strip()
     m = re.search(r'(\d+)', s)
@@ -871,7 +1008,7 @@ def make_fallback_log(run_data: dict) -> dict:
     return info
 
 
-def normalize_log_info(info: dict, run_data: Optional[dict] = None,
+def normalise_log_info(info: dict, run_data: Optional[dict] = None,
                        default_comment: str = "") -> dict:
     """Ensure a LOG dict has all expected keys."""
     if info is None:
@@ -933,14 +1070,134 @@ def _is_log_info(d: dict) -> bool:
     )
 
 
-def load_log_file(path: Path) -> dict:
-    """Load JSON/TXT/XLS LOG file into a dict."""
+# ── Lax-JSON support ────────────────────────────────────────────────
+class LogParseError(ValueError):
+    """Raised when a LOG file cannot be parsed. Carries line/col for the UI."""
+    def __init__(self, message, *, lineno=None, colno=None, original=None):
+        super().__init__(message)
+        self.lineno = lineno
+        self.colno = colno
+        self.original = original
+
+
+# Bare-word tokens that people habitually write instead of the strict JSON equivalents. 
+# Both maps cover the same set of bad spellings plus the *other* syntax's keywords, so either parser can retry.
+
+_NULL_LIKE  = {"none", "null", "nul", "nan"}     # case-insensitive
+_TRUE_LIKE  = {"true"}
+_FALSE_LIKE = {"false"}
+
+_JSON_TARGETS = {"null": "null", "true": "true", "false": "false"}
+_PY_TARGETS   = {"null": "None", "true": "True", "false": "False"}
+
+
+def _normalise_lax_json(text: str, target: str) -> str:
+    """Prepare log text for a specific parser.
+
+    target = "json"  → targets json.loads  (null / true / false)
+    target = "py"    → targets ast.literal_eval (None / True / False)
+
+    Two transformations, both string-literal-aware:
+      1. Bare-word tokens replaced case-insensitively:
+         Nul / nul / NULL / nUll / nan / NaN / None / … → null (or None)
+         True / TRUE / tRUe → true (or True)
+         False / FALSE      → false (or False)
+      2. Trailing commas stripped before `}` or `]`:
+         {"a":1,} → {"a":1}    [1,2,] → [1,2]
+    Both operations skip anything inside string literals.
+    """
+    target_map = _JSON_TARGETS if target == "json" else _PY_TARGETS
+
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_str = False
+    quote  = ""
+    esc    = False
+
+    while i < n:
+        ch = text[i]
+
+        # ── Inside a string literal: copy verbatim ──
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == quote:
+                in_str = False
+            i += 1
+            continue
+
+        # ── Entering a string literal ──
+        if ch in ('"', "'"):
+            in_str = True
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+
+        # ── Punctuation: possibly a trailing comma to strip ──
+        if not (ch.isalnum() or ch == "_"):
+            if ch == ",":
+                j = i + 1
+                while j < n and text[j].isspace():
+                    j += 1
+                if j < n and text[j] in "}]":
+                    i += 1              # skip the comma
+                    continue
+            out.append(ch)
+            i += 1
+            continue
+
+        # ── Bare word: consume, decide, replace ──
+        word_end = i
+        while word_end < n and (text[word_end].isalnum()
+                                or text[word_end] == "_"):
+            word_end += 1
+        word  = text[i:word_end]
+        lower = word.lower()
+        if lower in _NULL_LIKE:
+            out.append(target_map["null"])
+        elif lower in _TRUE_LIKE:
+            out.append(target_map["true"])
+        elif lower in _FALSE_LIKE:
+            out.append(target_map["false"])
+        else:
+            out.append(word)
+        i = word_end
+
+    return "".join(out)
+
+
+
+def load_log_file(path: Path, *, migration_callback=None) -> dict:
+    """Load a LOG file (.json / .txt / .xls) into a dict.
+
+    Tries in order:
+      1. Strict JSON on the raw text.
+      2. Python literal-eval (handles None / True / False).
+      3. Strict JSON after normalizing lax tokens (Nul / NaN / nan / None).
+      4. Python literal-eval after normalizing strict-JSON tokens.
+
+    If (2), (3) or (4) was used and migration_callback is provided, the
+    callback is invoked with (path, parsed_data) so the caller can back
+    up the original and rewrite it in canonical form.
+
+    Raises LogParseError (with .lineno / .colno) if all four fail.
+    """
     path = Path(path)
     suffix = path.suffix.lower()
 
     if suffix in (".json", ".txt"):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        text = path.read_text(encoding="utf-8-sig")
+        data, status = _parse_log_text(text, path)
+        if status != "strict_json" and migration_callback is not None:
+            try:
+                migration_callback(path, data)
+            except Exception as e:
+                logger.warning(f"Log migration failed for {path}: {e}")
+        return data
 
     if suffix == ".xls":
         return convert_log_xls_to_dict(path)
@@ -985,7 +1242,7 @@ def build_log_lookup(log_data: dict,
     lookup = {}
 
     def add(np, dev, sub, run, info):
-        run_norm = normalize_run_key(run)
+        run_norm = normalise_run_key(run)
         info2 = dict(info)
         info2.setdefault("Device", dev)
         info2.setdefault("Subdevice", sub)
@@ -1042,7 +1299,7 @@ def find_log_info(lookup: dict,
                   subdevice: Optional[str] = None) -> Optional[dict]:
     """Find a LOG entry for one run."""
     np = get_num_ports(run_data)
-    run_norm = normalize_run_key(run_key)
+    run_norm = normalise_run_key(run_key)
 
     if subdevice is None:
         subdevice = "SD0"
@@ -1102,10 +1359,10 @@ def parse_keithley_file(file_path: Path,
         if info is None:
             info = make_fallback_log(run_data)
         else:
-            info = normalize_log_info(info, run_data)
+            info = normalise_log_info(info, run_data)
 
         run_data["LOG"] = info
-        result[normalize_run_key(run_key)] = run_data
+        result[normalise_run_key(run_key)] = run_data
 
     return result
 
@@ -1209,20 +1466,78 @@ def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) ->
 
     return merged
 
+def _iter_log_runs(log_data: dict):
+    """
+    Yield (device, subdevice, run_norm, info) for each run entry.
 
+    Uses the same shape rules as build_log_lookup() so the two stay
+    consistent — this is the canonical enumeration used for
+    reconciliation.
+    """
+    def walk(obj, path):
+        if isinstance(obj, dict):
+            if _is_log_info(obj):
+                non_np = [
+                    p for p in path[:-1]
+                    if _extract_numports_key(p) is None
+                ]
+                dev = non_np[0] if len(non_np) >= 1 else None
+                sub = non_np[1] if len(non_np) >= 2 else "SD0"
+                run = normalise_run_key(path[-1]) if path else None
+                if dev and run:
+                    yield (dev, sub, run, obj)
+                return
+            for k, v in obj.items():
+                yield from walk(v, path + [str(k)])
+
+    yield from walk(log_data, [])
+    
 def build_device_data(folder: Path,
                       force_reload: bool = False,
                       compare: bool = False,
                       cache_name: Optional[str] = None,
-                      overwrite_existing: bool = True) -> dict:
+                      overwrite_existing: bool = True,
+                      problems: Optional[list] = None) -> dict:
     """
     Build/load one device folder as:
         numports -> device -> subdevice -> RunID -> run_data
 
     If a pkl exists and force_reload is False, it is loaded directly.
     If compare is True, old and new are merged non-destructively.
+
+    Any parse failures and reconciliation mismatches are appended to
+    `problems` as dicts:
+        {severity, category, folder, path, run, message, line, column}
+    The GUI's Problems tab groups them by `folder`.
+
+    Categories emitted here:
+      missing_log         — data files present, no LOG file found
+      log_parse_failed    — LOG file exists but couldn't be parsed
+      log_empty           — LOG parsed but yielded zero run entries
+      data_parse_failed   — one XLS file couldn't be parsed
+      duplicate_run_id    — same run id appears in >1 XLS file
+      run_missing_from_log — data run has no matching log entry
+      run_orphaned_in_log  — log entry has no matching data run
     """
+    if problems is None:
+        problems = []
+
     folder = Path(folder)
+    folder_str = str(folder.resolve())
+
+    def _add(severity, category, message,
+             path=None, run=None, line=None, column=None):
+        problems.append({
+            "severity": severity,
+            "category": category,
+            "folder":   folder_str,
+            "path":     str(path) if path is not None else None,
+            "run":      run,
+            "message":  message,
+            "line":     line,
+            "column":   column,
+        })
+
     cache_path = folder / (cache_name or f".dmui_{folder.name}.pkl")
 
     if cache_path.exists() and not force_reload:
@@ -1230,70 +1545,127 @@ def build_device_data(folder: Path,
 
     fresh = {}
 
+    # ── Load LOG (if present) ───────────────────────────────────────
     log_path = find_log_file(folder)
     log_lookup = None
+    log_data   = None
 
     if log_path is not None:
         try:
-            log_data = load_log_file(log_path)
+            log_data = load_log_file(
+                log_path,
+                migration_callback=lambda p, d: _migrate_log_file(
+                    p, d, problems),
+            )
             log_lookup = build_log_lookup(log_data)
+            if not log_lookup:
+                _add("warning", "log_empty",
+                     "LOG file parsed but contains no run entries. "
+                     "Check the file structure matches "
+                     "numports → device → subdevice → run.",
+                     path=log_path)
         except Exception as e:
-            logger.warning(f"Could not load LOG file {log_path}: {e}")
+            _add("error", "log_parse_failed",
+                 f"Could not parse LOG: {e}",
+                 path=log_path,
+                 line=getattr(e, "lineno", None),
+                 column=getattr(e, "colno", None))
 
+    # ── Parse every data XLS ────────────────────────────────────────
     xls_files = [
         f for f in folder.glob("*.xls")
         if "LOG" not in f.stem.upper()
     ]
 
+    if log_path is None and xls_files:
+        _add("warning", "missing_log",
+             f"No LOG file found in folder. "
+             f"{len(xls_files)} data file(s) will show Comment='NO LOG'.")
+
+    # Track which files contributed each run id (for duplicate detection)
+    run_id_sources: dict[str, list[str]] = {}
+
     for xls in xls_files:
         try:
             file_data = parse_keithley_file(xls, log_lookup=log_lookup)
         except Exception as e:
-            logger.error(f"Error reading {xls}: {e}")
+            _add("error", "data_parse_failed",
+                 f"Could not read data file: {e}",
+                 path=xls,
+                 line=getattr(e, "lineno", None),
+                 column=getattr(e, "colno", None))
             continue
 
         for run_key, run_data in file_data.items():
-            np = get_num_ports(run_data)
-            log = run_data.get("LOG", {})
+            np_key = get_num_ports(run_data)
+            log    = run_data.get("LOG", {})
+            dev    = log.get("Device")    or folder.name
+            sub    = log.get("Subdevice") or "SD0"
 
-            dev = log.get("Device") or folder.name
-            sub = log.get("Subdevice") or "SD0"
+            run_id_sources.setdefault(run_key, []).append(xls.name)
 
-            fresh.setdefault(np, {}) \
+            fresh.setdefault(np_key, {}) \
                  .setdefault(dev, {}) \
                  .setdefault(sub, {})[run_key] = run_data
 
+    # ── Duplicate run ids across files ──────────────────────────────
+    for run_key, sources in run_id_sources.items():
+        if len(sources) > 1:
+            _add("warning", "duplicate_run_id",
+                 f"Run {run_key} appears in {len(sources)} file(s) "
+                 f"({', '.join(sources)}). Only the last occurrence "
+                 f"is kept in the pkl.",
+                 run=run_key)
+
+    # ── Log ↔ Data reconciliation ───────────────────────────────────
+    if log_data is not None:
+        data_runs: set[tuple[str, str, str]] = set()
+        for np_key, devs in fresh.items():
+            if np_key == "_meta":
+                continue
+            for dev, subs in devs.items():
+                for sub, runs in subs.items():
+                    for run_key in runs:
+                        data_runs.add((dev, sub, run_key))
+
+        log_runs: set[tuple[str, str, str]] = set()
+        for dev, sub, run, _info in _iter_log_runs(log_data):
+            log_runs.add((dev, sub, run))
+
+        def _summarize(items: set[tuple[str, str, str]]) -> str:
+            ordered = sorted(r for _, _, r in items)
+            if len(ordered) <= 5:
+                return ", ".join(ordered)
+            return f"{', '.join(ordered[:5])}, … ({len(ordered)} total)"
+
+        missing = data_runs - log_runs
+        if missing:
+            _add("warning", "run_missing_from_log",
+                 f"{len(missing)} data run(s) have no matching log "
+                 f"entry: {_summarize(missing)}")
+
+        orphaned = log_runs - data_runs
+        if orphaned:
+            _add("info", "run_orphaned_in_log",
+                 f"{len(orphaned)} log entry(ies) have no matching data: "
+                 f"{_summarize(orphaned)}",
+                 path=log_path)
+
+    # ── Metadata + write out ────────────────────────────────────────
     fresh["_meta"] = {
-    "material": detect_material_from_path(folder),
-    "material_stack": {},
+        "material": detect_material_from_path(folder),
+        "material_stack": {},
     }
-    
+
     if compare and cache_path.exists():
         old = _load_pickle(cache_path)
-        merged = _merge_device_data(old, fresh, overwrite_existing=overwrite_existing)
+        merged = _merge_device_data(old, fresh,
+                                    overwrite_existing=overwrite_existing)
         _save_pickle(cache_path, merged)
         return merged
 
     _save_pickle(cache_path, fresh)
     return fresh
-
-
-def build_all_device_data(root_dir: Path,
-                          force_reload: bool = False,
-                          compare: bool = False) -> dict:
-    """Build all immediate subfolders of root_dir as separate devices."""
-    root = Path(root_dir)
-    out = {}
-
-    for sub in sorted(root.iterdir()):
-        if sub.is_dir():
-            out[sub.name] = build_device_data(
-                sub,
-                force_reload=force_reload,
-                compare=compare,
-            )
-
-    return out
 
 
 def list_device_folders(root_dir: Path) -> list[str]:
