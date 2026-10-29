@@ -52,7 +52,18 @@ class Measurement:
     comment: str = ""
     curves: list[CurveData] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
-    log: dict = field(default_factory=dict)      # <-- NEW: raw LOG dict (Keithley)
+    log: dict = field(default_factory=dict)
+
+    # Raw columns per measurement — populated for Keithley runs so that any
+    # pair of columns can be plotted (V vs t, I vs t, V1 vs V2, …). The
+    # pre-detected `curves` list stays as the "auto" view.
+    columns: dict[str, np.ndarray] = field(default_factory=dict)
+    column_units: dict[str, str] = field(default_factory=dict)
+
+    # Segment boundaries for this run: [[start, end], …]. Empty if not a
+    # dual-sweep / segmented measurement. Used by plot templates to slice
+    # raw columns without needing per-curve segments.
+    segments: list[list[int]] = field(default_factory=list)
     
 
 @dataclass
@@ -444,17 +455,6 @@ class FolderStore:
 ###         DATA HANDLING, LOADING, AND CATEGORISATION            #
 ###################################################################
 """ 
-@dataclass
-class Data_Mapping:
-   """
-   Contains default key names and similar. Should probably used together with a fallback
-   """
-   KeithleyMap = {
-    "x_patterns": ["V", "voltage", "bias"],
-    "y_patterns": ["I", "current", "A"],
-    # Explicit overrides take priority
-    "explicit_pairs": [],   # [["Voltage", "Current"], ...]
-    }
 
 class DataSource(Protocol):
     name: str  # "palmsens", "keithley"
@@ -554,6 +554,38 @@ class KeithleySource:
                            run_data: dict) -> Measurement:
         settings = run_data.get("Settings", {}) or {}
         log      = run_data.get("LOG", {}) or {}
+
+        _SKIP = {
+            "Data directory", "column_order", "applied_cols",
+            "measured_cols", "applied_col", "measured_col",
+            "sweep_segments", "Settings", "_sheet_name", "_run_key",
+            "filename", "LOG", "emitter", "detector",
+        }
+        columns: dict[str, np.ndarray] = {}
+        for col_name, col_val in run_data.items():
+            if col_name in _SKIP:
+                continue
+            try:
+                arr = np.asarray(col_val, dtype=float)
+            except (TypeError, ValueError):
+                continue
+            if arr.size:
+                columns[col_name] = arr
+
+        t = run_data.get("Time")
+        if t is not None:
+            try:
+                t_arr = np.asarray(t, dtype=float)
+                if t_arr.size:
+                    columns["Time"] = t_arr
+            except (TypeError, ValueError):
+                pass
+
+        column_units = self._infer_column_units(columns, settings)
+
+        raw_segs = run_data.get("sweep_segments", []) or []
+        measurement_segments = [list(s) for s in raw_segs]
+
         return Measurement(
             measurement_id=i,
             title=f"{run_key}: {settings.get('Test Name', '')}".strip(": "),
@@ -562,7 +594,40 @@ class KeithleySource:
             curves=self._extract_curves(run_data),
             metadata={"run_key": run_key, "settings": settings},
             log=log,
+            columns=columns,
+            column_units=column_units,
+            segments=measurement_segments,
         )
+
+    def _infer_column_units(self, columns: dict, settings: dict) -> dict:
+        """Best-effort unit per raw column, from name + Operation Mode."""
+        units: dict[str, str] = {}
+        if "Time" in columns:
+            units["Time"] = "s"
+
+        op_modes = settings.get("Operation Mode", []) or []
+        if isinstance(op_modes, str):
+            op_modes = [op_modes]
+        colnames = settings.get("Colname", []) or []
+        if isinstance(colnames, str):
+            colnames = [colnames]
+        for idx, name in enumerate(colnames):
+            if name not in columns:
+                continue
+            op = str(op_modes[idx]).lower() if idx < len(op_modes) else ""
+            if "voltage" in op:   units[name] = "V"
+            elif "current" in op: units[name] = "A"
+
+        for name in columns:
+            if name in units:
+                continue
+            lname = name.lower()
+            if "current" in lname:               units[name] = "A"
+            elif "volt" in lname or lname == "v": units[name] = "V"
+            elif "time" in lname:                units[name] = "s"
+            elif "resist" in lname:              units[name] = "Ω"
+            else:                                units[name] = ""
+        return units
 
 
     def _extract_curves(self, run_data: dict) -> list[CurveData]:
@@ -669,3 +734,29 @@ class DataSourceRegistry:
         if src is None:
             raise ValueError(f"No data source can load {path}")
         return src.load(path, **kw)
+
+def find_measurement_folders(root: Path, registry) -> list[Path]:
+    """Walk `root` recursively and return every folder that directly
+    contains at least one file a source in `registry` can load."""
+    root = Path(root).resolve()
+    if not root.is_dir():
+        return []
+
+    hits: list[Path] = []
+    for p in root.rglob("*"):
+        if not p.is_dir():
+            continue
+        try:
+            for f in p.iterdir():
+                if not f.is_file():
+                    continue
+                try:
+                    if registry.find(f) is not None:
+                        hits.append(p)
+                        break
+                except Exception:
+                    continue
+        except OSError:
+            continue
+    hits.sort()
+    return hits

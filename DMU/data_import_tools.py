@@ -435,14 +435,6 @@ def get_sec(time_str: str) -> float:
         logger.warning("Provided TIME is not a string in d:h:m:s format, please double check your data sheet.")
         return 0
 
-def segment_sweep(data, indices):
-    if not data or not indices:
-        return data
-    idx0, idx1 = int(indices[0]), int(indices[1])
-    if len(indices) == 2:
-        return data[idx0:idx1]
-    return [data[int(i):int(j)] for i, j in zip(indices[:-1], indices[1:])]
-
 def turning_points(data):
     if not data or len(data) < 3:
         return [0, len(data)]
@@ -454,21 +446,6 @@ def turning_points(data):
     points.append(len(data))
     return points
 
-def Convert_to_type(data_dict):
-    for key, value in data_dict.items():
-        if isinstance(value, str):
-            try:
-                data_dict[key] = float(value)
-            except ValueError:
-                pass
-        elif isinstance(value, list):
-            for i, item in enumerate(value):
-                if isinstance(item, str):
-                    try:
-                        value[i] = float(item)
-                    except ValueError:
-                        pass
-    return data_dict
 
 NEWDEF = {"N/A": None, "Enabled": True, "Disabled": False, "OFF": False, "ON": True}
 KEYDEF = {
@@ -1667,9 +1644,3 @@ def build_device_data(folder: Path,
     _save_pickle(cache_path, fresh)
     return fresh
 
-
-def list_device_folders(root_dir: Path) -> list[str]:
-    """List immediate subfolders that can be treated as devices."""
-    root = Path(root_dir)
-    return sorted([p.name for p in root.iterdir() if p.is_dir()])
-    

@@ -89,8 +89,11 @@ def load_session_file(filepath: Path):
 # Per-measurement operator state, persisted as JSON, never touches raw data
 # ---------------------------------------------------------------------------
 
-def state_key(filename: str, measurement_id: int) -> str:
-    return f"{filename}__m{measurement_id}"
+def state_key(filename_or_relpath: str, measurement_id: int) -> str:
+    """Build a filesystem-safe key. Accepts either a bare filename or a
+    path relative to the state root; separators are folded to '__'."""
+    safe = str(filename_or_relpath).replace("\\", "__").replace("/", "__")
+    return f"{safe}__m{measurement_id}"
 
 def file_path_match(a, b) -> bool:
     """Compare two file paths tolerantly (None-safe, str/Path-safe)."""
@@ -99,25 +102,61 @@ def file_path_match(a, b) -> bool:
     return Path(a).resolve() == Path(b).resolve()
 @dataclass
 class CurveState:
-    # Per-curve visibility — key is the curve's `name` (stable across reloads)
+    """
+     ── Per-curve fit data (framework) ──────────────────────────────────
+     Keys are _fit_key(curve_name, segments). Values are dicts of the form:
+       {
+         "mode": int,                # FitMode enum
+         "coefficients": list|None,  # what the fit produced (poly coeffs, etc.)
+         "use_bg_removed": bool,     # fit input was bg-subtracted or raw
+         "x_range": [xmin, xmax]|None,  # x domain of the fit
+         "segments": list[int],      # redundant copy of key's segment list
+         "extra": dict,              # future per-mode params
+         "display_x": list|None,     # optional precomputed fit points
+         "display_y": list|None,     # (populated by fit code; plotted verbatim)
+       }
+    
+     fit_by_curve is for the *curve* fit (e.g. diode / poly shape).
+     bg_fit_by_curve is for the BG-removal fit — separate storage because
+     they answer different questions and can coexist.
+    """
     hidden_curves: list[str] = field(default_factory=list)
+    # Per-curve-segment visibility: key = curve name, value = list of segment
+    # indices hidden from the plot. Empty dict or missing entry = all shown.
+    hidden_segments: dict[str, list[int]] = field(default_factory=dict)
     bg_ranges_by_curve: dict[str, list] = field(default_factory=dict)
     anchor_points_by_curve: dict[str, list] = field(default_factory=dict)
-    # NEW: per-curve display overrides, keyed by ORIGINAL curve name
-    # value = {"name": ..., "x_unit": ..., "y_unit": ...}
     curve_overrides: dict[str, dict] = field(default_factory=dict)
 
     # Global fit settings
-    fit_coeffs: Optional[list] = None       # kept for backward compat
+    fit_coeffs: Optional[list] = None
     remove_background: bool = False
     bg_removal_mode: int = 0
     poly_degree: int = 2
     spline_smoothing: float = 0.0
 
-    # Legacy single-curve fields — loaded from old sidecars, migrated on read
     bg_ranges: list = field(default_factory=list)
     anchor_points: list = field(default_factory=list)
 
+    
+    fit_by_curve: dict[str, dict] = field(default_factory=dict)
+    bg_fit_by_curve: dict[str, dict] = field(default_factory=dict)
+
+    # Which (curve, segment-selection) the fit panel is currently targeting.
+    # None = nothing selected (fit button / display disabled).
+    active_fit_key: Optional[str] = None
+    # Optional explicit plot layout. None = "auto" (use meas.curves as
+    # before). [] = nothing. List of dicts = each is one line on the plot:
+    #   {"x_column": "Time", "y_column": "Current",
+    #    "segments": [], "label": "I vs t", "axis": "auto"}
+    #   - segments: [] means "full array", [0] means "forward only", [0,1] both
+    #   - axis: "auto" | "left" | "right"   (auto = one axis per y-unit)
+    plot_template: Optional[list[dict]] = None
+    # True once plot_template has been set by either the user, an explicit
+    # "Reset to automatic", or an auto-apply from the library. Prevents
+    # library templates from re-clobbering the user's choice on next load.
+    plot_template_auto_applied: bool = False
+    
     def to_dict(self):
         return asdict(self)
 
@@ -153,6 +192,13 @@ class StateStore:
         with open(self._path_for(key), "w") as f:
             json.dump(state.to_dict(), f, indent=2)
 
+def _measurement_signature(meas: "Measurement") -> str:
+    """Structural identity for template matching.
+
+    Two measurements with the same column set are the same 'shape' of
+    data, and any template that works on one works on the other.
+    """
+    return "|".join(sorted(meas.columns.keys()))
 
 # ---------------------------------------------------------------------------
 # Small config: remembers which folders you've added, across sessions. Change this to a local directory later.
@@ -232,6 +278,41 @@ class BgRemovalMode:
     EXPONENTIAL_DECAY = 4  # Fit exponential decay through baseline points
     MANUAL_GRADIENT = 5   # Manual piecewise gradient construction
 
+class FitMode:
+    """Curve-fit algorithm identifier. Extend as real fits are added."""
+    NONE = 0
+    LINEAR = 1
+    POLY = 2
+    # Future: DIODE, IDEAL_DIODE, EXPONENTIAL, SPLINE, CUSTOM
+
+
+def _fit_key(curve_name: str, segments=None) -> str:
+    """Stable key for a (curve, segment-selection) fit target.
+
+    segments=None or [] → "all segments".
+    Otherwise, sorted segment indices comma-joined.
+
+        _fit_key("Sweep 1", None)   -> "Sweep 1|all"
+        _fit_key("Sweep 1", [0])    -> "Sweep 1|0"
+        _fit_key("Sweep 1", [0, 1]) -> "Sweep 1|0,1"
+    """
+    if not segments:
+        return f"{curve_name}|all"
+    return f"{curve_name}|{','.join(str(s) for s in sorted(segments))}"
+
+
+def _parse_fit_key(key: str) -> tuple[str, list[int]]:
+    """Inverse of _fit_key: returns (curve_name, segment_indices)."""
+    if "|" not in key:
+        return key, []
+    name, segs = key.rsplit("|", 1)
+    if segs == "all":
+        return name, []
+    try:
+        return name, [int(s) for s in segs.split(",")]
+    except ValueError:
+        return name, []
+    
 # BG REMOVAL span types 
 class RangeType:
     SPAN = 0          # Background range to remove
@@ -246,8 +327,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1300, 800)
         
         self.current_folder: Optional[Path] = None
+
+        # ── Added folders / roots, plus their tick state ─────────────
+        self._added_entries: list[dict] = []      # {"path", "kind"}
+        self._leaf_check: dict[str, bool] = {}    # abs_leaf_path -> bool
+        self._state_roots: dict[str, str] = {}    # abs_leaf_path -> abs_root
         
-        self.current_file_path: Optional[str] = None   # path of the file currently loaded into DATA
+        # Deferred-rebuild bookkeeping — see _schedule_tree_rebuild().
+        self._tree_rebuild_pending: bool = False
+        self._pending_focus: Optional[str] = None
+        self._in_tree_rebuild: bool = False
+        
+        self.current_file_path: Optional[str] = None
         self.loaded_file: Optional[LoadedFile] = None   # current LoadedFile
         self.loaded_files: dict[str, LoadedFile] = {}   # cache of every ticked file                                # ps.load_session_file() result for current_file_path
 
@@ -480,12 +571,22 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- Data-management actions ---------------------------------------------
 
     def _get_ticked_folders(self) -> list[Path]:
-        out = []
-        for i in range(self.folder_list.count()):
-            it = self.folder_list.item(i)
-            if it.checkState() == QtCore.Qt.Checked:
-                out.append(Path(it.text()))
+        out: list[Path] = []
+        for i in range(self.folder_tree.topLevelItemCount()):
+            self._collect_ticked_leaves(
+                self.folder_tree.topLevelItem(i), out)
         return out
+
+    def _collect_ticked_leaves(self, item, out: list[Path]):
+        if item is None:
+            return
+        payload = item.data(0, QtCore.Qt.UserRole)
+        if payload and payload[0] == "folder_leaf" \
+                and item.checkState(0) == QtCore.Qt.Checked:
+            out.append(Path(payload[1]))
+            return
+        for j in range(item.childCount()):
+            self._collect_ticked_leaves(item.child(j), out)
     
     def _import_dit(self):
         """Local import shim so this class can live in either package layout."""
@@ -637,17 +738,35 @@ class MainWindow(QtWidgets.QMainWindow):
         col = QtWidgets.QVBoxLayout()
 
         col.addWidget(QtWidgets.QLabel("Data folders"))
-        self.folder_list = QtWidgets.QListWidget()
-        self.folder_list.currentItemChanged.connect(self._on_folder_selected)
-        self.folder_list.itemChanged.connect(self._on_folder_check_changed)
-        col.addWidget(self.folder_list)
+        self.folder_tree = QtWidgets.QTreeWidget()
+        self.folder_tree.setHeaderHidden(True)
+        self.folder_tree.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.folder_tree.setWordWrap(True)
+        self.folder_tree.setUniformRowHeights(False)
+        self.folder_tree.setTextElideMode(QtCore.Qt.ElideNone)
+        self.folder_tree.header().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch)
+        self.folder_tree.header().setStretchLastSection(True)
+        self.folder_tree.currentItemChanged.connect(
+            self._on_folder_tree_selected)
+        self.folder_tree.itemChanged.connect(
+            self._on_folder_tree_check_changed)
+        col.addWidget(self.folder_tree)
 
         btn_row = QtWidgets.QHBoxLayout()
-        add_btn = QtWidgets.QPushButton("Add")
+        add_btn = QtWidgets.QPushButton("Add folder")
+        add_root_btn = QtWidgets.QPushButton("Add root…")
         del_btn = QtWidgets.QPushButton("Delete")
+        add_btn.setToolTip("Add a single measurement folder.")
+        add_root_btn.setToolTip(
+            "Add a parent folder — all measurement folders underneath "
+            "it will be discovered and listed together.")
         add_btn.clicked.connect(self._add_folder)
+        add_root_btn.clicked.connect(self._add_root_folder)
         del_btn.clicked.connect(self._delete_folder)
         btn_row.addWidget(add_btn)
+        btn_row.addWidget(add_root_btn)
         btn_row.addWidget(del_btn)
         col.addLayout(btn_row)
 
@@ -801,6 +920,25 @@ class MainWindow(QtWidgets.QMainWindow):
         spline_layout.addStretch()
         layout.addLayout(spline_layout)
         
+        # --- Curve selection for fitting ---
+        layout.addWidget(QtWidgets.QLabel("Curve for fitting"))
+        self.fit_curve_list = QtWidgets.QListWidget()
+        self.fit_curve_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.fit_curve_list.itemClicked.connect(self._on_fit_curve_selected)
+        layout.addWidget(self.fit_curve_list)
+        
+        self.fit_use_bg_toggle = QtWidgets.QPushButton(
+            "Fit on bg-removed data")
+        self.fit_use_bg_toggle.setCheckable(True)
+        self.fit_use_bg_toggle.setToolTip(
+            "When off, fits use raw curve data. When on, fits use the "
+            "curve after background subtraction (if any BG fit exists).")
+        self.fit_use_bg_toggle.setEnabled(False)
+        self.fit_use_bg_toggle.toggled.connect(self._on_fit_use_bg_toggled)
+        layout.addWidget(self.fit_use_bg_toggle)
+        
+        #------ Fit from Selection -----#
         self.fit_bg_btn = QtWidgets.QPushButton("Fit from selection")
         self.fit_bg_btn.clicked.connect(self._fit_background)
         layout.addWidget(self.fit_bg_btn)
@@ -839,12 +977,6 @@ class MainWindow(QtWidgets.QMainWindow):
         """Build an Advanced tab for less frequently used settings"""
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-    
-        layout.addWidget(QtWidgets.QLabel("Keithley column mapping"))
-        self.keithley_x_col = QtWidgets.QLineEdit("V")
-        self.keithley_y_col = QtWidgets.QLineEdit("I")
-        layout.addWidget(self.keithley_x_col)
-        layout.addWidget(self.keithley_y_col)
     
         layout.addWidget(QtWidgets.QLabel("Loading"))
         self.disable_multiload_toggle = QtWidgets.QPushButton("Disable multi-load")
@@ -1332,51 +1464,131 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_curves_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-    
+
+        # ── Mode toggle ────────────────────────────────────────────
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel("Plot mode:"))
+        self.curves_mode_auto = QtWidgets.QRadioButton("Automatic")
+        self.curves_mode_template = QtWidgets.QRadioButton("Template")
+        self.curves_mode_auto.setChecked(True)
+        self.curves_mode_group = QtWidgets.QButtonGroup(self)
+        self.curves_mode_group.addButton(self.curves_mode_auto, 0)
+        self.curves_mode_group.addButton(self.curves_mode_template, 1)
+        self.curves_mode_group.buttonClicked.connect(
+            self._on_curves_mode_changed)
+        mode_row.addWidget(self.curves_mode_auto)
+        mode_row.addWidget(self.curves_mode_template)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+
+        self.curves_mode_hint = QtWidgets.QLabel("")
+        self.curves_mode_hint.setStyleSheet(
+            "color: gray; font-size: 10px;")
+        self.curves_mode_hint.setWordWrap(True)
+        layout.addWidget(self.curves_mode_hint)
+
+        # ── Curves tree (unchanged) ────────────────────────────────
         layout.addWidget(QtWidgets.QLabel("Ticked measurements"))
         self.curves_tree = QtWidgets.QTreeWidget()
         self.curves_tree.setHeaderLabels(["Curve", "Points", "Source"])
-        self.curves_tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.curves_tree.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection)
         self.curves_tree.itemChanged.connect(self._on_curve_item_changed)
+        self.curves_tree.itemSelectionChanged.connect(
+            self._on_curve_selection_changed)
         layout.addWidget(self.curves_tree)
-        # --- curve editor (edits the active measurement's curves) ---
+
+        # ── Template editor (hidden in auto mode) ──────────────────
+        self.curves_template_box = QtWidgets.QGroupBox("Plot template")
+        tpl = QtWidgets.QVBoxLayout(self.curves_template_box)
+
+        self.curves_spec_table = QtWidgets.QTableWidget(0, 4)
+        self.curves_spec_table.setHorizontalHeaderLabels(
+            ["X column", "Y column", "Segments", "Label"])
+        hdr = self.curves_spec_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        self.curves_spec_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows)
+        layout.addWidget(self.curves_template_box)
+        tpl.addWidget(self.curves_spec_table)
+
+        spec_btn_row = QtWidgets.QHBoxLayout()
+        add_row_btn = QtWidgets.QPushButton("+ Add")
+        rm_row_btn = QtWidgets.QPushButton("– Remove")
+        up_btn = QtWidgets.QPushButton("↑")
+        dn_btn = QtWidgets.QPushButton("↓")
+        up_btn.setFixedWidth(30)
+        dn_btn.setFixedWidth(30)
+        add_row_btn.clicked.connect(self._on_template_add_row)
+        rm_row_btn.clicked.connect(self._on_template_remove_row)
+        up_btn.clicked.connect(lambda: self._on_template_move_row(-1))
+        dn_btn.clicked.connect(lambda: self._on_template_move_row(+1))
+        spec_btn_row.addWidget(add_row_btn)
+        spec_btn_row.addWidget(rm_row_btn)
+        spec_btn_row.addWidget(up_btn)
+        spec_btn_row.addWidget(dn_btn)
+        spec_btn_row.addStretch(1)
+        tpl.addLayout(spec_btn_row)
+
+        self.curves_template_sig_label = QtWidgets.QLabel("Signature: —")
+        self.curves_template_sig_label.setStyleSheet(
+            "color: gray; font-size: 10px;")
+        tpl.addWidget(self.curves_template_sig_label)
+
+        lib_row = QtWidgets.QHBoxLayout()
+        save_tpl_btn = QtWidgets.QPushButton("Save as template")
+        apply_tpl_btn = QtWidgets.QPushButton("Apply from template…")
+        reset_auto_btn = QtWidgets.QPushButton("Reset to automatic")
+        save_tpl_btn.clicked.connect(self._on_template_save)
+        apply_tpl_btn.clicked.connect(self._on_template_apply)
+        reset_auto_btn.clicked.connect(self._on_template_reset)
+        lib_row.addWidget(save_tpl_btn)
+        lib_row.addWidget(apply_tpl_btn)
+        lib_row.addWidget(reset_auto_btn)
+        lib_row.addStretch(1)
+        tpl.addLayout(lib_row)
+
+        self.curves_template_box.setVisible(False)   # hidden in auto mode
+
+        # ── Curve editor (unchanged) ───────────────────────────────
         edit_box = QtWidgets.QGroupBox("Edit selected curve")
         edit_form = QtWidgets.QFormLayout(edit_box)
-        
         self._curve_edit_name = QtWidgets.QLineEdit()
         self._curve_edit_xunit = QtWidgets.QLineEdit()
         self._curve_edit_yunit = QtWidgets.QLineEdit()
-        
         self._curve_edit_name.editingFinished.connect(
             lambda: self._on_curve_edit_commit("name"))
         self._curve_edit_xunit.editingFinished.connect(
             lambda: self._on_curve_edit_commit("x_unit"))
         self._curve_edit_yunit.editingFinished.connect(
             lambda: self._on_curve_edit_commit("y_unit"))
-        
         edit_form.addRow("Name:", self._curve_edit_name)
         edit_form.addRow("X unit:", self._curve_edit_xunit)
         edit_form.addRow("Y unit:", self._curve_edit_yunit)
         layout.addWidget(edit_box)
-        
-        # remember the currently-edited original curve name
+
         self._curve_edit_target: Optional[str] = None
-        self.curves_tree.itemSelectionChanged.connect(self._on_curve_selection_changed)
-        
-        #Button rows
+
+        # ── Show/Hide/Untick buttons (unchanged) ──────────────────
         btn_row = QtWidgets.QHBoxLayout()
         show_all_btn = QtWidgets.QPushButton("Show all")
-        show_all_btn.clicked.connect(lambda: self._set_all_curves_visible(True))
+        show_all_btn.clicked.connect(
+            lambda: self._set_all_curves_visible(True))
         hide_all_btn = QtWidgets.QPushButton("Hide all")
-        hide_all_btn.clicked.connect(lambda: self._set_all_curves_visible(False))
+        hide_all_btn.clicked.connect(
+            lambda: self._set_all_curves_visible(False))
         untick_root_btn = QtWidgets.QPushButton("Untick roots")
-        untick_root_btn.setToolTip("Untick every file/measurement group (leaves curves as-is)")
+        untick_root_btn.setToolTip(
+            "Untick every file/measurement group (leaves curves as-is)")
         untick_root_btn.clicked.connect(self._untick_all_curve_roots)
         btn_row.addWidget(show_all_btn)
         btn_row.addWidget(hide_all_btn)
         btn_row.addWidget(untick_root_btn)
         layout.addLayout(btn_row)
-    
+
         self.tab_widget.addTab(tab, "Curves")
     
     def _untick_all_curve_roots(self):
@@ -1505,30 +1717,213 @@ class MainWindow(QtWidgets.QMainWindow):
                 lines.append(f"  - {child.text(0)}")
         QtWidgets.QApplication.clipboard().setText("\n".join(lines))
     # -- Folder management ----------------------------------------------------
-
+    
+    def _schedule_tree_rebuild(self, focus_after: Optional[str] = None):
+        """Defer a tree rebuild to the next event-loop tick, as otherwise we crash!
+    
+        Calling _rebuild_folder_tree_ui() synchronously from an
+        itemChanged / currentItemChanged handler destroys the QTreeWidgetItem
+        that Qt is currently dispatching a signal for, which segfaults
+        inside Qt's C++ layer. Deferring via QTimer avoids that.
+        """
+        if focus_after is not None:
+            self._pending_focus = focus_after
+        if self._tree_rebuild_pending:
+            return
+        self._tree_rebuild_pending = True
+        QtCore.QTimer.singleShot(0, self._do_scheduled_rebuild)
+    
+    def _do_scheduled_rebuild(self):
+        self._tree_rebuild_pending = False
+        focus = self._pending_focus
+        self._pending_focus = None
+        self._rebuild_folder_tree_ui()
+        if focus:
+            self._focus_folder_tree_item(focus)
+            
+    def _rebuild_folder_tree_ui(self):
+        """Flatten the leaves (via _added_entries + registry) and display
+        them grouped by their state_root. Within each group, the longest
+        shared directory prefix is shown as a header, and each leaf is
+        shown as its relative path below it.
+    
+        This is intentionally NOT a per-segment tree — the user asked for
+        a flat list under a shared header, e.g.:
+    
+            home/stuffA/stuffB/otherThings/Whatwhaat/ProbablyUpperDataroot/
+              ☐ ActualDataFolder
+              ☐ ActualDataFolder2
+              ☐ ActualDataFolder3
+        """
+        self._in_tree_rebuild = True
+        self.folder_tree.blockSignals(True)
+        try:
+            self.folder_tree.clear()
+            # ── everything you already have, indented one level ──
+            # (leaves collection, groups loop, header/leaf item creation)
+            ...
+        finally:
+            self.folder_tree.blockSignals(False)
+            self._in_tree_rebuild = False
+    
+        # ── Collect leaves (dedupe by resolved path) ────────────────
+        leaves: list[tuple[Path, Path]] = []
+        seen_leaves: set[str] = set()
+        for entry in self._added_entries:
+            p = Path(entry["path"])
+            if entry.get("kind") == "root":
+                for c in find_measurement_folders(p, self.registry):
+                    rp = c.resolve()
+                    if str(rp) in seen_leaves:
+                        continue
+                    seen_leaves.add(str(rp))
+                    leaves.append((rp, p.resolve()))
+            else:
+                rp = p.resolve()
+                if str(rp) in seen_leaves:
+                    continue
+                seen_leaves.add(str(rp))
+                leaves.append((rp, rp))
+    
+        # ── state_root mapping + prune stale check-state ────────────
+        self._state_roots = {str(lp): str(sr) for lp, sr in leaves}
+        current_leaf_paths = set(self._state_roots.keys())
+        for k in list(self._leaf_check.keys()):
+            if k not in current_leaf_paths:
+                del self._leaf_check[k]
+    
+        if not leaves:
+            self.folder_tree.blockSignals(False)
+            return
+    
+        # ── Group by state_root, one section per added root ─────────
+        groups: dict[str, list[Path]] = {}
+        for leaf_path, state_root in leaves:
+            groups.setdefault(str(state_root), []).append(leaf_path)
+    
+        for state_root_str in sorted(groups):
+            leaf_paths = sorted(groups[state_root_str])
+    
+            # ── Single-leaf groups: one row, full path, no header ──
+            if len(leaf_paths) == 1:
+                leaf = leaf_paths[0]
+                item = QtWidgets.QTreeWidgetItem([str(leaf)])
+                item.setFlags(
+                    QtCore.Qt.ItemIsEnabled
+                    | QtCore.Qt.ItemIsSelectable
+                    | QtCore.Qt.ItemIsUserCheckable)
+                is_ticked = self._leaf_check.get(str(leaf), False)
+                item.setCheckState(
+                    0, QtCore.Qt.Checked if is_ticked
+                       else QtCore.Qt.Unchecked)
+                item.setData(0, QtCore.Qt.UserRole,
+                             ("folder_leaf", str(leaf)))
+                item.setToolTip(0, str(leaf))
+                self.folder_tree.addTopLevelItem(item)
+                continue
+    
+            # ── 2+ leaves: common-prefix header + relative rows ─────
+            common = self._common_path_prefix([str(p) for p in leaf_paths])
+            if common:
+                header = QtWidgets.QTreeWidgetItem([common + os.sep])
+                header.setFlags(
+                    QtCore.Qt.ItemIsEnabled
+                    | QtCore.Qt.ItemIsUserCheckable
+                    | QtCore.Qt.ItemIsAutoTristate)
+                header.setData(
+                    0, QtCore.Qt.UserRole,
+                    ("folder_group", [str(lp) for lp in leaf_paths]))
+                # Initial state from _leaf_check (all/any/none)
+                _states = [self._leaf_check.get(str(lp), False)
+                           for lp in leaf_paths]
+                if all(_states):
+                    header.setCheckState(0, QtCore.Qt.Checked)
+                elif any(_states):
+                    header.setCheckState(0, QtCore.Qt.PartiallyChecked)
+                else:
+                    header.setCheckState(0, QtCore.Qt.Unchecked)
+                header.setToolTip(
+                    0, f"{state_root_str}  (state root for sidecars)")
+                header.setExpanded(True)
+                self.folder_tree.addTopLevelItem(header)
+                parent = header
+            else:
+                parent = None
+    
+            for leaf in leaf_paths:
+                if common:
+                    try:
+                        rel = leaf.relative_to(Path(common))
+                        label = str(rel) or leaf.name
+                    except ValueError:
+                        label = str(leaf)
+                else:
+                    label = str(leaf)
+    
+                item = QtWidgets.QTreeWidgetItem([label])
+                item.setFlags(
+                    QtCore.Qt.ItemIsEnabled
+                    | QtCore.Qt.ItemIsSelectable
+                    | QtCore.Qt.ItemIsUserCheckable)
+                is_ticked = self._leaf_check.get(str(leaf), False)
+                item.setCheckState(
+                    0, QtCore.Qt.Checked if is_ticked
+                       else QtCore.Qt.Unchecked)
+                item.setData(0, QtCore.Qt.UserRole,
+                             ("folder_leaf", str(leaf)))
+                item.setToolTip(0, str(leaf))
+                if parent is not None:
+                    parent.addChild(item)
+                else:
+                    self.folder_tree.addTopLevelItem(item)
+    
+            if parent is not None:
+                parent.setExpanded(True)
+    
+        self.folder_tree.blockSignals(False)
+    def _common_path_prefix(self, paths: list[str]) -> str:
+        """Longest directory prefix shared by all paths. Returns "" if
+        the shared part is only the filesystem anchor (e.g. '/' on Unix,
+        'C:\\' on Windows) — callers treat "" as 'no header'."""
+        if not paths:
+            return ""
+        if len(paths) == 1:
+            return str(Path(paths[0]).parent)
+        try:
+            common = os.path.commonpath(paths)
+        except ValueError:
+            return ""
+        # Nested case: one leaf is an ancestor of another → back off
+        # one level so no leaf renders as an empty row.
+        if any(Path(p) == Path(common) for p in paths):
+            common = str(Path(common).parent)
+        # If the common prefix is just the filesystem root, treat as none
+        if common in ("", ".", str(Path(common).anchor)):
+            return ""
+        return common    
+    
     def _restore_folders(self):
         workspace = load_workspace()
-
-        # 1. Populate folder list
-        self.folder_list.blockSignals(True)
-        for entry in workspace.get("folders", []):
-            path = entry["path"]
-            checked = entry.get("checked", False)
-            item = QtWidgets.QListWidgetItem(path)
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(
-                QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
-            self.folder_list.addItem(item)
-        self.folder_list.blockSignals(False)
-
-        # 2. Clear accidental focus (prevents currentItemChanged from firing
-        #    on the auto-set index 0 when Qt populates the widget)
-        self.folder_list.blockSignals(True)
-        self.folder_list.clearSelection()
-        self.folder_list.setCurrentItem(None)
-        self.folder_list.blockSignals(False)
-
-        # 3. Restore ticked-measurement sets
+    
+        # Migrate old format if present
+        if "added_entries" in workspace:
+            self._added_entries = [
+                {"path": e["path"], "kind": e.get("kind", "leaf")}
+                for e in workspace["added_entries"]
+            ]
+            self._leaf_check = {
+                str(k): bool(v)
+                for k, v in workspace.get("leaf_check", {}).items()
+            }
+        else:
+            old = workspace.get("folders", [])
+            self._added_entries = [
+                {"path": e["path"], "kind": "leaf"} for e in old
+            ]
+            self._leaf_check = {
+                e["path"]: bool(e.get("checked", False)) for e in old
+            }
+    
         self._ticked_files_from_workspace = set(
             workspace.get("ticked_files", []))
         self._ticked_measurements_from_workspace = set()
@@ -1539,8 +1934,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     (str(fp), int(mi)))
             except (TypeError, ValueError):
                 continue
-
-        # 4. Determine active measurement + folder focus
+    
         active = workspace.get("active_measurement")
         active_fp = active_mi = None
         if isinstance(active, list) and len(active) == 2:
@@ -1549,70 +1943,130 @@ class MainWindow(QtWidgets.QMainWindow):
                 active_mi = int(active[1])
             except (ValueError, TypeError):
                 active_fp = active_mi = None
-
+    
         saved_focus = workspace.get("current_folder")
-        focus_path  = (
-            str(Path(active_fp).parent) if active_fp is not None
-            else saved_focus
-        )
-
-        # 5. If active measurement's folder isn't explicitly ticked,
-        #    transiently tick it so the tree shows the file.
+    
+        self._rebuild_folder_tree_ui()
+    
+        # Transiently tick the leaf containing the active measurement
         if active_fp is not None:
-            parent = str(Path(active_fp).parent)
-            for k in range(self.folder_list.count()):
-                item = self.folder_list.item(k)
-                if item.text() != parent:
-                    continue
-                if item.checkState() != QtCore.Qt.Checked:
-                    self.folder_list.blockSignals(True)
-                    item.setCheckState(QtCore.Qt.Checked)
-                    self.folder_list.blockSignals(False)
-                    self._temp_ticked_folders.add(parent)
-                break
-
-        # 6. Restore folder focus without triggering _on_folder_selected
+            parent = str(Path(active_fp).parent.resolve())
+            if parent in self._leaf_check and not self._leaf_check[parent]:
+                self._leaf_check[parent] = True
+                self._temp_ticked_folders.add(parent)
+                self._rebuild_folder_tree_ui()
+    
+        focus_path = (saved_focus
+                      or (str(Path(active_fp).parent.resolve())
+                          if active_fp is not None else None))
         if focus_path:
-            for k in range(self.folder_list.count()):
-                if self.folder_list.item(k).text() == focus_path:
-                    self.folder_list.blockSignals(True)
-                    self.folder_list.setCurrentItem(
-                        self.folder_list.item(k))
-                    self.folder_list.blockSignals(False)
-                    break
-
-        # 7. Rebuild tree
+            self._focus_folder_tree_item(focus_path)
+    
         self._rebuild_measurements_tree()
-
-        # 8. Load active measurement
+    
         if active_fp is not None and active_mi is not None:
             try:
                 self._set_active_measurement(active_fp, 0, active_mi)
             except Exception as e:
                 print(f"Could not restore active measurement: {e}")
-
+    
+    def _focus_folder_tree_item(self, path: str):
+        def _walk(item):
+            if item is None:
+                return None
+            payload = item.data(0, QtCore.Qt.UserRole)
+            if payload and payload[0] == "folder_leaf" \
+                    and payload[1] == path:
+                return item
+            for j in range(item.childCount()):
+                hit = _walk(item.child(j))
+                if hit is not None:
+                    return hit
+            return None
+    
+        for i in range(self.folder_tree.topLevelItemCount()):
+            hit = _walk(self.folder_tree.topLevelItem(i))
+            if hit is not None:
+                self.folder_tree.blockSignals(True)
+                self.folder_tree.setCurrentItem(hit)
+                self.folder_tree.blockSignals(False)
+                return
     def _add_folder(self):
-        directory = QtWidgets.QFileDialog.getExistingDirectory(self, "Add data folder")
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Add data folder")
         if not directory:
             return
-        existing = [self.folder_list.item(i).text() for i in range(self.folder_list.count())]
-        if directory not in existing:
-            item = QtWidgets.QListWidgetItem(directory)
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.Unchecked)
-            self.folder_list.addItem(item)
-            self._save_workspace()
+        p = str(Path(directory).resolve())
+        for entry in self._added_entries:
+            if entry["path"] == p:
+                return
+        self._added_entries.append({"path": p, "kind": "leaf"})
+        self._leaf_check[p] = False
+        self._save_workspace()
+        self._schedule_tree_rebuild()
+
+    def _add_root_folder(self):
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Add root folder (auto-scan for measurement folders)")
+        if not directory:
+            return
+        p = str(Path(directory).resolve())
+        for entry in self._added_entries:
+            if entry["path"] == p:
+                return
+        found = find_measurement_folders(Path(p), self.registry)
+        if not found:
+            QtWidgets.QMessageBox.information(
+                self, "No measurement folders",
+                f"No folders containing loadable files were found under:\n{p}")
+            return
+        self._added_entries.append({"path": p, "kind": "root"})
+        self._save_workspace()
+        self._schedule_tree_rebuild()
+        self._rebuild_measurements_tree()
 
     def _delete_folder(self):
-        item = self.folder_list.currentItem()
+        item = self.folder_tree.currentItem()
         if item is None:
             return
-        row = self.folder_list.row(item)
-        self.folder_list.takeItem(row)
+        payload = item.data(0, QtCore.Qt.UserRole)
+        if payload is None or payload[0] != "folder_leaf":
+            return
+        leaf_path = payload[1]
+
+        target_path = None
+        kind = None
+        for entry in self._added_entries:
+            if entry["path"] == leaf_path:
+                target_path, kind = entry["path"], "leaf"
+                break
+            if entry["kind"] == "root":
+                try:
+                    Path(leaf_path).relative_to(entry["path"])
+                    target_path, kind = entry["path"], "root"
+                    break
+                except ValueError:
+                    continue
+        if target_path is None:
+            return
+
+        msg = (f"Remove this root and all its discovered folders?\n{target_path}"
+               if kind == "root"
+               else f"Remove folder?\n{target_path}")
+        reply = QtWidgets.QMessageBox.question(
+            self, "Confirm removal", msg,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._added_entries = [
+            e for e in self._added_entries if e["path"] != target_path
+        ]
+        self._leaf_check.pop(leaf_path, None)
         self._save_workspace()
-        self.file_list.clear()
-        self._reset_loaded_data()
-        self._refresh_curves_tab()
+        self._schedule_tree_rebuild()
+        self._rebuild_measurements_tree()
 
     def _reset_loaded_data(self):
         self.current_file_path = None
@@ -1624,44 +2078,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas.draw()
     # -- Measurement list---------------
 
-    def _on_folder_selected(self, item, _prev=None):
-        """Focus a folder. Also transiently ticks it (unless the user had
-        explicitly ticked it before, in which case it stays ticked)."""
+    def _on_folder_tree_selected(self, item, _prev=None):
+        # Ignore selection events that fire while we're rebuilding the
+        # tree — Qt auto-sets currentItem to the first leaf on rebuild,
+        # which would otherwise transient-tick a folder the user never
+        # clicked.
+        if self._in_tree_rebuild:
+            return
         if item is None:
             self.current_folder = None
             return
+        payload = item.data(0, QtCore.Qt.UserRole)
+        if payload is None or payload[0] != "folder_leaf":
+            return
+        leaf_path = payload[1]
 
-        new_path = item.text()
+        for p in list(self._temp_ticked_folders):
+            if p != leaf_path:
+                self._leaf_check[p] = False
+                self._temp_ticked_folders.discard(p)
 
-        # 1. Untick any previously transient ticks that the user didn't confirm.
-        self.folder_list.blockSignals(True)
-        for i in range(self.folder_list.count()):
-            other = self.folder_list.item(i)
-            if other is item:
-                continue
-            if other.text() in self._temp_ticked_folders:
-                other.setCheckState(QtCore.Qt.Unchecked)
-                self._temp_ticked_folders.discard(other.text())
-        self.folder_list.blockSignals(False)
+        if not self._leaf_check.get(leaf_path, False):
+            self._leaf_check[leaf_path] = True
+            self._temp_ticked_folders.add(leaf_path)
+            self._schedule_tree_rebuild(focus_after=leaf_path)
 
-        # 2. Transiently tick the new folder if it isn't already ticked.
-        if item.checkState() != QtCore.Qt.Checked:
-            self.folder_list.blockSignals(True)
-            item.setCheckState(QtCore.Qt.Checked)
-            self.folder_list.blockSignals(False)
-            self._temp_ticked_folders.add(new_path)
-
-        self.current_folder = Path(new_path)
+        self.current_folder = Path(leaf_path)
         self._save_workspace()
         self._rebuild_measurements_tree()
 
-    def _on_folder_check_changed(self, item):
-        """User explicitly clicked the checkbox → not transient any more."""
-        if item is None:
+    def _on_folder_tree_check_changed(self, item, column):
+        if self._in_tree_rebuild:
             return
-        # Explicit click clears the transient mark.
-        self._temp_ticked_folders.discard(item.text())
+        if column != 0:
+            return
+        payload = item.data(0, QtCore.Qt.UserRole)
+        if payload is None:
+            return
+
+        if payload[0] == "folder_group":
+            new_state = item.checkState(0)
+            if new_state == QtCore.Qt.PartiallyChecked:
+                return
+            checked = (new_state == QtCore.Qt.Checked)
+            for lp in payload[1]:
+                self._leaf_check[lp] = checked
+                self._temp_ticked_folders.discard(lp)
+            self._save_workspace()
+            self._schedule_tree_rebuild()
+            self._rebuild_measurements_tree()
+            return
+
+        if payload[0] != "folder_leaf":
+            return
+        leaf_path = payload[1]
+        checked = item.checkState(0) == QtCore.Qt.Checked
+        self._leaf_check[leaf_path] = checked
+        self._temp_ticked_folders.discard(leaf_path)
         self._save_workspace()
+        self._schedule_tree_rebuild()
         self._rebuild_measurements_tree()
 
     def _on_entry_selected(self, item, _column=0):
@@ -1687,11 +2162,10 @@ class MainWindow(QtWidgets.QMainWindow):
             sel.append((file_path, meas_index))
         self.selected_measurements = sel
         if self.active_measurement is None and sel:
-            # Fall back to the first highlighted item if nothing active yet
             fp, mi = sel[-1]
-            payloads = [i.data(0, QtCore.Qt.UserRole) for i in self.file_list.selectedItems()]
             self._set_active_measurement(fp, 0, mi)
             return
+        self._refresh_curves_tab()     # ← new: reflect selection
         self._refresh_logbook_tab()
         self._refresh_plot()
     
@@ -1744,6 +2218,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_state()
         self._refresh_plot()
         self._refresh_curves_tab()
+        
     def _set_active_measurement(self, file_path: str, file_index: int, meas_index: int):
         """Set the one measurement that tabs/logbook/curves operate on and that
         fits are performed against. Loads file if not cached."""
@@ -1773,10 +2248,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.active_measurement = (file_path, meas_index)
     
         # Load sidecar state
-        store = StateStore(Path(file_path).parent)
-        key = state_key(self.current_filename, meas_index)
+        store, key_prefix = self._state_store_for(file_path)
+        key = state_key(key_prefix, meas_index)
         self.current_state = store.load(key)
-    
+        # Auto-apply library template if this measurement has never
+        # seen one. plot_template_auto_applied prevents re-application
+        # after the user explicitly resets or edits.
+        if (self.current_state.plot_template is None
+                and not self.current_state.plot_template_auto_applied):
+            sig = self._measurement_signature(
+                self.loaded_file.measurements[meas_index])
+            if sig:
+                lib = self._load_plot_template_library(file_path)
+                if sig in lib:
+                    self.current_state.plot_template = [
+                        dict(s) for s in lib[sig]]
+                    self.current_state.plot_template_auto_applied = True
+                    self._save_state()
         # Reflect state in UI (existing code, unchanged)
         self.remove_bg_toggle.blockSignals(True)
         self.remove_bg_toggle.setChecked(self.current_state.remove_background)
@@ -1796,12 +2284,25 @@ class MainWindow(QtWidgets.QMainWindow):
     
         self.poly_degree_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.POLY)
         self.spline_smoothing_spin.setVisible(self.current_state.bg_removal_mode == BgRemovalMode.SPLINE)
-    
+        if self.current_state.plot_template is not None:
+            self.curves_mode_template.setChecked(True)
+            self.curves_template_box.setVisible(True)
+            self.curves_mode_hint.setText(
+                "Template mode: the plot shows exactly the rows below. "
+                "Curve ticks affect only the fit-target list.")
+        else:
+            self.curves_mode_auto.setChecked(True)
+            self.curves_template_box.setVisible(False)
+            self.curves_mode_hint.setText(
+                "Automatic mode: every non-hidden curve is drawn, "
+                "one axis per Y unit.")
         self._selected_row = None
         self._refresh_curves_tab()
         self._refresh_range_list()
+        self._refresh_fit_curve_list()
         self._refresh_logbook_tab()          
-        self._refresh_curve_editor()         
+        self._refresh_curve_editor()        
+        self._refresh_template_editor() 
         self._refresh_plot()
     
     def _rebuild_measurements_tree(self):
@@ -1819,11 +2320,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_list.blockSignals(True)
         self.file_list.clear()
     
-        ticked_folders = [
-            Path(self.folder_list.item(i).text())
-            for i in range(self.folder_list.count())
-            if self.folder_list.item(i).checkState() == QtCore.Qt.Checked
-        ]
+        ticked_folders = self._get_ticked_folders()
     
         # ── Classified view ─────────────────────────────────────────
         if self.EDIT_TREE_VIEW == "classified":
@@ -2002,9 +2499,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_filename = Path(file_path).name
 
         # The StateStore folder is whichever folder this file lives in.
-        state_folder = Path(file_path).parent
-        store = StateStore(state_folder)
-        key = state_key(self.current_filename, meas_index)
+        store, key_prefix = self._state_store_for(file_path)
+        key = state_key(key_prefix, meas_index)
         self.current_state = store.load(key)
 
         # Update UI to reflect loaded state
@@ -2030,7 +2526,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._selected_row = None
         self._refresh_curves_tab()
         self._refresh_range_list()
-        self._refresh_problems_tab() 
+        self._refresh_fit_curve_list()
+        self._refresh_logbook_tab()
+        self._refresh_curve_editor()
         self._refresh_plot()
         
     def _iter_all_items(self):
@@ -2046,37 +2544,32 @@ class MainWindow(QtWidgets.QMainWindow):
     
     
     def _save_workspace(self):
-        folders = [
-            {
-                "path": self.folder_list.item(i).text(),
-                "checked": (
-                    self.folder_list.item(i).checkState() == QtCore.Qt.Checked
-                    and self.folder_list.item(i).text()
-                        not in self._temp_ticked_folders      # ← NEW
-                ),
-            }
-            for i in range(self.folder_list.count())
-        ]
+        for p in list(self._temp_ticked_folders):
+            self._temp_ticked_folders.discard(p)
+            self._leaf_check[p] = False
+    
         ticked = self._get_ticked_measurements()
     
-        # Save active selection (which measurement was focused)
         active = None
         if (self.current_file_path is not None
                 and self.current_meas_index is not None):
             active = [str(self.current_file_path),
                       int(self.current_meas_index)]
     
-        # Save folder focus (which folder row had the highlight)
         current_folder = None
-        if self.folder_list.currentItem() is not None:
-            current_folder = self.folder_list.currentItem().text()
+        if self.folder_tree.currentItem() is not None:
+            payload = self.folder_tree.currentItem().data(
+                0, QtCore.Qt.UserRole)
+            if payload and payload[0] == "folder_leaf":
+                current_folder = payload[1]
     
         save_workspace({
-            "folders": folders,
+            "added_entries": [dict(e) for e in self._added_entries],
+            "leaf_check": dict(self._leaf_check),
             "ticked_files": list({fp for fp, _ in ticked}),
             "ticked_measurements": [list(t) for t in sorted(ticked)],
-            "active_measurement": active,          # ← NEW
-            "current_folder": current_folder,      # ← NEW
+            "active_measurement": active,
+            "current_folder": current_folder,
         })
         
         # -- Tick / check handling ------------------------------------------------
@@ -2199,81 +2692,397 @@ class MainWindow(QtWidgets.QMainWindow):
                 ticked.add(payload[1])
         return ticked
 
+    def _on_curves_mode_changed(self, btn):
+        template_mode = self.curves_mode_template.isChecked()
+        self.curves_template_box.setVisible(template_mode)
+        self.curves_mode_hint.setText(
+            "Template mode: the plot shows exactly the rows below. "
+            "Curve ticks affect only the fit-target list."
+            if template_mode else
+            "Automatic mode: every non-hidden curve is drawn, "
+            "one axis per Y unit.")
+
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+
+        if template_mode:
+            # First switch → seed from currently visible curves
+            if self.current_state.plot_template is None:
+                meas = self.loaded_file.measurements[self.current_meas_index]
+                self.current_state.plot_template = \
+                    self._default_specs_from_curves(meas)
+                self.current_state.plot_template_auto_applied = True
+                self._save_state()
+        else:
+            if self.current_state.plot_template is not None:
+                self.current_state.plot_template = None
+                self.current_state.plot_template_auto_applied = True
+                self._save_state()
+
+        self._refresh_template_editor()
+        self._refresh_plot()
+
+    def _default_specs_from_curves(self, meas) -> list[dict]:
+        """Turn the current visible-curves view into equivalent specs."""
+        specs = []
+        for curve in meas.curves:
+            if curve.name in self.current_state.hidden_curves:
+                continue
+            parts = (curve.source_key or "").split("|")
+            x_col = parts[0] if len(parts) > 0 and parts[0] in meas.columns else None
+            y_col = parts[1] if len(parts) > 1 and parts[1] in meas.columns else None
+            if not x_col or not y_col:
+                continue
+            specs.append({
+                "x_column": x_col,
+                "y_column": y_col,
+                "segments": [],
+                "label": "",
+            })
+        return specs    
+    def _refresh_template_editor(self):
+        if not hasattr(self, "curves_spec_table"):
+            return
+    
+        active = (self.loaded_file is not None
+                  and self.current_meas_index is not None)
+        if not active:
+            self.curves_spec_table.setRowCount(0)
+            self.curves_template_sig_label.setText("Signature: —")
+            return
+    
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        sig = self._measurement_signature(meas)
+        self.curves_template_sig_label.setText(
+            f"Signature: {sig or '— (no raw columns; template disabled)'}")
+    
+        specs = self.current_state.plot_template or []
+        self.curves_spec_table.blockSignals(True)
+        self.curves_spec_table.setRowCount(0)
+        for spec in specs:
+            self._append_spec_row(spec, meas)
+        self.curves_spec_table.blockSignals(False)
+    
+    def _append_spec_row(self, spec: dict, meas):
+        row = self.curves_spec_table.rowCount()
+        self.curves_spec_table.insertRow(row)
+        columns = list(meas.columns.keys())
+    
+        def _mk_combo(field, value, entries=None):
+            cb = QtWidgets.QComboBox()
+            if entries is None:
+                for c in columns:
+                    unit = meas.column_units.get(c, "")
+                    cb.addItem(f"{c} [{unit}]" if unit else c, userData=c)
+                cb.setCurrentIndex(max(0, cb.findData(value)))
+            else:
+                for label, val in entries:
+                    cb.addItem(label, userData=val)
+                cb.setCurrentIndex(max(0, cb.findText(value)))
+            cb.currentIndexChanged.connect(
+                lambda idx, r=row, f=field: self._on_spec_changed(r, f))
+            return cb
+    
+        self.curves_spec_table.setCellWidget(
+            row, 0, _mk_combo("x_column", spec.get("x_column", "")))
+    
+        self.curves_spec_table.setCellWidget(
+            row, 1, _mk_combo("y_column", spec.get("y_column", "")))
+    
+        seg_entries = self._segment_combo_entries(meas)
+        cur_label = self._segments_to_label(
+            spec.get("segments", []) or [], meas)
+        self.curves_spec_table.setCellWidget(
+            row, 2, _mk_combo("segments", cur_label, seg_entries))
+    
+        lbl = QtWidgets.QLineEdit(spec.get("label", ""))
+        lbl.setPlaceholderText("auto")
+        lbl.editingFinished.connect(
+            lambda r=row: self._on_spec_changed(r, "label"))
+        self.curves_spec_table.setCellWidget(row, 3, lbl)
+    
+    def _segment_combo_entries(self, meas):
+        n = len(meas.segments)
+        if n <= 1:
+            return [("all", [])]
+        out = [("all", []), ("fwd", [0]), ("rev", [1])]
+        for i in range(2, n):
+            out.append((f"seg{i}", [i]))
+        return out
+    
+    def _segments_to_label(self, segs, meas):
+        segs = list(segs) if segs else []
+        if not segs:                 return "all"
+        if segs == [0]:              return "fwd"
+        if segs == [1]:              return "rev"
+        if len(segs) == 1:           return f"seg{segs[0]}"
+        return "all"
+    
+    def _on_spec_changed(self, row, field):
+        if (self.current_state.plot_template is None
+                or row < 0
+                or row >= len(self.current_state.plot_template)):
+            return
+        spec = self.current_state.plot_template[row]
+        col_idx = {"x_column": 0, "y_column": 1, "segments": 2,
+                   "label": 3}[field]
+        w = self.curves_spec_table.cellWidget(row, col_idx)
+        if field == "label":
+            spec["label"] = w.text().strip()
+        elif field == "segments":
+            spec["segments"] = w.currentData() or []
+        else:
+            spec[field] = w.currentData() or ""
+        self._save_state()
+        self._refresh_plot()
         
+    def _on_template_add_row(self):
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+        if self.current_state.plot_template is None:
+            self.current_state.plot_template = []
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        cols = list(meas.columns.keys())
+        if not cols:
+            return
+        x_col = "Time" if "Time" in cols else cols[0]
+        y_col = next((c for c in cols if c != x_col), cols[0])
+        self.current_state.plot_template.append({
+            "x_column": x_col, "y_column": y_col,
+            "segments": [], "label": "",
+        })
+        self._save_state()
+        self._refresh_template_editor()
+        self._refresh_plot()
+
+    def _on_template_remove_row(self):
+        if self.current_state.plot_template is None:
+            return
+        rows = sorted(
+            {i.row() for i in
+             self.curves_spec_table.selectionModel().selectedRows()},
+            reverse=True)
+        for r in rows:
+            if 0 <= r < len(self.current_state.plot_template):
+                del self.current_state.plot_template[r]
+        self._save_state()
+        self._refresh_template_editor()
+        self._refresh_plot()
+
+    def _on_template_move_row(self, delta):
+        if self.current_state.plot_template is None:
+            return
+        rows = [i.row() for i in
+                self.curves_spec_table.selectionModel().selectedRows()]
+        if len(rows) != 1:
+            return
+        r = rows[0]
+        nr = r + delta
+        specs = self.current_state.plot_template
+        if 0 <= nr < len(specs):
+            specs[r], specs[nr] = specs[nr], specs[r]
+            self._save_state()
+            self._refresh_template_editor()
+            self.curves_spec_table.selectRow(nr)
+            self._refresh_plot()
+    def _plot_template_library_path(self, file_path) -> Path:
+        store, _ = self._state_store_for(file_path)
+        return store.state_dir / "_plot_templates.json"
+
+    def _load_plot_template_library(self, file_path) -> dict:
+        p = self._plot_template_library_path(file_path)
+        if not p.exists():
+            return {}
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_plot_template_library(self, file_path, library):
+        p = self._plot_template_library_path(file_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w") as f:
+            json.dump(library, f, indent=2)
+
+    def _measurement_signature(self, meas) -> str:
+        if not meas.columns:
+            return ""
+        return "|".join(sorted(meas.columns.keys()))
+
+    def _on_template_save(self):
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        sig = self._measurement_signature(meas)
+        if not sig:
+            QtWidgets.QMessageBox.information(
+                self, "No signature",
+                "This measurement has no raw columns, so a template "
+                "cannot be saved for it.")
+            return
+        specs = self.current_state.plot_template or []
+        if not specs:
+            QtWidgets.QMessageBox.information(
+                self, "Empty template",
+                "Add at least one row before saving.")
+            return
+        lib = self._load_plot_template_library(self.current_file_path)
+        lib[sig] = [dict(s) for s in specs]
+        self._save_plot_template_library(self.current_file_path, lib)
+        QtWidgets.QMessageBox.information(
+            self, "Saved",
+            f"Template saved for signature:\n{sig}")
+
+    def _on_template_apply(self):
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+        lib = self._load_plot_template_library(self.current_file_path)
+        if not lib:
+            QtWidgets.QMessageBox.information(
+                self, "No templates",
+                "No templates have been saved in this root yet.")
+            return
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        sig = self._measurement_signature(meas)
+        sigs = sorted(lib.keys())
+        default_idx = sigs.index(sig) if sig in sigs else 0
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "Apply template",
+            "Choose a template to apply:", sigs, default_idx, False)
+        if not ok or not choice:
+            return
+        self.current_state.plot_template = [
+            dict(s) for s in lib[choice]]
+        self.current_state.plot_template_auto_applied = True
+        self._save_state()
+        self.curves_mode_template.setChecked(True)
+        self.curves_template_box.setVisible(True)
+        self._refresh_template_editor()
+        self._refresh_plot()
+
+    def _on_template_reset(self):
+        self.current_state.plot_template = None
+        self.current_state.plot_template_auto_applied = True
+        self._save_state()
+        self.curves_mode_auto.setChecked(True)
+        self.curves_template_box.setVisible(False)
+        self.curves_mode_hint.setText(
+            "Automatic mode: every non-hidden curve is drawn, "
+            "one axis per Y unit.")
+        self._refresh_plot()
     def _refresh_curves_tab(self):
-        """Rebuild the Curves tab from every ticked file in file_list."""
+        """Rebuild the Curves tab from active + selected + ticked measurements.
+    
+        Order:
+          • the active measurement's curves first (★ marker on its header row)
+          • then any selected/ticked measurements, in the order they appear
+            in the measurement tree (works for both flat and classified views)
+    
+        Visibility is per-curve; toggling a curve updates `hidden_curves` for
+        the active measurement only (other measurements' ticks are cosmetic).
+        """
         self.curves_tree.blockSignals(True)
         self.curves_tree.clear()
-        
-
-        # Gather every ticked file from the file_list tree.
-        ticked: list[tuple[str, LoadedFile]] = []
+    
+        active = ((self.current_file_path, self.current_meas_index)
+                  if self.current_file_path is not None else None)
+        wanted = (set(self._get_ticked_measurements())
+                  | set(self.selected_measurements))
+        if active is not None:
+            wanted.add(active)
+    
+        if not wanted:
+            self.curves_tree.blockSignals(False)
+            return
+    
+        # ── Ordered traversal of file_list (display order) ────────────
+        def _collect_in_order(item, out):
+            payload = item.data(0, QtCore.Qt.UserRole)
+            if payload is not None and payload[0] == "meas":
+                # measurement row (leaf); do not recurse
+                tgt = (payload[1], payload[3])
+                if tgt in wanted and tgt != active:
+                    out.append(tgt)
+                return
+            for j in range(item.childCount()):
+                _collect_in_order(item.child(j), out)
+    
+        ordered_others: list[tuple[str, int]] = []
         for i in range(self.file_list.topLevelItemCount()):
-            folder_node = self.file_list.topLevelItem(i)
-            for j in range(folder_node.childCount()):
-                header = folder_node.child(j)
-                payload = header.data(0, QtCore.Qt.UserRole)
-                if payload is None or payload[0] != "file":
-                    continue
-                if header.checkState(0) != QtCore.Qt.Checked:
-                    continue
-                file_path = payload[1]
-                lf = self.loaded_files.get(file_path)
-                if lf is not None:
-                    ticked.append((file_path, lf))
-
-        # Group by source type so mixed file types sort together.
-        by_source: dict[str, list[tuple[str, LoadedFile]]] = {}
-        for fp, lf in ticked:
-            by_source.setdefault(lf.source_type, []).append((fp, lf))
-
-        for source_type in sorted(by_source.keys()):
-            entries = by_source[source_type]
-            source_root = QtWidgets.QTreeWidgetItem([source_type, "", ""])
-            source_root.setFlags(
-                source_root.flags() | QtCore.Qt.ItemIsUserCheckable
-            )
-            source_root.setCheckState(0, QtCore.Qt.Checked)
-            source_root.setData(0, QtCore.Qt.UserRole, ("source_root", source_type))
-            self.curves_tree.addTopLevelItem(source_root)
-
-            for fp, lf in entries:
-                file_root = QtWidgets.QTreeWidgetItem([Path(fp).name, "", ""])
-                file_root.setFlags(
-                    file_root.flags() | QtCore.Qt.ItemIsUserCheckable
-                )
-                file_root.setCheckState(0, QtCore.Qt.Checked)
-                file_root.setData(0, QtCore.Qt.UserRole, ("file_root", fp))
-                source_root.addChild(file_root)
-
-                for meas in lf.measurements:
-                    meas_root = QtWidgets.QTreeWidgetItem([meas.title, "", ""])
-                    meas_root.setFlags(
-                        meas_root.flags() | QtCore.Qt.ItemIsUserCheckable
-                    )
-                    meas_root.setCheckState(0, QtCore.Qt.Checked)
-                    meas_root.setData(0, QtCore.Qt.UserRole,
-                                      ("meas_root", fp, meas.measurement_id))
-                    file_root.addChild(meas_root)
-
-                    for curve in meas.curves:
-                        hidden = (
-                            file_path_match(fp, self.current_file_path)
-                            and meas.measurement_id == self.current_meas_index
-                            and curve.name in self.current_state.hidden_curves
-                        )
-                        child = QtWidgets.QTreeWidgetItem([
-                            curve.name,
-                            str(len(curve.x)),
-                            curve.source_key or "",
+            _collect_in_order(self.file_list.topLevelItem(i), ordered_others)
+    
+        ordered: list[tuple[str, int]] = []
+        if active is not None:
+            ordered.append(active)
+        ordered.extend(ordered_others)
+    
+        # ── Build the tree: one meas_root per target, curves as children ──
+        for fp, mi in ordered:
+            lf = self.loaded_files.get(fp)
+            if lf is None or mi >= len(lf.measurements):
+                continue
+            meas = lf.measurements[mi]
+            is_active = (fp == self.current_file_path
+                         and mi == self.current_meas_index)
+    
+            title = ("★ " + meas.title) if is_active else meas.title
+            meas_root = QtWidgets.QTreeWidgetItem([title, "", ""])
+            meas_root.setFlags(
+                meas_root.flags() | QtCore.Qt.ItemIsUserCheckable)
+            meas_root.setCheckState(0, QtCore.Qt.Checked)
+            meas_root.setData(0, QtCore.Qt.UserRole,
+                              ("meas_root", fp, mi))
+            self.curves_tree.addTopLevelItem(meas_root)
+    
+            for curve in meas.curves:
+                hidden = (is_active
+                          and curve.name in self.current_state.hidden_curves)
+                child = QtWidgets.QTreeWidgetItem([
+                    curve.name,
+                    str(len(curve.x)),
+                    curve.source_key or "",
+                ])
+                child.setFlags(
+                    child.flags() | QtCore.Qt.ItemIsUserCheckable)
+                child.setCheckState(
+                    0, QtCore.Qt.Unchecked if hidden else QtCore.Qt.Checked)
+                child.setData(0, QtCore.Qt.UserRole,
+                              ("curve", fp, mi, curve.name))
+                meas_root.addChild(child)
+            
+                # Segment sub-rows for dual-sweep data
+                segs = curve.segments or []
+                if len(segs) > 1:
+                    hidden_segs = (self.current_state.hidden_segments
+                                   .get(curve.name, [])
+                                   if is_active else [])
+                    for seg_idx, (start, end) in enumerate(segs):
+                        if seg_idx == 0:
+                            seg_label = "fwd"
+                        elif seg_idx == 1:
+                            seg_label = "rev"
+                        else:
+                            seg_label = f"seg{seg_idx}"
+                        seg_child = QtWidgets.QTreeWidgetItem([
+                            f"    {seg_label}",
+                            str(end - start),
+                            "",
                         ])
-                        child.setFlags(child.flags() | QtCore.Qt.ItemIsUserCheckable)
-                        child.setCheckState(0, QtCore.Qt.Unchecked if hidden else QtCore.Qt.Checked)
-                        child.setData(0, QtCore.Qt.UserRole,
-                                      ("curve", fp, meas.measurement_id, curve.name))
-                        meas_root.addChild(child)
-
-        self.curves_tree.expandAll()
+                        seg_child.setFlags(
+                            seg_child.flags() | QtCore.Qt.ItemIsUserCheckable)
+                        seg_child.setCheckState(
+                            0,
+                            (QtCore.Qt.Unchecked
+                             if seg_idx in hidden_segs
+                             else QtCore.Qt.Checked))
+                        seg_child.setData(
+                            0, QtCore.Qt.UserRole,
+                            ("segment", fp, mi, curve.name, seg_idx))
+                        child.addChild(seg_child)
+    
+            meas_root.setExpanded(True)
+    
         self.curves_tree.blockSignals(False)
     
     def _on_curve_item_changed(self, item, column):
@@ -2285,13 +3094,47 @@ class MainWindow(QtWidgets.QMainWindow):
         kind = payload[0]
     
         # --- cascade for root nodes ---
-        if kind in ("source_root", "file_root", "meas_root"):
+        if kind == "meas_root":
             ticked = item.checkState(0) == QtCore.Qt.Checked
+            _, fp, mi = payload
+        
+            # If this measurement is the active one, mirror the tick into
+            # the sidecar's hidden_curves so the plot actually updates.
+            if (file_path_match(fp, self.current_file_path)
+                    and mi == self.current_meas_index):
+                lf = self.loaded_files.get(fp)
+                if lf is not None and mi < len(lf.measurements):
+                    if ticked:
+                        self.current_state.hidden_curves = []
+                    else:
+                        self.current_state.hidden_curves = [
+                            c.name for c in lf.measurements[mi].curves
+                        ]
+                    self._save_state()
+        
             self.curves_tree.blockSignals(True)
             self._cascade_check(item, ticked)
             self.curves_tree.blockSignals(False)
+            self._refresh_plot()
             return
-    
+        if kind == "segment":
+            _, fp, mi, curve_name, seg_idx = payload
+            # Only the active measurement's segments can be toggled.
+            if not (file_path_match(fp, self.current_file_path)
+                    and mi == self.current_meas_index):
+                return
+            visible = item.checkState(0) == QtCore.Qt.Checked
+            hidden = self.current_state.hidden_segments.setdefault(
+                curve_name, [])
+            if visible and seg_idx in hidden:
+                hidden.remove(seg_idx)
+            elif not visible and seg_idx not in hidden:
+                hidden.append(seg_idx)
+            if not hidden:
+                del self.current_state.hidden_segments[curve_name]
+            self._save_state()
+            self._refresh_plot()
+            return
         if kind != "curve":
             return
     
@@ -2367,10 +3210,24 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _save_state(self):
         if self.current_file_path and self.current_filename and self.current_meas_index is not None:
-            state_folder = Path(self.current_file_path).parent
-            key = state_key(self.current_filename, self.current_meas_index)
-            StateStore(state_folder).save(key, self.current_state)
-
+            store, key_prefix = self._state_store_for(self.current_file_path)
+            key = state_key(key_prefix, self.current_meas_index)
+            store.save(key, self.current_state)
+            
+    def _state_store_for(self, file_path) -> tuple["StateStore", str]:
+        fp = Path(file_path).resolve()
+        leaf_dir = str(fp.parent)
+        state_root_str = self._state_roots.get(leaf_dir)
+        if state_root_str is None:
+            state_root = fp.parent
+            key_prefix = fp.name
+        else:
+            state_root = Path(state_root_str)
+            try:
+                key_prefix = str(fp.relative_to(state_root))
+            except ValueError:
+                key_prefix = fp.name
+        return StateStore(state_root), key_prefix
     def on_get_bounds_clicked(self):
         # Assuming you have access to plotted_x and plotted_y lists of arrays
         if not self.plotted_x or not self.plotted_y:
@@ -2409,23 +3266,6 @@ class MainWindow(QtWidgets.QMainWindow):
         buf.close()
         return pixmap
 
-    def _update_axes_frame(self, ax, mode):
-        """Update axes frame appearance based on mode"""
-        if mode == 2:  # Real Size
-            # Make frame visible
-            ax.set_frame_on(True)
-            for spine in ax.spines.values():
-                spine.set_linewidth(2)
-                spine.set_color('red')
-            # Add tick marks to show real size
-            ax.tick_params(axis='both', which='major', labelsize=self.EDIT_TICK_SIZE)
-        else:
-            # Normal frame
-            ax.set_frame_on(True)
-            for spine in ax.spines.values():
-                spine.set_linewidth(1)
-                spine.set_color('black')
-            
     def _cycle_stretch_mode(self):
         """Cycle through the 3 stretch modes with proper cleanup"""
         self.EDIT_TOGGLE_STRETCH = (self.EDIT_TOGGLE_STRETCH + 1) % 3
@@ -2446,24 +3286,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot()   
     
         self._save_session_parameters()
-    
-    def _update_display_mode(self):
-        """Switch between canvas and image display"""
-        if self.EDIT_TOGGLE_STRETCH == 2:
-            # Real Size mode - show image
-            self.display_stack.setCurrentIndex(1)  # Image label
-            # Disable toolbar interactions for image mode
-            self._set_toolbar_enabled(False)
-        else:
-            # Stretch/Scale modes - show interactive canvas
-            self.display_stack.setCurrentIndex(0)  # Canvas
-            self._set_toolbar_enabled(True)
-    
-    def _set_toolbar_enabled(self, enabled):
-        """Enable/disable toolbar interactions"""
-        # Find the navigation toolbar and toggle its interactivity
-        for child in self.findChildren(NavigationToolbar):
-            child.setEnabled(enabled)
     
     def _update_button_text(self):
         """Update button text based on current mode"""
@@ -2737,8 +3559,94 @@ class MainWindow(QtWidgets.QMainWindow):
             x_fit.append(xp)
             y_fit.append(yp)
         return x_fit, y_fit
+    """
+    def _run_curve_fit(self):
+        key = self.current_state.active_fit_key
+        if key is None:
+            return
+        curve_name, seg_idxs = _parse_fit_key(key)
+        curve = <curve in active measurement with this name>
+        x, y = curve.x, curve.y
+        if self.current_state.fit_by_curve.get(key, {}).get("use_bg_removed"):
+            baseline = <compute baseline from bg_fit_by_curve, if any>
+            if baseline is not None:
+                y = y - baseline
+        if seg_idxs:
+            # restrict x/y to selected segments
+            ...
+        coeffs, fit_x, fit_y = run_fit(mode, x, y)
+        self.current_state.fit_by_curve[key] = {
+            "mode": mode,
+            "coefficients": list(coeffs),
+            "use_bg_removed": bool(...),
+            "x_range": [float(fit_x[0]), float(fit_x[-1])],
+            "segments": list(seg_idxs),
+            "extra": {},
+            "display_x": list(map(float, fit_x)),
+            "display_y": list(map(float, fit_y)),
+        }
+        self._save_state()
+        self._refresh_plot()
+    """
+    def _plot_from_template(self, primary_ax, meas, specs, is_active):
+        """Draw one measurement's custom plot spec on primary_ax.
     
-            
+        Called only when st.plot_template is not None. Fits and BG
+        removal are NOT applied here — template mode is 'raw as configured'.
+        """
+        axes_by_yunit = {"": primary_ax}
+        seen_labels = set()
+        styles = ("-", "--", ":", "-.")
+    
+        def _get_axes_for(unit):
+            if unit in axes_by_yunit:
+                return axes_by_yunit[unit]
+            new_ax = primary_ax.twinx()
+            new_ax.yaxis.set_label_position("right")
+            axes_by_yunit[unit] = new_ax
+            return new_ax
+    
+        for spec in specs:
+            x_col = spec.get("x_column")
+            y_col = spec.get("y_column")
+            if not x_col or not y_col:
+                continue
+            x = meas.columns.get(x_col)
+            y = meas.columns.get(y_col)
+            if x is None or y is None:
+                continue
+    
+            y_unit = meas.column_units.get(y_col, "")
+            ax = _get_axes_for(y_unit)
+            base_label = spec.get("label") or (
+                f"{y_col} vs {x_col}"
+                + (f" [{y_unit}]" if y_unit else ""))
+            segs = spec.get("segments") or []
+    
+            if segs:
+                for seg_idx in segs:
+                    if seg_idx >= len(meas.segments):
+                        continue
+                    s0, s1 = meas.segments[seg_idx]
+                    tag = ("fwd" if seg_idx == 0
+                           else "rev" if seg_idx == 1
+                           else f"seg{seg_idx}")
+                    label = f"{base_label} ({tag})"
+                    ax.plot(x[s0:s1], y[s0:s1],
+                            linestyle=styles[seg_idx % len(styles)],
+                            label=label)
+                    seen_labels.add(label)
+                    self.plotted_x.append(x[s0:s1])
+                    self.plotted_y.append(y[s0:s1])
+            else:
+                if base_label not in seen_labels:
+                    ax.plot(x, y, label=base_label)
+                    seen_labels.add(base_label)
+                else:
+                    ax.plot(x, y)
+                self.plotted_x.append(x)
+                self.plotted_y.append(y)
+                
     def _refresh_plot(self):
         if self.span_selector is not None:
             try:
@@ -2793,7 +3701,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 left=self.EDIT_BOUNDS_LEFT, right=self.EDIT_BOUNDS_RIGHT,
                 top=self.EDIT_BOUNDS_TOP, bottom=self.EDIT_BOUNDS_BOTTOM,
             )
-    
+        primary_ax = ax
         self.plotted_x = []
         self.plotted_y = []
     
@@ -2808,7 +3716,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     selected_typ, selected_idx = data
     
         any_baseline = False
-    
+        any_fit = False
+
         for file_path, meas_idx in targets:
             lf = self.loaded_files[file_path]
             if meas_idx >= len(lf.measurements):
@@ -2816,25 +3725,32 @@ class MainWindow(QtWidgets.QMainWindow):
             meas = lf.measurements[meas_idx]
             is_active = (file_path == self.current_file_path
                          and meas_idx == self.current_meas_index)
-    
-            # Curve filter: active uses state.hidden_curves; others use their own sidecar
+
+            # ── Resolve sidecar state ─────────────────────────────────
             if is_active:
-                hidden = self.current_state.hidden_curves
-                bg_by_curve = self.current_state.bg_ranges_by_curve
-                anchors_by_curve = self.current_state.anchor_points_by_curve
-                remove_bg = self.current_state.remove_background
-                bg_mode = self.current_state.bg_removal_mode
+                st = self.current_state
             else:
-                st = StateStore(Path(file_path).parent).load(
-                    state_key(Path(file_path).name, meas_idx))
-                hidden = st.hidden_curves
-                bg_by_curve = st.bg_ranges_by_curve
-                anchors_by_curve = st.anchor_points_by_curve
-                remove_bg = st.remove_background
-                bg_mode = st.bg_removal_mode
-    
+                st_store, st_prefix = self._state_store_for(file_path)
+                st = st_store.load(state_key(st_prefix, meas_idx))
+
+            # ── Branch: template-mode or auto-mode ────────────────────
+            if getattr(st, "plot_template", None) is not None:
+                # Template path: only the user-specified lines are drawn.
+                # No per-curve loop; no hidden_curves logic; no fitting
+                # overlay (yet — see note at bottom).
+                self._plot_from_template(
+                    primary_ax, meas, st.plot_template, is_active)
+                continue                # skip the auto path for this target
+
+            # ── Auto path: unchanged per-curve loop ───────────────────
+            hidden = st.hidden_curves
+            bg_by_curve = st.bg_ranges_by_curve
+            anchors_by_curve = st.anchor_points_by_curve
+            remove_bg = st.remove_background
+            bg_mode = st.bg_removal_mode
+
             prefix = "" if is_active else f"[m{meas_idx}] "
-            overrides = self.current_state.curve_overrides if is_active else st.curve_overrides
+            overrides = st.curve_overrides
     
             for idx, curve in enumerate(meas.curves):
                 if curve.name in hidden:
@@ -2897,11 +3813,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 label = prefix + disp + unit_tag     # → "[m2] Sweep 1 [A]"
                 
                 if getattr(curve, "segments", None):
-                    # Dual-sweep data: draw forward and reverse as separate
-                    # lines on the same axes. x / y_plot are still the full
-                    # 1-D trajectories — we only slice them for display.
+                    hidden_segs = (
+                        self.current_state.hidden_segments.get(curve.name, [])
+                        if is_active else [])
                     _SEG_STYLES = ("-", "--", ":", "-.")
                     for seg_idx, (start, end) in enumerate(curve.segments):
+                        if seg_idx in hidden_segs:
+                            continue
                         ls = _SEG_STYLES[seg_idx % len(_SEG_STYLES)]
                         if seg_idx == 0:
                             seg_label = label
@@ -2913,7 +3831,28 @@ class MainWindow(QtWidgets.QMainWindow):
                                 linestyle=ls, label=seg_label)
                 else:
                     ax.plot(x, y_plot, label=label)
-    
+                    # ── Show stored fit for the ACTIVE fit target only ──
+                    # (bg_fit_by_curve and other curves' fits are stored but
+                    #  not drawn here — the fit panel's tick selects which one
+                    #  is visible.)
+                    active_fit_key = self.current_state.active_fit_key
+                    if (is_active
+                            and active_fit_key
+                            and not self.EDIT_HIDE_SPANS):
+                        fit_curve_name, _fit_segs = _parse_fit_key(active_fit_key)
+                        if fit_curve_name == curve.name:
+                            fit = self.current_state.fit_by_curve.get(
+                                active_fit_key) or {}
+                            fx = fit.get("display_x")
+                            fy = fit.get("display_y")
+                            if fx is not None and fy is not None:
+                                ax.plot(fx, fy,
+                                        linestyle="--",
+                                        color="green",
+                                        linewidth=1.5,
+                                        label="Fit" if not any_fit else "")
+                                any_fit = True
+                                
                 # Baseline visualisation (only if not removed and not hidden)
                 if (baseline is not None and not remove_bg
                         and not self.EDIT_HIDE_SPANS and is_active):
@@ -2950,7 +3889,15 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.yaxis.get_major_formatter().set_powerlimits((-3, 3))
         ax.tick_params(axis='both', labelsize=self.EDIT_TICK_SIZE)
         if self.plotted_x:
-            ax.legend(loc="best")
+            handles, labels_, seen = [], [], set()
+            for any_ax in self.fig.axes:
+                h, l = any_ax.get_legend_handles_labels()
+                for hh, ll in zip(h, l):
+                    if ll and ll not in seen:
+                        seen.add(ll)
+                        handles.append(hh)
+                        labels_.append(ll)
+            primary_ax.legend(handles, labels_, loc="best")
     
         if self.EDIT_SHOW_COMMENT:
             self._draw_comment_panel(dat, ax)
@@ -3236,6 +4183,101 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_range_list()
         self._refresh_plot()
     
+    
+    def _refresh_fit_curve_list(self):
+        """Repopulate the 'Curve for fitting' list from the active measurement.
+    
+        For segmented curves (fwd/rev sweeps), one row is shown per segment
+        plus an '(all)' row — each row corresponds to a distinct fit target
+        so that forward and reverse fits are stored separately.
+        """
+        if not hasattr(self, "fit_curve_list"):
+            return
+        self.fit_curve_list.blockSignals(True)
+        self.fit_curve_list.clear()
+    
+        if self.loaded_file is None or self.current_meas_index is None:
+            self.fit_curve_list.blockSignals(False)
+            self._sync_fit_use_bg_toggle()
+            return
+    
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        active_key = self.current_state.active_fit_key
+    
+        for curve in meas.curves:
+            segs = curve.segments or []
+            if len(segs) > 1:
+                all_key = _fit_key(curve.name, [])
+                item = QtWidgets.QListWidgetItem(f"{curve.name}  (all)")
+                item.setData(QtCore.Qt.UserRole, all_key)
+                self.fit_curve_list.addItem(item)
+    
+                for i in range(len(segs)):
+                    if i == 0:
+                        label = "fwd"
+                    elif i == 1:
+                        label = "rev"
+                    else:
+                        label = f"seg{i}"
+                    key = _fit_key(curve.name, [i])
+                    item = QtWidgets.QListWidgetItem(
+                        f"    {curve.name}  ({label})")
+                    item.setData(QtCore.Qt.UserRole, key)
+                    self.fit_curve_list.addItem(item)
+            else:
+                key = _fit_key(curve.name, [])
+                item = QtWidgets.QListWidgetItem(curve.name)
+                item.setData(QtCore.Qt.UserRole, key)
+                self.fit_curve_list.addItem(item)
+    
+        # Restore the saved selection if it exists
+        if active_key:
+            for i in range(self.fit_curve_list.count()):
+                if (self.fit_curve_list.item(i).data(QtCore.Qt.UserRole)
+                        == active_key):
+                    self.fit_curve_list.setCurrentRow(i)
+                    break
+    
+        self.fit_curve_list.blockSignals(False)
+        self._sync_fit_use_bg_toggle()
+    
+    def _sync_fit_use_bg_toggle(self):
+        """Sync the bg-removed toggle to the current active fit target."""
+        if not hasattr(self, "fit_use_bg_toggle"):
+            return
+        key = self.current_state.active_fit_key
+        if key is None:
+            self.fit_use_bg_toggle.setEnabled(False)
+            self.fit_use_bg_toggle.blockSignals(True)
+            self.fit_use_bg_toggle.setChecked(False)
+            self.fit_use_bg_toggle.blockSignals(False)
+            return
+        self.fit_use_bg_toggle.setEnabled(True)
+        fit = self.current_state.fit_by_curve.get(key, {})
+        self.fit_use_bg_toggle.blockSignals(True)
+        self.fit_use_bg_toggle.setChecked(
+            bool(fit.get("use_bg_removed", False)))
+        self.fit_use_bg_toggle.blockSignals(False)
+    
+    def _on_fit_curve_selected(self, item):
+        if item is None:
+            return
+        key = item.data(QtCore.Qt.UserRole)
+        if not key:
+            return
+        self.current_state.active_fit_key = key
+        self._save_state()
+        self._sync_fit_use_bg_toggle()
+        self._refresh_plot()
+    
+    def _on_fit_use_bg_toggled(self, checked):
+        key = self.current_state.active_fit_key
+        if key is None:
+            return
+        fit = self.current_state.fit_by_curve.setdefault(key, {})
+        fit["use_bg_removed"] = bool(checked)
+        self._save_state()
+        
     def _sort_ranges(self):
         """Sort ranges by xmin"""
         self.current_state.bg_ranges.sort(key=lambda r: r[0])
