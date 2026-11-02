@@ -67,10 +67,12 @@ try:
     from .Widgets import *
     from .Plotting_Tools import *
     from .Data_Containers import *
+    from .Helpers import *
 except ImportError:
     from Widgets import *
     from Plotting_Tools import *
     from Data_Containers import *
+    from Helpers import *
 
 # ---------------------------------------------------------------------------
 # pypalmsens integration
@@ -1384,37 +1386,137 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(tab)
     
         info = QtWidgets.QLabel(
-            "The classified view groups every run by its device and subdevice.\n\n"
-            "• Files with a logbook (Keithley): device and subdevice come\n"
-            "   directly from each run's log entry.\n"
-            "• Files without a logbook (e.g. PalmSens): the fallback below\n"
-            "   is used — leave the pattern empty for 'folder / filename'."
+            "The classified view groups every run by device + subdevice.\n\n"
+            "• Keithley files: taken directly from each run's log entry "
+            "(no regex).\n"
+            "• Fallback (PalmSens, or Keithley runs without log entries): "
+            "the patterns below are tried, and the *best* match wins "
+            "(longest device+subdevice, ties broken by list order).\n\n"
+            "Patterns are stored per-root in .dmui_gui_state/, so they "
+            "travel with the data folder. Unset roots fall back to the "
+            "built-in defaults."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(info)
     
+        # ── Root selector ─────────────────────────────────────────
+        root_row = QtWidgets.QHBoxLayout()
+        root_row.addWidget(QtWidgets.QLabel("Editing patterns for:"))
+        self.classify_root_combo = QtWidgets.QComboBox()
+        self.classify_root_combo.currentIndexChanged.connect(
+            self._on_classify_root_changed)
+        root_row.addWidget(self.classify_root_combo, stretch=1)
+        layout.addLayout(root_row)
+    
+        # ── List of patterns ──────────────────────────────────────
         layout.addWidget(QtWidgets.QLabel(
-            "Fallback pattern (optional, for files without logbooks):"))
-        self.classify_pattern_edit = QtWidgets.QLineEdit(
-            self.EDIT_CLASSIFY_PATTERN)
-        self.classify_pattern_edit.setPlaceholderText(
-            "(empty → folder name / file stem)")
-        layout.addWidget(self.classify_pattern_edit)
+            "Patterns (checkbox = enabled; best match wins):"))
+        self.classify_list = QtWidgets.QListWidget()
+        self.classify_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.classify_list.itemChanged.connect(self._on_classify_item_changed)
+        self.classify_list.itemSelectionChanged.connect(
+            self._on_classify_selection_changed)
+        layout.addWidget(self.classify_list, stretch=1)
     
-        apply_btn = QtWidgets.QPushButton("Apply fallback pattern")
-        apply_btn.clicked.connect(self._apply_classify_pattern)
-        layout.addWidget(apply_btn)
+        # ── Editor ────────────────────────────────────────────────
+        edit_box = QtWidgets.QGroupBox("Edit / add pattern")
+        ef = QtWidgets.QFormLayout(edit_box)
     
+        self.classify_device_edit = QtWidgets.QLineEdit()
+        self.classify_device_edit.setPlaceholderText(
+            "shorthand: DFR[x]-[AA]    raw: DFR\\d+-[A-Z]{2}")
+        self.classify_device_edit.textChanged.connect(
+            self._refresh_classify_effective_regex)
+        ef.addRow("Device pattern:", self.classify_device_edit)
+    
+        sub_row = QtWidgets.QHBoxLayout()
+        self.classify_subdevice_edit = QtWidgets.QLineEdit()
+        self.classify_subdevice_edit.setPlaceholderText(
+            "shorthand: [AAx]    raw: [A-Z]{2}\\d+")
+        self.classify_subdevice_edit.textChanged.connect(
+            self._refresh_classify_effective_regex)
+        self.classify_anchor_check = QtWidgets.QCheckBox(
+            "Anchor after separator")
+        self.classify_anchor_check.setChecked(True)
+        self.classify_anchor_check.setToolTip(
+            "Prefix the subdevice regex with (?<=[-_]) so it can only "
+            "match right after '-' or '_' — prevents it from matching "
+            "inside the device name.")
+        self.classify_anchor_check.toggled.connect(
+            self._refresh_classify_effective_regex)
+        sub_row.addWidget(self.classify_subdevice_edit, stretch=1)
+        sub_row.addWidget(self.classify_anchor_check)
+        ef.addRow("Subdevice pattern:", sub_row)
+    
+        self.classify_label_edit = QtWidgets.QLineEdit()
+        self.classify_label_edit.setPlaceholderText(
+            "Optional description (e.g. 'DFR naming')")
+        ef.addRow("Label:", self.classify_label_edit)
+    
+        mode_row = QtWidgets.QHBoxLayout()
+        self.classify_mode_shorthand = QtWidgets.QRadioButton("Shorthand")
+        self.classify_mode_raw = QtWidgets.QRadioButton("Raw regex")
+        self.classify_mode_shorthand.setChecked(True)
+        self.classify_mode_group = QtWidgets.QButtonGroup(self)
+        self.classify_mode_group.addButton(self.classify_mode_shorthand, 0)
+        self.classify_mode_group.addButton(self.classify_mode_raw, 1)
+        self.classify_mode_group.buttonClicked.connect(
+            self._refresh_classify_effective_regex)
+        mode_row.addWidget(self.classify_mode_shorthand)
+        mode_row.addWidget(self.classify_mode_raw)
+        mode_row.addStretch(1)
+        ef.addRow("Mode:", mode_row)
+    
+        self.classify_effective_label = QtWidgets.QLabel("")
+        self.classify_effective_label.setStyleSheet(
+            "color: #333; background: #f4f4f4; padding: 4px; "
+            "font-family: monospace; font-size: 10px;")
+        self.classify_effective_label.setWordWrap(True)
+        ef.addRow(self.classify_effective_label)
+    
+        btn_row = QtWidgets.QHBoxLayout()
+        add_btn    = QtWidgets.QPushButton("Add / Update")
+        remove_btn = QtWidgets.QPushButton("Remove")
+        up_btn     = QtWidgets.QPushButton("↑"); up_btn.setFixedWidth(30)
+        dn_btn     = QtWidgets.QPushButton("↓"); dn_btn.setFixedWidth(30)
+        import_btn = QtWidgets.QPushButton("Import from…")
+        add_btn.clicked.connect(self._on_classify_add_or_update)
+        remove_btn.clicked.connect(self._on_classify_remove)
+        up_btn.clicked.connect(lambda: self._on_classify_move(-1))
+        dn_btn.clicked.connect(lambda: self._on_classify_move(+1))
+        import_btn.clicked.connect(self._on_classify_import_from)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addWidget(up_btn)
+        btn_row.addWidget(dn_btn)
+        btn_row.addWidget(import_btn)
+        btn_row.addStretch(1)
+        ef.addRow(btn_row)
+    
+        layout.addWidget(edit_box)
+    
+        # ── Preview ──────────────────────────────────────────────
+        self.classify_preview = QtWidgets.QLabel("")
+        self.classify_preview.setWordWrap(True)
+        self.classify_preview.setStyleSheet(
+            "color: #333; background: #f4f4f4; padding: 6px; "
+            "font-size: 10px;")
+        layout.addWidget(self.classify_preview)
+    
+        # ── Actions ──────────────────────────────────────────────
+        action_row = QtWidgets.QHBoxLayout()
         toggle_btn = QtWidgets.QPushButton("Toggle view (flat / classified)")
         toggle_btn.clicked.connect(self._toggle_tree_view)
-        layout.addWidget(toggle_btn)
+        rebuild_btn = QtWidgets.QPushButton("Rebuild measurement tree")
+        rebuild_btn.clicked.connect(self._on_classify_rebuild)
+        action_row.addWidget(toggle_btn)
+        action_row.addWidget(rebuild_btn)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
     
-        clear_btn = QtWidgets.QPushButton("Clear classification cache")
-        clear_btn.clicked.connect(lambda: self._classify_cache.clear())
-        layout.addWidget(clear_btn)
-    
-        layout.addStretch(1)
+        self._refresh_classify_root_combo()
         self.tab_widget.addTab(tab, "Classify")
     
     def _apply_classify_pattern(self):
@@ -1881,6 +1983,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 parent.setExpanded(True)
     
         self.folder_tree.blockSignals(False)
+    
+    
     def _common_path_prefix(self, paths: list[str]) -> str:
         """Longest directory prefix shared by all paths. Returns "" if
         the shared part is only the filesystem anchor (e.g. '/' on Unix,
@@ -2004,7 +2108,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._leaf_check[p] = False
         self._save_workspace()
         self._schedule_tree_rebuild()
-
+        self._refresh_classify_root_combo()
+        
     def _add_root_folder(self):
         directory = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Add root folder (auto-scan for measurement folders)")
@@ -2023,8 +2128,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._added_entries.append({"path": p, "kind": "root"})
         self._save_workspace()
         self._schedule_tree_rebuild()
+        self._refresh_classify_root_combo()
         self._rebuild_measurements_tree()
-
+        
     def _delete_folder(self):
         item = self.folder_tree.currentItem()
         if item is None:
@@ -2301,7 +2407,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_range_list()
         self._refresh_fit_curve_list()
         self._refresh_logbook_tab()          
-        self._refresh_curve_editor()        
+        self._refresh_curve_editor()
+        self._refresh_classify_root_combo()
+        self._refresh_classify_preview()        
         self._refresh_template_editor() 
         self._refresh_plot()
     
@@ -2571,9 +2679,243 @@ class MainWindow(QtWidgets.QMainWindow):
             "active_measurement": active,
             "current_folder": current_folder,
         })
-        
-        # -- Tick / check handling ------------------------------------------------
+    
+    # -- classify tab: root selector --------------------------------------
 
+    def _refresh_classify_root_combo(self):
+        if not hasattr(self, "classify_root_combo"):
+            return
+        self.classify_root_combo.blockSignals(True)
+        self.classify_root_combo.clear()
+        for entry in self._added_entries:
+            r = str(Path(entry["path"]).resolve())
+            self.classify_root_combo.addItem(r, userData=r)
+        # Default selection: current file's root if any
+        if self.current_file_path:
+            store, _ = self._state_store_for(self.current_file_path)
+            cur = str(store.state_dir.parent)
+            idx = self.classify_root_combo.findData(cur)
+            if idx >= 0:
+                self.classify_root_combo.setCurrentIndex(idx)
+        self.classify_root_combo.blockSignals(False)
+        self._on_classify_root_changed()
+    
+    def _on_classify_root_changed(self):
+        root = self.classify_root_combo.currentData()
+        if not root:
+            self._classify_patterns_editing = []
+        else:
+            self._classify_patterns_editing = load_classify_patterns(Path(root))
+        self._refresh_classify_list()
+        self._refresh_classify_preview()
+    
+    # -- classify tab: pattern list ---------------------------------------
+    
+    def _refresh_classify_list(self):
+        if not hasattr(self, "classify_list"):
+            return
+        self.classify_list.blockSignals(True)
+        self.classify_list.clear()
+        for i, entry in enumerate(self._classify_patterns_editing):
+            mode = entry.get("mode", "shorthand")
+            tag = "[S]" if mode == "shorthand" else "[R]"
+            label = entry.get("label", "")
+            display = (f"{tag} {entry['device_pattern']}  |  "
+                       f"{entry['subdevice_pattern']}")
+            if label:
+                display += f"   — {label}"
+            item = QtWidgets.QListWidgetItem(display)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(
+                QtCore.Qt.Checked if entry.get("enabled", True)
+                else QtCore.Qt.Unchecked)
+            item.setData(QtCore.Qt.UserRole, i)
+            self.classify_list.addItem(item)
+        self.classify_list.blockSignals(False)
+    
+    def _on_classify_item_changed(self, item):
+        idx = item.data(QtCore.Qt.UserRole)
+        if idx is None or not (0 <= idx < len(self._classify_patterns_editing)):
+            return
+        self._classify_patterns_editing[idx]["enabled"] = (
+            item.checkState() == QtCore.Qt.Checked)
+        self._persist_classify_patterns()
+    
+    def _on_classify_selection_changed(self):
+        items = self.classify_list.selectedItems()
+        if not items:
+            return
+        idx = items[-1].data(QtCore.Qt.UserRole)
+        if idx is None or not (0 <= idx < len(self._classify_patterns_editing)):
+            return
+        entry = self._classify_patterns_editing[idx]
+        self.classify_device_edit.setText(entry.get("device_pattern", ""))
+        self.classify_subdevice_edit.setText(entry.get("subdevice_pattern", ""))
+        self.classify_label_edit.setText(entry.get("label", ""))
+        self.classify_anchor_check.setChecked(
+            entry.get("anchor_subdevice", True))
+        if entry.get("mode", "shorthand") == "raw":
+            self.classify_mode_raw.setChecked(True)
+        else:
+            self.classify_mode_shorthand.setChecked(True)
+        self._refresh_classify_effective_regex()
+    
+    def _on_classify_add_or_update(self):
+        dev = self.classify_device_edit.text().strip()
+        sub = self.classify_subdevice_edit.text().strip()
+        label = self.classify_label_edit.text().strip()
+        mode = "raw" if self.classify_mode_raw.isChecked() else "shorthand"
+        anchor = self.classify_anchor_check.isChecked()
+        if not dev or not sub:
+            return
+        # Validate by trying to compile both halves now
+        try:
+            re.compile(_effective_regex(dev, mode))
+            re.compile(_effective_regex(sub, mode))
+        except re.error as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid pattern",
+                f"Could not compile pattern:\n{e}")
+            return
+    
+        entry = {
+            "device_pattern":    dev,
+            "subdevice_pattern": sub,
+            "label":             label,
+            "enabled":           True,
+            "mode":              mode,
+            "anchor_subdevice":  anchor,
+        }
+        items = self.classify_list.selectedItems()
+        if items:
+            idx = items[-1].data(QtCore.Qt.UserRole)
+            if idx is not None and 0 <= idx < len(self._classify_patterns_editing):
+                entry["enabled"] = self._classify_patterns_editing[idx].get(
+                    "enabled", True)
+                self._classify_patterns_editing[idx] = entry
+            else:
+                self._classify_patterns_editing.append(entry)
+        else:
+            self._classify_patterns_editing.append(entry)
+    
+        self._persist_classify_patterns()
+        self._refresh_classify_list()
+        self._refresh_classify_preview()
+    
+    def _on_classify_remove(self):
+        items = self.classify_list.selectedItems()
+        if not items:
+            return
+        idx = items[-1].data(QtCore.Qt.UserRole)
+        if idx is None or not (0 <= idx < len(self._classify_patterns_editing)):
+            return
+        del self._classify_patterns_editing[idx]
+        self._persist_classify_patterns()
+        self._refresh_classify_list()
+        self._refresh_classify_preview()
+        self.classify_device_edit.clear()
+        self.classify_subdevice_edit.clear()
+        self.classify_label_edit.clear()
+    
+    def _on_classify_move(self, delta):
+        items = self.classify_list.selectedItems()
+        if not items:
+            return
+        idx = items[-1].data(QtCore.Qt.UserRole)
+        if idx is None:
+            return
+        new_idx = idx + delta
+        if not (0 <= new_idx < len(self._classify_patterns_editing)):
+            return
+        p = self._classify_patterns_editing
+        p[idx], p[new_idx] = p[new_idx], p[idx]
+        self._persist_classify_patterns()
+        self._refresh_classify_list()
+        if 0 <= new_idx < self.classify_list.count():
+            self.classify_list.setCurrentRow(new_idx)
+        self._refresh_classify_preview()
+    
+    def _on_classify_import_from(self):
+        """Copy patterns from another root into the currently-edited one."""
+        target_root = self.classify_root_combo.currentData()
+        if not target_root:
+            return
+        sources = []
+        for entry in self._added_entries:
+            r = str(Path(entry["path"]).resolve())
+            if r != target_root:
+                sources.append(r)
+        if not sources:
+            QtWidgets.QMessageBox.information(
+                self, "No other roots",
+                "Add at least one other root folder first.")
+            return
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "Import patterns from…",
+            "Copy patterns from which root? (replaces current list)",
+            sources, 0, False)
+        if not ok or not choice:
+            return
+        imported = load_classify_patterns(Path(choice))
+        self._classify_patterns_editing = [dict(p) for p in imported]
+        self._persist_classify_patterns()
+        self._refresh_classify_list()
+        self._refresh_classify_preview()
+    
+    # -- classify tab: helpers --------------------------------------------
+    
+    def _persist_classify_patterns(self):
+        root = self.classify_root_combo.currentData()
+        if not root:
+            return
+        save_classify_patterns(Path(root), self._classify_patterns_editing)
+        self._classify_cache.clear()
+    
+    def _refresh_classify_effective_regex(self):
+        if not hasattr(self, "classify_effective_label"):
+            return
+        mode = "raw" if self.classify_mode_raw.isChecked() else "shorthand"
+        dev = _effective_regex(self.classify_device_edit.text().strip(), mode)
+        sub = _effective_regex(self.classify_subdevice_edit.text().strip(), mode)
+        if sub and self.classify_anchor_check.isChecked():
+            sub = r"(?<=[-_])" + sub
+        self.classify_effective_label.setText(
+            f"Effective (device):    {dev or '—'}\n"
+            f"Effective (subdevice): {sub or '—'}")
+    
+    def _refresh_classify_preview(self):
+        if not hasattr(self, "classify_preview"):
+            return
+        root = self.classify_root_combo.currentData()
+        if not root:
+            self.classify_preview.setText("No roots added yet.")
+            return
+        if not self.current_file_path:
+            self.classify_preview.setText(
+                f"Editing root: {root}\n(no active file to preview against)")
+            return
+        try:
+            dev, sub = classify_with_patterns(
+                Path(self.current_file_path), self._classify_patterns_editing)
+        except Exception as e:
+            self.classify_preview.setText(f"Error: {e}")
+            return
+        actual_root = str(self._state_store_for(
+            self.current_file_path)[0].state_dir.parent)
+        same_root = actual_root == root
+        note = ("" if same_root else
+                f"\n(file is under {actual_root}; that root's patterns "
+                f"are used by the classified tree)")
+        self.classify_preview.setText(
+            f"Active file: {Path(self.current_file_path).name}\n"
+            f"Using these patterns → device={dev!r}  subdevice={sub!r}"
+            f"{note}")
+    
+    def _on_classify_rebuild(self):
+        self._classify_cache.clear()
+        self._rebuild_measurements_tree()
+        self._refresh_classify_preview()
+    # -- Tick / check handling ------------------------------------------------
     def _on_item_check_changed(self, item, column):
         if column != 0:
             return
@@ -2740,6 +3082,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "label": "",
             })
         return specs    
+    
     def _refresh_template_editor(self):
         if not hasattr(self, "curves_spec_table"):
             return
@@ -2885,6 +3228,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_template_editor()
             self.curves_spec_table.selectRow(nr)
             self._refresh_plot()
+    
     def _plot_template_library_path(self, file_path) -> Path:
         store, _ = self._state_store_for(file_path)
         return store.state_dir / "_plot_templates.json"
