@@ -1421,6 +1421,26 @@ def _save_pickle(path: Path, data):
     with open(path, "wb") as f:
         pickle.dump(data, f)
 
+def _log_fingerprint(folder: Path) -> Optional[dict]:
+    """Snapshot the current LOG file, if any. None when no LOG exists."""
+    log_path = find_log_file(Path(folder))
+    if log_path is None:
+        return None
+    try:
+        st = log_path.stat()
+    except OSError:
+        return None
+    return {"path": str(log_path), "mtime": st.st_mtime, "size": st.st_size}
+
+
+def _log_fingerprint_matches(folder: Path, stored) -> bool:
+    """True when the LOG on disk matches what the pkl was built against."""
+    current = _log_fingerprint(folder)
+    if stored is None and current is None:
+        return True
+    if stored is None or current is None:
+        return False
+    return stored == current
 
 def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) -> dict:
     merged = copy.deepcopy(old)                                      # ← the fix
@@ -1518,7 +1538,14 @@ def build_device_data(folder: Path,
     cache_path = folder / (cache_name or f".dmui_{folder.name}.pkl")
 
     if cache_path.exists() and not force_reload:
-        return _load_pickle(cache_path)
+        cached = _load_pickle(cache_path)
+        cached_meta = cached.get("_meta") or {}
+        if _log_fingerprint_matches(folder, cached_meta.get("log_fingerprint")):
+            return cached
+        logger.info(
+            f"LOG state changed since pkl build, rebuilding: {cache_path}"
+        )
+        # fall through to rebuild
 
     fresh = {}
 
@@ -1629,9 +1656,23 @@ def build_device_data(folder: Path,
                  path=log_path)
 
     # ── Metadata + write out ────────────────────────────────────────
+    log_path = find_log_file(folder)
+    log_fingerprint = None
+    if log_path is not None:
+        try:
+            st = log_path.stat()
+            log_fingerprint = {
+                "path": str(log_path),
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+            }
+        except OSError:
+            pass
+    
     fresh["_meta"] = {
         "material": detect_material_from_path(folder),
         "material_stack": {},
+        "log_fingerprint": log_fingerprint,  
     }
 
     if compare and cache_path.exists():

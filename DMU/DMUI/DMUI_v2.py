@@ -61,18 +61,22 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.widgets import SpanSelector
 from matplotlib.ticker import ScalarFormatter, FixedLocator, FuncFormatter
+from matplotlib.legend_handler import HandlerTuple
 
-#Local Packages:
 try:
     from .Widgets import *
     from .Plotting_Tools import *
     from .Data_Containers import *
     from .Helpers import *
+    from . import data_import_tools as dit
+    from . import plot_utils as dmp
 except ImportError:
     from Widgets import *
     from Plotting_Tools import *
     from Data_Containers import *
     from Helpers import *
+    from DMU import data_import_tools as dit
+    from DMU import plot_utils as dmp
 
 # ---------------------------------------------------------------------------
 # pypalmsens integration
@@ -404,6 +408,13 @@ class MainWindow(QtWidgets.QMainWindow):
             'EDIT_WINDOW_HEIGHT': 800,
             'EDIT_WINDOW_X': 0,
             'EDIT_WINDOW_Y': 0,
+            'EDIT_SPLITTER_SIZES': [384, 780, 384],
+            #LegendConstruction
+            'EDIT_LEGEND_SHOW_RUN':       True,
+            'EDIT_LEGEND_SHOW_DEVICE':    True,
+            'EDIT_LEGEND_SHOW_SUBDEVICE': True,
+            'EDIT_LEGEND_SHOW_MEASURED':  True,
+            'EDIT_LEGEND_SHOW_SWEEP':     True,
         }
         
         
@@ -590,21 +601,14 @@ class MainWindow(QtWidgets.QMainWindow):
         for j in range(item.childCount()):
             self._collect_ticked_leaves(item.child(j), out)
     
-    def _import_dit(self):
-        """Local import shim so this class can live in either package layout."""
-        try:
-            from . import data_import_tools as dit
-        except ImportError:
-            from DMU import data_import_tools as dit
-        return dit
+
     
     def _convert_logs_to_json(self):
-        folders = self._get_ticked_folders()
+        folders = self._dm_target_folders()
         if not folders:
             QtWidgets.QMessageBox.information(
                 self, "No folders", "Tick at least one data folder first.")
             return
-        dit = self._import_dit()
         total = []
         for folder in folders:
             try:
@@ -615,6 +619,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Conversion complete",
             f"Wrote {len(total)} .json log(s) across {len(folders)} folder(s)."
         )
+    def _on_dm_target_changed(self):
+        if not hasattr(self, "_dm_target_hint"):
+            return
+        if self._dm_target_one.isChecked():
+            self._dm_target_hint.setText(
+                "Operations apply only to the currently-focused folder "
+                "(highlighted in the folder tree on the left).")
+        else:
+            self._dm_target_hint.setText(
+                "Operations apply to every ticked folder in the folder "
+                "tree on the left.")
+
+    def _dm_target_folders(self) -> list[Path]:
+        """Return the folder list the Data Management buttons should act on."""
+        if (hasattr(self, "_dm_target_one")
+                and self._dm_target_one.isChecked()):
+            if self.current_folder is None:
+                QtWidgets.QMessageBox.information(
+                    self, "No folder focused",
+                    "Click a folder in the folder tree first, or switch "
+                    "the target back to 'All ticked folders'.")
+                return []
+            return [Path(self.current_folder)]
+        return self._get_ticked_folders()
     
     def _add_new_measurements(self):
         self._run_sync(overwrite_existing=False,
@@ -625,12 +653,11 @@ class MainWindow(QtWidgets.QMainWindow):
                        title="Full sync")
     
     def _run_sync(self, overwrite_existing: bool, title: str):
-        folders = self._get_ticked_folders()
+        folders = self._dm_target_folders()
         if not folders:
             QtWidgets.QMessageBox.information(
                 self, "No folders", "Tick at least one data folder first.")
             return
-        dit = self._import_dit()
         ok, failed = 0, []
         for folder in folders:
             try:
@@ -649,28 +676,47 @@ class MainWindow(QtWidgets.QMainWindow):
             msg += "\n\nFailures:\n" + "\n".join(failed)
         QtWidgets.QMessageBox.information(self, title, msg)
     
-    def _force_rebuild_current_pkl(self):
-        folder = self.current_folder
-        if folder is None:
-            QtWidgets.QMessageBox.information(self, "No folder", "Focus a folder first.")
+    def _force_rebuild_pkl(self):
+        folders = self._dm_target_folders()
+        if not folders:
             return
+    
+        # Build the confirmation body. Cap the listing at 10 so a
+        # 200-folder tick doesn't produce an unreadable dialog.
+        shown = folders[:10]
+        lines = "\n".join(f"  • {f.name}" for f in shown)
+        if len(folders) > len(shown):
+            lines += f"\n  … and {len(folders) - len(shown)} more"
+    
         reply = QtWidgets.QMessageBox.question(
-            self, "Confirm rebuild",
-            f"Rebuild the pkl for:\n{folder}\n\n"
-            "Any LOG edits stored in the pkl will be lost. Continue?",
+            self, "Force rebuild pkl",
+            f"Rebuild the pkl for {len(folders)} folder(s)?\n\n"
+            f"{lines}\n\n"
+            "In-GUI LOG edits stored in these pkls will be lost. "
+            "Continue?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         )
         if reply != QtWidgets.QMessageBox.Yes:
             return
-        dit = self._import_dit()
-        try:
-            dit.build_device_data(folder, force_reload=True, compare=False)
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(self, "Rebuild failed", str(e))
-            return
-        self._evict_loaded_files_for([folder])
+    
+        rebuilt, failed = [], []
+        for folder in folders:
+            try:
+                dit.build_device_data(folder, force_reload=True, compare=False)
+                rebuilt.append(folder)
+            except Exception as e:
+                failed.append(f"{folder.name}: {e}")
+    
+        # Evict only the folders we actually rebuilt — failed folders'
+        # in-memory data is still valid and shouldn't be dropped.
+        if rebuilt:
+            self._evict_loaded_files_for(rebuilt)
+    
+        msg = f"Rebuilt pkl for {len(rebuilt)} folder(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
         QtWidgets.QMessageBox.information(
-            self, "Rebuilt", f"Rebuilt pkl for {folder.name}.")
+            self, "Rebuild complete" if rebuilt else "Rebuild failed", msg)
     
     def _evict_loaded_files_for(self, folders):
         """Drop in-memory LoadedFile + FolderStore instances for those folders."""
@@ -728,34 +774,60 @@ class MainWindow(QtWidgets.QMainWindow):
     
     # -- UI construction ----------------------------------------------------
     def _build_ui(self):
-        central = QtWidgets.QWidget()
-        root = QtWidgets.QHBoxLayout(central)
-        self.setCentralWidget(central)
-
-        root.addLayout(self._build_left_column(), stretch=0)
-        root.addLayout(self._build_middle_column(), stretch=1)
-        root.addLayout(self._build_right_column(), stretch=0)
+        self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+    
+        left_widget = QtWidgets.QWidget()
+        left_widget.setLayout(self._build_left_column())
+        left_widget.setMinimumWidth(200)
+        self.main_splitter.addWidget(left_widget)
+    
+        middle_widget = QtWidgets.QWidget()
+        middle_widget.setLayout(self._build_middle_column())
+        middle_widget.setMinimumWidth(220)
+        self.main_splitter.addWidget(middle_widget)
+    
+        right_widget = QtWidgets.QWidget()
+        right_widget.setLayout(self._build_right_column())
+        right_widget.setMinimumWidth(240)
+        self.main_splitter.addWidget(right_widget)
+    
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)   # extra window width → middle
+        self.main_splitter.setStretchFactor(2, 0)
+    
+        # Defaults; _load_session_parameters() overrides with the saved value
+        self.main_splitter.setSizes([260, 780, 260])
+    
+        self.setCentralWidget(self.main_splitter)
 
     def _build_left_column(self):
         col = QtWidgets.QVBoxLayout()
-
+    
         col.addWidget(QtWidgets.QLabel("Data folders"))
         self.folder_tree = QtWidgets.QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.setSelectionMode(
             QtWidgets.QAbstractItemView.SingleSelection)
-        self.folder_tree.setWordWrap(True)
+        # We handle wrapping manually for headers (see _format_tree_header),
+        # so the widget-level word wrap stays off. This keeps the widget's
+        # layout predictable and gives the leaves a single line each.
+        self.folder_tree.setWordWrap(False)
         self.folder_tree.setUniformRowHeights(False)
         self.folder_tree.setTextElideMode(QtCore.Qt.ElideNone)
+        # ResizeToContents + horizontal scrollbar → long paths extend past
+        # the viewport, so the user can scroll to see the tail.
         self.folder_tree.header().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.Stretch)
-        self.folder_tree.header().setStretchLastSection(True)
+            0, QtWidgets.QHeaderView.ResizeToContents)
+        self.folder_tree.header().setStretchLastSection(False)
+        self.folder_tree.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAsNeeded)
         self.folder_tree.currentItemChanged.connect(
             self._on_folder_tree_selected)
         self.folder_tree.itemChanged.connect(
             self._on_folder_tree_check_changed)
         col.addWidget(self.folder_tree)
-
+    
         btn_row = QtWidgets.QHBoxLayout()
         add_btn = QtWidgets.QPushButton("Add folder")
         add_root_btn = QtWidgets.QPushButton("Add root…")
@@ -771,20 +843,33 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_row.addWidget(add_root_btn)
         btn_row.addWidget(del_btn)
         col.addLayout(btn_row)
-
+    
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
         col.addWidget(line)
-
+    
         col.addWidget(QtWidgets.QLabel("Measurements"))
         self.file_list = QtWidgets.QTreeWidget()
-        self.file_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self.file_list.itemSelectionChanged.connect(self._on_selection_changed)
+        self.file_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.file_list.itemSelectionChanged.connect(
+            self._on_selection_changed)
         self.file_list.setHeaderHidden(True)
+        # Compact chevron spacing between Folder → XLS file → Run.
+        # Default QTreeView indentation is ~20px; 12px keeps them tight
+        # while staying legible.
+        self.file_list.setIndentation(12)
+        self.file_list.setWordWrap(False)
+        self.file_list.setTextElideMode(QtCore.Qt.ElideNone)
+        self.file_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAsNeeded)
+        self.file_list.header().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents)
+        self.file_list.header().setStretchLastSection(False)
         self.file_list.itemClicked.connect(self._on_entry_selected)
         self.file_list.itemChanged.connect(self._on_item_check_changed)
         col.addWidget(self.file_list)
-
+    
         return col
 
     def _build_middle_column(self):
@@ -976,10 +1061,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tab_widget.addTab(tab, "Fitting")
         
     def _build_advanced_tab(self):
-        """Build an Advanced tab for less frequently used settings"""
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-    
+
         layout.addWidget(QtWidgets.QLabel("Loading"))
         self.disable_multiload_toggle = QtWidgets.QPushButton("Disable multi-load")
         self.disable_multiload_toggle.setCheckable(True)
@@ -989,41 +1073,68 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.disable_multiload_toggle.toggled.connect(self._toggle_disable_multiload)
         layout.addWidget(self.disable_multiload_toggle)
+
         # ---- Data management ----
-        dm_lbl = QtWidgets.QLabel("Data management (acts on ticked folders)")
+        dm_lbl = QtWidgets.QLabel("Data management")
         dm_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
         layout.addWidget(dm_lbl)
-        
+
+        target_row = QtWidgets.QHBoxLayout()
+        target_row.addWidget(QtWidgets.QLabel("Target:"))
+        self._dm_target_all = QtWidgets.QPushButton("All ticked folders")
+        self._dm_target_all.setCheckable(True)
+        self._dm_target_one = QtWidgets.QPushButton("Focused only")
+        self._dm_target_one.setCheckable(True)
+        self._dm_target_group = QtWidgets.QButtonGroup(self)
+        self._dm_target_group.addButton(self._dm_target_all, 0)
+        self._dm_target_group.addButton(self._dm_target_one, 1)
+        self._dm_target_all.setChecked(True)
+        self._dm_target_group.buttonClicked.connect(
+            self._on_dm_target_changed)
+        target_row.addWidget(self._dm_target_all)
+        target_row.addWidget(self._dm_target_one)
+        target_row.addStretch(1)
+        layout.addLayout(target_row)
+
+        self._dm_target_hint = QtWidgets.QLabel("")
+        self._dm_target_hint.setStyleSheet("color: gray; font-size: 10px;")
+        self._dm_target_hint.setWordWrap(True)
+        layout.addWidget(self._dm_target_hint)
+
         btn_logs = QtWidgets.QPushButton("Convert LOGs to JSON")
-        btn_logs.setToolTip("Convert every *LOG*.xls in ticked folders to a sibling .json.")
+        btn_logs.setToolTip(
+            "Convert every *LOG*.xls to a sibling .json. No-op if there "
+            "is no LOG xls in a folder.")
         btn_logs.clicked.connect(self._convert_logs_to_json)
         layout.addWidget(btn_logs)
-        
+
         btn_add = QtWidgets.QPushButton("Find & add new measurements")
-        btn_add.setToolTip("Add any run that isn't in the pkl yet. Existing entries untouched.")
+        btn_add.setToolTip(
+            "Add runs that aren't in the pkl yet. Existing pkl entries "
+            "are kept, including in-GUI LOG edits.")
         btn_add.clicked.connect(self._add_new_measurements)
         layout.addWidget(btn_add)
-        
-        btn_merge = QtWidgets.QPushButton("Full sync (compare + merge)")
-        btn_merge.setToolTip("Re-parse every .xls and overwrite existing pkl entries.")
+
+        btn_merge = QtWidgets.QPushButton("Full sync (replace existing)")
+        btn_merge.setToolTip(
+            "Re-parse every .xls and replace existing pkl entries with "
+            "the fresh parse. In-GUI LOG edits will be lost.")
         btn_merge.clicked.connect(self._full_sync_measurements)
         layout.addWidget(btn_merge)
-        
-        btn_rebuild = QtWidgets.QPushButton("Force rebuild pkl (focused folder)")
-        btn_rebuild.setToolTip("Rebuild the focused folder's pkl from scratch.")
-        btn_rebuild.clicked.connect(self._force_rebuild_current_pkl)
+
+        btn_rebuild = QtWidgets.QPushButton("Force rebuild pkl")
+        btn_rebuild.setToolTip(
+            "Rebuild each target folder's pkl from scratch, ignoring any "
+            "existing pkl. Destroys in-GUI LOG edits for those folders. "
+            "Use when the pkl is corrupt or the builder changed.")
+        btn_rebuild.clicked.connect(self._force_rebuild_pkl)
         layout.addWidget(btn_rebuild)
-        
-        btn_reg = QtWidgets.QPushButton("Update device registry")
-        btn_reg.setToolTip("Build an index of every measurement file across ticked folders.")
-        btn_reg.clicked.connect(self._update_device_registry)
-        layout.addWidget(btn_reg)
-        
-        self._registry_status = QtWidgets.QLabel("")
-        self._registry_status.setStyleSheet("color: gray; font-size: 10px;")
-        layout.addWidget(self._registry_status)
+
         layout.addStretch(1)
         self.tab_widget.addTab(tab, "Advanced")
+
+        # Initialise the hint text once
+        self._on_dm_target_changed()
     
     def _toggle_disable_multiload(self, checked: bool):
         self.EDIT_DISABLE_MULTILOAD = bool(checked)
@@ -1090,6 +1201,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.width_factor_row = EditableParamRow(
             "Comment W:", self.EDIT_COMMENT_WIDTH_FACTOR, "EDIT_COMMENT_WIDTH_FACTOR", self
         )
+        
+        
+        
         layout.addWidget(self.width_factor_row)
         
         self.ui_toggle_stretchplot = QtWidgets.QPushButton("Stretch to Fit")
@@ -1097,6 +1211,46 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui_toggle_stretchplot.clicked.connect(self._cycle_stretch_mode)
         layout.addWidget(self.ui_toggle_stretchplot)
         self._update_button_text()
+        
+        # ---- Legend label builder ----
+        legend_label = QtWidgets.QLabel("Legend label builder")
+        legend_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(legend_label)
+        
+        legend_hint = QtWidgets.QLabel(
+            "Choose which parts to include in each curve's legend entry. "
+            "The active measurement is used as a live example below."
+        )
+        legend_hint.setWordWrap(True)
+        legend_hint.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(legend_hint)
+        
+        legend_btn_row = QtWidgets.QHBoxLayout()
+        self._legend_buttons = {}
+        for text, var in (
+            ("RunID",     "EDIT_LEGEND_SHOW_RUN"),
+            ("Device",    "EDIT_LEGEND_SHOW_DEVICE"),
+            ("Subdevice", "EDIT_LEGEND_SHOW_SUBDEVICE"),
+            ("Measured",  "EDIT_LEGEND_SHOW_MEASURED"),
+            ("Sweep",     "EDIT_LEGEND_SHOW_SWEEP"),
+        ):
+            btn = QtWidgets.QPushButton(text)
+            btn.setCheckable(True)
+            btn.setChecked(getattr(self, var, True))
+            btn.toggled.connect(
+                lambda checked, v=var: self._on_legend_toggle(v, checked))
+            legend_btn_row.addWidget(btn)
+            self._legend_buttons[var] = btn
+            # Register so _update_toggle_buttons() re-syncs from disk on startup
+            self._toggle_widgets[var] = btn
+        layout.addLayout(legend_btn_row)
+        
+        self.legend_preview_label = QtWidgets.QLabel("Preview: —")
+        self.legend_preview_label.setWordWrap(True)
+        self.legend_preview_label.setStyleSheet(
+            "color: #333; background: #f4f4f4; padding: 6px; "
+            "font-size: 11px; font-family: monospace;")
+        layout.addWidget(self.legend_preview_label)
         
         # -- Separator --
         line2 = QtWidgets.QFrame()
@@ -1708,7 +1862,109 @@ class MainWindow(QtWidgets.QMainWindow):
                     meas_root.setCheckState(0, QtCore.Qt.Unchecked)
         self.curves_tree.blockSignals(False)
     
+    def _build_curve_label(self, meas, y_unit="", seg_tag=None, override=None):
+        """Build a curve legend label according to the Display-tab builder toggles.
     
+        Order: RunID, Device, Subdevice, then Measured+Sweep combined.
+    
+        Rules for the trailing "Measured / Sweep" pair:
+          * Both on  → $I_{fwd/rev}$  (or $I_{fwd}$ for single-segment)
+          * Measured on, Sweep off → $I$
+          * Measured off, Sweep on → (fwd/rev) plain-text fallback
+            (no LaTeX base to hang a subscript onto)
+          * Neither  → nothing appended
+    
+        If Measured cannot be identified (y_unit has no known symbol)
+        → treated as "Measured off" for the purpose of the assembly.
+    
+        If *all* parts are disabled, falls back to the measurement title so
+        the label is never empty.
+        """
+        if override:
+            return override
+    
+        show_run       = getattr(self, 'EDIT_LEGEND_SHOW_RUN',       True)
+        show_device    = getattr(self, 'EDIT_LEGEND_SHOW_DEVICE',    True)
+        show_subdevice = getattr(self, 'EDIT_LEGEND_SHOW_SUBDEVICE', True)
+        show_measured  = getattr(self, 'EDIT_LEGEND_SHOW_MEASURED',  True)
+        show_sweep     = getattr(self, 'EDIT_LEGEND_SHOW_SWEEP',     True)
+    
+        # -- RunID --
+        run_key = ""
+        if meas.metadata:
+            run_key = str(meas.metadata.get("run_key", "") or "")
+        if not run_key:
+            m = re.match(r"(Run\d+)", meas.title or "")
+            if m:
+                run_key = m.group(1)
+    
+        # -- Device / Subdevice (from log) --
+        log = meas.log or {}
+        dev = str(log.get("Device", "")    or "").strip()
+        sub = str(log.get("Subdevice", "") or "").strip()
+    
+        # -- Measured symbol --
+        sym = {"A": "I", "V": "V", "Ω": "R", "Ohm": "R"}.get(y_unit, "")
+        measured_ok = show_measured and bool(sym)
+        sweep_ok    = show_sweep    and bool(seg_tag)
+    
+        parts = []
+        if show_run and run_key:
+            parts.append(run_key)
+        if show_device and dev and dev.lower() != "unlabelled":
+            parts.append(dev)
+        if show_subdevice and sub and sub != "SD0":
+            parts.append(sub)
+    
+        if measured_ok and sweep_ok:
+            parts.append(f"${sym}_{{{seg_tag}}}$")
+        elif measured_ok:
+            parts.append(f"${sym}$")
+        elif sweep_ok:
+            # No math base to subscript onto → use plain-text parenthetical
+            parts.append(f"({seg_tag})")
+    
+        if not parts:
+            return meas.title or "measurement"
+    
+        return " ".join(parts)
+    
+    def _on_legend_toggle(self, var_name, checked):
+        """User clicked one of the legend-builder toggles."""
+        setattr(self, var_name, bool(checked))
+        self._refresh_legend_preview()
+        self._refresh_plot()
+        self._save_session_parameters()
+    
+    
+    def _refresh_legend_preview(self):
+        """Live example underneath the toggle row: what the active
+        measurement's legend entry will look like with current settings."""
+        if not hasattr(self, "legend_preview_label"):
+            return
+    
+        if self.loaded_file is None or self.current_meas_index is None:
+            self.legend_preview_label.setText("Preview: (no active measurement)")
+            return
+    
+        meas = self.loaded_file.measurements[self.current_meas_index]
+    
+        # Representative y_unit: first visible curve's unit
+        y_unit = ""
+        for c in meas.curves:
+            if c.name not in self.current_state.hidden_curves:
+                y_unit = c.y_unit
+                break
+    
+        has_segs = any(
+            getattr(c, "segments", None) and len(c.segments) >= 2
+            for c in meas.curves)
+        seg_tag = "fwd/rev" if has_segs else None
+    
+        example = self._build_curve_label(
+            meas, y_unit=y_unit, seg_tag=seg_tag)
+    
+        self.legend_preview_label.setText(f"Preview: {example}")
     def _build_problems_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
@@ -1927,7 +2183,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # ── 2+ leaves: common-prefix header + relative rows ─────
             common = self._common_path_prefix([str(p) for p in leaf_paths])
             if common:
-                header = QtWidgets.QTreeWidgetItem([common + os.sep])
+                header = QtWidgets.QTreeWidgetItem([self._format_tree_header(common + os.sep)])
                 header.setFlags(
                     QtCore.Qt.ItemIsEnabled
                     | QtCore.Qt.ItemIsUserCheckable
@@ -1984,6 +2240,21 @@ class MainWindow(QtWidgets.QMainWindow):
     
         self.folder_tree.blockSignals(False)
     
+    def _format_tree_header(self, text: str, max_chars_per_line: int = 60) -> str:
+        """Render a folder-group header as two lines: start of path on row 1,
+        tail (the actual folder name at the end) on row 2. Anything in between
+        is reachable via the widget's horizontal scrollbar.
+    
+        Keeping the tail visible on row 2 is the whole point: it tells the
+        user *which* folder they're looking at without requiring them to
+        scroll every time.
+        """
+        if len(text) <= max_chars_per_line:
+            return text
+    
+        head = text[:max_chars_per_line]
+        tail = "…" + text[-max_chars_per_line:]
+        return f"{head}\n{tail}"
     
     def _common_path_prefix(self, paths: list[str]) -> str:
         """Longest directory prefix shared by all paths. Returns "" if
@@ -3939,7 +4210,6 @@ class MainWindow(QtWidgets.QMainWindow):
         removal are NOT applied here — template mode is 'raw as configured'.
         """
         axes_by_yunit = {"": primary_ax}
-        seen_labels = set()
         styles = ("-", "--", ":", "-.")
     
         def _get_axes_for(unit):
@@ -3962,34 +4232,62 @@ class MainWindow(QtWidgets.QMainWindow):
     
             y_unit = meas.column_units.get(y_col, "")
             ax = _get_axes_for(y_unit)
-            base_label = spec.get("label") or (
-                f"{y_col} vs {x_col}"
-                + (f" [{y_unit}]" if y_unit else ""))
-            segs = spec.get("segments") or []
+            segs = list(spec.get("segments") or [])
+            user_label = spec.get("label") or None
+    
+            # Base colour index for this spec. All segments in one spec share
+            # the pair, so fwd=2i, rev=2i+1.
+            c_base = self._color_idx * 2
     
             if segs:
+                seg_handles = {}
                 for seg_idx in segs:
                     if seg_idx >= len(meas.segments):
                         continue
                     s0, s1 = meas.segments[seg_idx]
-                    tag = ("fwd" if seg_idx == 0
-                           else "rev" if seg_idx == 1
-                           else f"seg{seg_idx}")
-                    label = f"{base_label} ({tag})"
-                    ax.plot(x[s0:s1], y[s0:s1],
-                            linestyle=styles[seg_idx % len(styles)],
-                            label=label)
-                    seen_labels.add(label)
+                    color = dmp.get_color_at(self._color_palette, c_base + seg_idx)
+                    line, = ax.plot(
+                        x[s0:s1], y[s0:s1],
+                        linestyle=styles[seg_idx % len(styles)],
+                        color=color)
+                    seg_handles[seg_idx] = line
                     self.plotted_x.append(x[s0:s1])
                     self.plotted_y.append(y[s0:s1])
+    
+                # Consolidated fwd/rev handling (same shape as auto-mode)
+                has_fwd = 0 in seg_handles
+                has_rev = 1 in seg_handles
+                if has_fwd and has_rev:
+                    lbl = user_label or self._build_curve_label(
+                        meas, y_unit=y_unit, seg_tag="fwd/rev")
+                    self._legend_entries.append(
+                        (lbl, (seg_handles[0], seg_handles[1]), 'tuple'))
+                elif has_fwd:
+                    lbl = user_label or self._build_curve_label(
+                        meas, y_unit=y_unit, seg_tag="fwd")
+                    self._legend_entries.append((lbl, seg_handles[0], 'single'))
+                elif has_rev:
+                    lbl = user_label or self._build_curve_label(
+                        meas, y_unit=y_unit, seg_tag="rev")
+                    self._legend_entries.append((lbl, seg_handles[1], 'single'))
+    
+                # Extra segments (>=2): individual entries, never consolidated
+                for seg_idx in sorted(seg_handles.keys()):
+                    if seg_idx >= 2:
+                        lbl = user_label or self._build_curve_label(
+                            meas, y_unit=y_unit, seg_tag=f"seg{seg_idx}")
+                        self._legend_entries.append(
+                            (lbl, seg_handles[seg_idx], 'single'))
             else:
-                if base_label not in seen_labels:
-                    ax.plot(x, y, label=base_label)
-                    seen_labels.add(base_label)
-                else:
-                    ax.plot(x, y)
+                color = dmp.get_color_at(self._color_palette, c_base)
+                line, = ax.plot(x, y, color=color)
+                lbl = user_label or self._build_curve_label(
+                    meas, y_unit=y_unit)
+                self._legend_entries.append((lbl, line, 'single'))
                 self.plotted_x.append(x)
                 self.plotted_y.append(y)
+    
+            self._color_idx += 1
                 
     def _refresh_plot(self):
         if self.span_selector is not None:
@@ -3998,7 +4296,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self.span_selector = None
-    
+        self._refresh_legend_preview() 
         self.fig.clear()
         self.image_label.clear()
     
@@ -4048,7 +4346,10 @@ class MainWindow(QtWidgets.QMainWindow):
         primary_ax = ax
         self.plotted_x = []
         self.plotted_y = []
-    
+
+        self._color_palette = dmp.get_tab20bc(output="list", grouping="maxpairs")
+        self._color_idx = 0
+        self._legend_entries = []   # list[tuple[str, Line2D | tuple, 'single'|'tuple']]
         # Selected range (applies only to active measurement's list)
         selected_typ = None
         selected_idx = None
@@ -4153,65 +4454,93 @@ class MainWindow(QtWidgets.QMainWindow):
                     if remove_bg and baseline is not None:
                         y_plot = y - baseline
     
-                unit_tag = f" [{curve.y_unit}]" if curve.y_unit else ""
-                label = prefix + disp + unit_tag     # → "[m2] Sweep 1 [A]"
+                ov = overrides.get(curve.name, {})
+                disp_override = ov.get("name") if ov.get("name") != curve.name else None
                 
-                if getattr(curve, "segments", None):
+                if getattr(curve, "segments", None) and len(curve.segments) >= 2:
                     hidden_segs = (
                         self.current_state.hidden_segments.get(curve.name, [])
                         if is_active else [])
+                
+                    c_base = self._color_idx * 2
                     _SEG_STYLES = ("-", "--", ":", "-.")
+                
+                    seg_handles = {}
                     for seg_idx, (start, end) in enumerate(curve.segments):
                         if seg_idx in hidden_segs:
                             continue
-                        ls = _SEG_STYLES[seg_idx % len(_SEG_STYLES)]
-                        if seg_idx == 0:
-                            seg_label = label
-                        elif seg_idx == 1:
-                            seg_label = f"{label} (rev)"
-                        else:
-                            seg_label = f"{label} ({seg_idx})"
-                        ax.plot(x[start:end], y_plot[start:end],
-                                linestyle=ls, label=seg_label)
+                        color = dmp.get_color_at(self._color_palette, c_base + seg_idx)
+                        line, = ax.plot(
+                            x[start:end], y_plot[start:end],
+                            linestyle=_SEG_STYLES[seg_idx % len(_SEG_STYLES)],
+                            color=color)
+                        seg_handles[seg_idx] = line
+                
+                    has_fwd = 0 in seg_handles
+                    has_rev = 1 in seg_handles
+                    if has_fwd and has_rev:
+                        lbl = self._build_curve_label(
+                            meas, y_unit=curve.y_unit,
+                            seg_tag="fwd/rev", override=disp_override)
+                        self._legend_entries.append(
+                            (lbl, (seg_handles[0], seg_handles[1]), 'tuple'))
+                    elif has_fwd:
+                        lbl = self._build_curve_label(
+                            meas, y_unit=curve.y_unit,
+                            seg_tag="fwd", override=disp_override)
+                        self._legend_entries.append((lbl, seg_handles[0], 'single'))
+                    elif has_rev:
+                        lbl = self._build_curve_label(
+                            meas, y_unit=curve.y_unit,
+                            seg_tag="rev", override=disp_override)
+                        self._legend_entries.append((lbl, seg_handles[1], 'single'))
+                
+                    for seg_idx in sorted(seg_handles.keys()):
+                        if seg_idx >= 2:
+                            lbl = self._build_curve_label(
+                                meas, y_unit=curve.y_unit,
+                                seg_tag=f"seg{seg_idx}", override=disp_override)
+                            self._legend_entries.append(
+                                (lbl, seg_handles[seg_idx], 'single'))
+                
+                    self._color_idx += 1
                 else:
-                    ax.plot(x, y_plot, label=label)
+                    label = self._build_curve_label(
+                        meas, y_unit=curve.y_unit, override=disp_override)
+                    color = dmp.get_color_at(self._color_palette, self._color_idx * 2)
+                    line, = ax.plot(x, y_plot, color=color)
+                    self._legend_entries.append((label, line, 'single'))
+                    self._color_idx += 1
+                
                     # ── Show stored fit for the ACTIVE fit target only ──
-                    # (bg_fit_by_curve and other curves' fits are stored but
-                    #  not drawn here — the fit panel's tick selects which one
-                    #  is visible.)
                     active_fit_key = self.current_state.active_fit_key
-                    if (is_active
-                            and active_fit_key
-                            and not self.EDIT_HIDE_SPANS):
+                    if (is_active and active_fit_key and not self.EDIT_HIDE_SPANS):
                         fit_curve_name, _fit_segs = _parse_fit_key(active_fit_key)
                         if fit_curve_name == curve.name:
-                            fit = self.current_state.fit_by_curve.get(
-                                active_fit_key) or {}
+                            fit = self.current_state.fit_by_curve.get(active_fit_key) or {}
                             fx = fit.get("display_x")
                             fy = fit.get("display_y")
                             if fx is not None and fy is not None:
-                                ax.plot(fx, fy,
-                                        linestyle="--",
-                                        color="green",
-                                        linewidth=1.5,
-                                        label="Fit" if not any_fit else "")
-                                any_fit = True
-                                
-                # Baseline visualisation (only if not removed and not hidden)
+                                fit_line, = ax.plot(
+                                    fx, fy, linestyle="--", color="green", linewidth=1.5)
+                                self._legend_entries.append(("Fit", fit_line, 'single'))
+                
+                # Baseline visualisation
                 if (baseline is not None and not remove_bg
                         and not self.EDIT_HIDE_SPANS and is_active):
-                    ax.plot(x, baseline, '--', color='red', alpha=0.7, linewidth=1.5,
-                            label='Baseline' if not any_baseline else '')
-                    any_baseline = True
-    
-                # SPAN/anchor overlays (active measurement only)
+                    bl_line, = ax.plot(
+                        x, baseline, '--', color='red', alpha=0.7, linewidth=1.5)
+                    self._legend_entries.append(("Baseline", bl_line, 'single'))
+                
+                # SPAN / anchor overlays (unchanged except anchors now push a handle)
                 if not self.EDIT_HIDE_SPANS and is_active:
                     for xmin, xmax in span_ranges:
                         ax.axvspan(xmin, xmax, color="orange", alpha=0.25)
                     for j, (xp, yp) in enumerate(anchor_points):
-                        ax.scatter(xp, yp, color='magenta', s=40, zorder=5,
-                                   label='Anchors' if j == 0 else "")
-    
+                        sc = ax.scatter(xp, yp, color='magenta', s=40, zorder=5)
+                        if j == 0:
+                            self._legend_entries.append(("Anchors", sc, 'single'))
+                
                 self.plotted_x.append(x)
                 self.plotted_y.append(y_plot)
     
@@ -4232,16 +4561,21 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
         ax.yaxis.get_major_formatter().set_powerlimits((-3, 3))
         ax.tick_params(axis='both', labelsize=self.EDIT_TICK_SIZE)
-        if self.plotted_x:
+        if self._legend_entries:
             handles, labels_, seen = [], [], set()
-            for any_ax in self.fig.axes:
-                h, l = any_ax.get_legend_handles_labels()
-                for hh, ll in zip(h, l):
-                    if ll and ll not in seen:
-                        seen.add(ll)
-                        handles.append(hh)
-                        labels_.append(ll)
-            primary_ax.legend(handles, labels_, loc="best")
+            handler_map = {}
+            for lbl, hnd, kind in self._legend_entries:
+                if lbl in seen:
+                    continue
+                seen.add(lbl)
+                labels_.append(lbl)
+                if kind == 'tuple':
+                    handles.append(tuple(hnd))
+                    handler_map[tuple] = HandlerTuple(ndivide=None)
+                else:
+                    handles.append(hnd)
+            primary_ax.legend(handles, labels_, loc="best",
+                              handler_map=handler_map)
     
         if self.EDIT_SHOW_COMMENT:
             self._draw_comment_panel(dat, ax)
@@ -4927,6 +5261,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Update UI elements
         self._update_ui_from_config()
         self._sync_override_rows()
+        self._apply_splitter_sizes()
         # Only apply figsize if NOT Real Size mode
         if self.EDIT_TOGGLE_STRETCH != 2:
             self._apply_figsize(self.EDIT_SHOW_COMMENT)
@@ -4948,6 +5283,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_all_rcparams()
         self._refresh_plot()
         self._save_session_parameters()
+        
     def _update_toggle_buttons(self):
         """Set all toggle buttons from their EDIT_* variables, blocking signals."""
         for var_name, btn in self._toggle_widgets.items():
@@ -4955,6 +5291,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 btn.blockSignals(True)
                 btn.setChecked(getattr(self, var_name, False))
                 btn.blockSignals(False)
+                
+    def _apply_splitter_sizes(self):
+        if not hasattr(self, 'main_splitter'):
+            return
+        sizes = getattr(self, 'EDIT_SPLITTER_SIZES', None)
+        if (isinstance(sizes, (list, tuple)) and len(sizes) == 3
+                and all(isinstance(x, (int, float)) and x > 0
+                        for x in sizes)):
+            self.main_splitter.setSizes([int(x) for x in sizes])        
             
     def _load_session_parameters(self):
         """Load saved parameter values from the display config"""
@@ -4993,6 +5338,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._apply_all_rcparams()
                 self._sync_edit_vars_from_rcparams(self._user_rcparams)
                 self._update_ui_from_config()
+                self._apply_splitter_sizes() 
                 
             except Exception as e:
                 print(f"Error loading session: {e}")
@@ -5005,7 +5351,11 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Build UI config from both maps
         ui_config = {}
-        
+        # Snapshot actual splitter sizes so a manual drag is persisted
+        # even though splitterMoved() isn't connected.
+        if hasattr(self, 'main_splitter'):
+            self.EDIT_SPLITTER_SIZES = list(self.main_splitter.sizes())
+            
         # Save rcParam-linked variables
         for edit_name in self.UI_RCPCONFIG_MAP.keys():
             if hasattr(self, edit_name):

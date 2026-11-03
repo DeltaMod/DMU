@@ -513,41 +513,124 @@ def segment_sweep(L,indices):
         swdat.append(L[slc[0]:slc[1]])
     return(swdat)
 
+def get_color_at(color_list, idx):
+    """Get color at `idx`, gracefully degrading past the palette's length
+    by cycling with a small brightness shift per wrap. This means a 40-colour
+    palette technically supports unbounded curves without ever falling back
+    to matplotlib's default cycler. Intended to be used with get
+    """
+    if not color_list:
+        return (0.5, 0.5, 0.5, 1.0)
 
-def get_tab20bc(output="list",grouping="pairs"):
-    t20b = plt.get_cmap("tab20b")
-    t20c = plt.get_cmap("tab20c")
+    n = len(color_list)
+    base = color_list[idx % n]
+    cycle = idx // n
 
-    
+    if cycle == 0:
+        return base
+
+    rgb = tuple(base[:3])
+    alpha = base[3] if len(base) > 3 else 1.0
+    shift = 0.15 * cycle
+
+    if cycle % 2 == 1:
+        rgb = tuple(max(0.0, c - shift) for c in rgb)   # darken
+    else:
+        rgb = tuple(min(1.0, c + shift) for c in rgb)   # lighten
+
+    return (*rgb, alpha)
+
+def get_tab20bc(output="list", grouping="pairs"):
+    """Build a color palette from tab20b + tab20c, organized in pairs.
+    grouping: "pairs"(only 0/2 brightness pairs) |"maxpairs" (0/2 until depleted, then 1/3)| "all" (just tab20c+tab20b in a nice order)
+    output: "list" (gives a list) | "cmap" (gives a cmap)
+    """
+    # Matplotlib 3.7+ deprecates plt.get_cmap; prefer mpl.colormaps.
+    try:
+        t20b = mpl.colormaps["tab20b"]
+        t20c = mpl.colormaps["tab20c"]
+    except (AttributeError, KeyError):
+        t20b = plt.get_cmap("tab20b")
+        t20c = plt.get_cmap("tab20c")
+
     cmap20bc = []
     if grouping == "pairs":
-        for i in [0,1,2,3]:
-            for j in [0,2]:
-                 cmap20bc.append(t20c(4*i + j))
-    
-        for i in [4,3,0,1,2]:
-            for j in [0,2]:
-                 cmap20bc.append(t20b(4*i + j))
-                 
+        for i in [0, 1, 2, 3]:
+            for j in [0, 2]:
+                cmap20bc.append(t20c(4 * i + j))
+        for i in [4, 3, 0, 1, 2]:
+            for j in [0, 2]:
+                cmap20bc.append(t20b(4 * i + j))
         for i in [4]:
-            for j in [0,2]:
-                 cmap20bc.append(t20c(4*i + j))
+            for j in [0, 2]:
+                cmap20bc.append(t20c(4 * i + j))
+
+    elif grouping == "maxpairs":
+        for i in [0, 1, 2, 3]:
+            for j in [0, 2]:
+                cmap20bc.append(t20c(4 * i + j))
+        for i in [4, 3, 0, 1, 2]:
+            for j in [0, 2]:
+                cmap20bc.append(t20b(4 * i + j))
+        for i in [4]:
+            for j in [1, 3]:
+                cmap20bc.append(t20c(4 * i + j))
+        for i in [0, 1, 2, 3]:
+            for j in [1, 3]:
+                cmap20bc.append(t20c(4 * i + j))
+        for i in [4, 3, 0, 1, 2]:
+            for j in [1, 3]:
+                cmap20bc.append(t20b(4 * i + j))
+        for i in [4]:
+            for j in [0, 2]:
+                cmap20bc.append(t20c(4 * i + j))
+
     elif grouping == "all":
-        for i in [0,1,2,3,4]:
-            for j in [0,1,2,3]:
-                 cmap20bc.append(t20b(4*i + j))
-                 
-        for i in [0,1,2,3,4]:
-            for j in [0,1,2,3]:
-                 cmap20bc.append(t20c(4*i + j))
-    cmap = mpl.colors.LinearSegmentedColormap.from_list("tab20bc", cmap20bc,N=len(cmap20bc))
-    
-    if output == "list":    
-        return(cmap20bc)
+        for i in [0, 1, 2, 3, 4]:
+            for j in [0, 1, 2, 3]:
+                cmap20bc.append(t20b(4 * i + j))
+        for i in [0, 1, 2, 3, 4]:
+            for j in [0, 1, 2, 3]:
+                cmap20bc.append(t20c(4 * i + j))
+
+    cmap = mpl.colors.LinearSegmentedColormap.from_list(
+        "tab20bc", cmap20bc, N=len(cmap20bc))
+
+    if output == "list":
+        return cmap20bc
     if output == "cmap":
-        return(cmap)
+        return cmap
     if output == "both":
-        return(cmap20bc,cmap)
+        return cmap20bc, cmap
+    return cmap20bc
+
+
+def get_color_at(color_list, idx):
+    """Get color at `idx`, gracefully degrading past the palette's length
+    by cycling with a small brightness shift per wrap. This means a 40-colour
+    palette technically supports unbounded curves without ever falling back
+    to matplotlib's default cycler.
+    """
+    if not color_list:
+        return (0.5, 0.5, 0.5, 1.0)
+
+    n = len(color_list)
+    base = color_list[idx % n]
+    cycle = idx // n
+
+    if cycle == 0:
+        return base
+
+    rgb = tuple(base[:3])
+    alpha = base[3] if len(base) > 3 else 1.0
+    shift = 0.15 * cycle
+
+    if cycle % 2 == 1:
+        rgb = tuple(max(0.0, c - shift) for c in rgb)   # darken
+    else:
+        rgb = tuple(min(1.0, c + shift) for c in rgb)   # lighten
+
+    return (*rgb, alpha)
     
 def get_rgbhex_color(color_name,ctype = "hex"):
     
