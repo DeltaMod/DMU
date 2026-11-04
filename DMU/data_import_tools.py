@@ -14,6 +14,7 @@ import ast
 import copy
 import json
 import pickle
+import shutil
 from pathlib import Path
 from typing import Dict, Optional, Any
 
@@ -1017,6 +1018,142 @@ def normalise_log_info(info: dict, run_data: Optional[dict] = None,
     )
     return out
 
+def flatten_log_runs(log_data: dict) -> dict[str, dict]:
+    """Return {run_key: info_dict} from any nested log structure.
+
+    Unlike `_iter_log_runs`, this ignores device/subdevice path info —
+    the goal is a flat, key-addressable view for diffing. Device /
+    Subdevice renames show up naturally as field-level diffs.
+    Later entries win if the same run_key appears twice.
+    """
+    out: dict[str, dict] = {}
+
+    def walk(obj, path):
+        if isinstance(obj, dict):
+            if _is_log_info(obj):
+                if path:
+                    run = normalise_run_key(path[-1])
+                    out[run] = obj
+                return
+            for k, v in obj.items():
+                walk(v, path + [str(k)])
+
+    walk(log_data or {}, [])
+    return out
+
+def compare_logs(source: dict, gui: dict) -> dict:
+    """Diff a source log against a GUI working copy.
+
+    Returns:
+        {
+            "new_runs":       [run_key, ...],   # source only (add these)
+            "only_in_gui":    [run_key, ...],   # gui only (preserve)
+            "differing_runs": {
+                run_key: {"fields": {field: (gui_val, src_val), ...}}
+            }
+        }
+    """
+    src_runs = flatten_log_runs(source or {})
+    gui_runs = flatten_log_runs(gui or {})
+
+    new_runs    = sorted(set(src_runs) - set(gui_runs))
+    only_in_gui = sorted(set(gui_runs) - set(src_runs))
+
+    differing_runs: dict[str, dict] = {}
+    for run in sorted(set(src_runs) & set(gui_runs)):
+        src_info = src_runs[run]
+        gui_info = gui_runs[run]
+        field_diffs: dict[str, tuple] = {}
+        for k in set(src_info) | set(gui_info):
+            if k.startswith("_"):
+                continue
+            sv, gv = src_info.get(k), gui_info.get(k)
+            if sv != gv:
+                field_diffs[k] = (gv, sv)  # (gui, src) ordering
+        if field_diffs:
+            differing_runs[run] = {"fields": field_diffs}
+
+    return {
+        "new_runs":       new_runs,
+        "only_in_gui":    only_in_gui,
+        "differing_runs": differing_runs,
+    }
+
+
+def nest_log_runs(flat: dict[str, dict]) -> dict:
+    """Re-nest {run_key: info} into numports → device → subdevice → run.
+
+    numports is derived from each entry's SMU Order (falling back to 2),
+    matching the pkl's storage convention.
+    """
+    out: dict = {}
+    for run, info in flat.items():
+        smu_order = info.get("SMU Order") or []
+        np_key    = str(len(smu_order)) if smu_order else "2"
+        dev       = info.get("Device")    or "Unlabelled"
+        sub       = info.get("Subdevice") or "SD0"
+        (out.setdefault(np_key, {})
+             .setdefault(dev, {})
+             .setdefault(sub, {})[run]) = info
+    return out
+
+
+def merge_logs(source: dict, gui: dict, mode: str,
+               per_run_choices: Optional[dict] = None) -> dict:
+    """Produce the merged log dict to be written to the GUI file.
+
+    mode:
+        "overwrite_all" — source wins for every shared run.
+        "add_only"      — add new source runs; leave GUI runs untouched.
+        "keep_gui"      — no-op (GUI is already correct); orphans preserved.
+        "reviewed"      — consult per_run_choices.
+
+    GUI-only runs (orphans) are always preserved, because the user
+    likely added them manually for fallback-log runs.
+    """
+    src_runs = flatten_log_runs(source or {})
+    gui_runs = flatten_log_runs(gui    or {})
+    per_run_choices = per_run_choices or {}
+
+    if mode == "overwrite_all":
+        merged = {run: dict(info) for run, info in src_runs.items()}
+        for run, info in gui_runs.items():
+            merged.setdefault(run, dict(info))     # keep orphans
+        return nest_log_runs(merged)
+
+    if mode == "add_only":
+        merged = {run: dict(info) for run, info in gui_runs.items()}
+        for run, info in src_runs.items():
+            merged.setdefault(run, dict(info))     # add missing
+        return nest_log_runs(merged)
+
+    if mode == "keep_gui":
+        return nest_log_runs({r: dict(i) for r, i in gui_runs.items()})
+
+    # reviewed
+    merged = {run: dict(info) for run, info in gui_runs.items()}
+    for run, src_info in src_runs.items():
+        if run not in gui_runs:
+            merged[run] = dict(src_info)           # new runs auto-add
+            continue
+        choice = per_run_choices.get(run)
+        if choice is None:
+            continue                               # untouched
+        if choice == "src":
+            merged[run] = dict(src_info)
+        elif choice == "gui":
+            continue
+        elif isinstance(choice, dict):
+            patched = dict(gui_runs[run])
+            for field, pick in choice.items():
+                if pick == "src":
+                    if field in src_info:
+                        patched[field] = src_info[field]
+                    else:
+                        patched.pop(field, None)
+            merged[run] = patched
+
+    return nest_log_runs(merged)
 
 # ---------------------------------------------------------------------------
 # LOG loading and lookup
@@ -1183,19 +1320,61 @@ def load_log_file(path: Path, *, migration_callback=None) -> dict:
 
 
 def find_log_file(folder: Path) -> Optional[Path]:
-    """Find the best LOG file in a folder."""
+    """Find the user-editable source LOG file in a folder.
+
+    Excludes *_GUI.* working copies — those are app-managed and are
+    returned by find_gui_log_file() instead.
+    """
     folder = Path(folder)
 
     for pattern in (
         "*_LOG.json", "*_LOG.txt", "*_LOG.xls",
         "*LOG*.json", "*LOG*.txt", "*LOG*.xls",
     ):
+        matches = [
+            m for m in sorted(folder.glob(pattern))
+            if not m.stem.endswith("_GUI")
+        ]
+        if matches:
+            return matches[0]
+
+    return None
+
+def find_gui_log_file(folder: Path) -> Optional[Path]:
+    """Find the app-managed GUI working copy of the log.
+
+    Priority:
+      1. <source_stem>_GUI.<suffix> — the normal case, paired with a
+         source file found by find_log_file().
+      2. Any *_GUI.{json,txt,xls} in the folder — GUI-only setup, where
+         no source file exists (e.g. fallback-log folder that got edited).
+
+    Returns None if no GUI file exists.
+    """
+    folder = Path(folder)
+
+    source = find_log_file(folder)
+    if source is not None:
+        candidate = gui_log_path(source)
+        if candidate.exists():
+            return candidate
+
+    for pattern in ("*_GUI.json", "*_GUI.txt", "*_GUI.xls"):
         matches = sorted(folder.glob(pattern))
         if matches:
             return matches[0]
 
     return None
 
+
+def gui_log_path(source_path: Path) -> Path:
+    """Return the canonical GUI working-copy path for a source log.
+
+    _LOGBOOK.json  →  _LOGBOOK_GUI.json
+    2024_LOG.txt   →  2024_LOG_GUI.txt
+    """
+    source_path = Path(source_path)
+    return source_path.with_name(source_path.stem + "_GUI" + source_path.suffix)
 
 def build_log_lookup(log_data: dict,
                      default_device: Optional[str] = None,
@@ -1422,25 +1601,74 @@ def _save_pickle(path: Path, data):
         pickle.dump(data, f)
 
 def _log_fingerprint(folder: Path) -> Optional[dict]:
-    """Snapshot the current LOG file, if any. None when no LOG exists."""
-    log_path = find_log_file(Path(folder))
-    if log_path is None:
+    """Snapshot both the source LOG and its GUI working copy.
+
+    Returns None only when neither exists (folder has no log at all).
+    Otherwise:
+
+        {"source": {...} | None, "gui": {...} | None}
+
+    - source = the user-editable file (find_log_file)
+    - gui    = the app-edited working copy (find_gui_log_file)
+
+    The pkl is built from "gui if present, else source", so only the
+    gui stat needs to gate rebuilds. The source stat is captured purely
+    so we can warn the user when the source changes without triggering
+    a rebuild (which would silently discard GUI edits).
+    """
+    source = find_log_file(Path(folder))
+    gui = find_gui_log_file(Path(folder))
+    if source is None and gui is None:
         return None
-    try:
-        st = log_path.stat()
-    except OSError:
-        return None
-    return {"path": str(log_path), "mtime": st.st_mtime, "size": st.st_size}
+
+    out = {"source": None, "gui": None}
+    for key, p in (("source", source), ("gui", gui)):
+        if p is None:
+            continue
+        try:
+            st = p.stat()
+            out[key] = {"path": str(p), "mtime": st.st_mtime, "size": st.st_size}
+        except OSError:
+            pass
+    return out
 
 
 def _log_fingerprint_matches(folder: Path, stored) -> bool:
-    """True when the LOG on disk matches what the pkl was built against."""
+    """True when the pkl can be reused without rebuilding.
+
+    Rules:
+      - No logs on disk: keep whatever the pkl has (never wipe data
+        because a log file was removed).
+      - Logs appeared since build: rebuild (the pkl is missing them).
+      - Legacy/corrupt fingerprint format: rebuild once to reseed.
+      - GUI working copy changed since build: rebuild (GUI is the
+        pkl's declared source of truth).
+      - Only the source changed: MATCH. Pkl stays valid; the caller
+        emits a Problems-tab warning via _source_log_changed().
+    """
     current = _log_fingerprint(folder)
-    if stored is None and current is None:
-        return True
-    if stored is None or current is None:
+    if current is None:
+        return True                              # no logs on disk
+    if stored is None:
+        return False                             # logs appeared since build
+    if not isinstance(stored, dict) or "source" not in stored:
+        return False                             # legacy format → reseed
+    return stored.get("gui") == current.get("gui")
+
+def _source_log_changed(folder: Path, stored_fp) -> bool:
+    """True when the source LOG exists and differs from what the pkl
+    was built against.
+
+    Used only to emit a 'source may be stale' Problems-tab entry.
+    Never triggers a rebuild — that would discard GUI edits, which is
+    the exact bug the two-file model exists to prevent.
+    """
+    if not isinstance(stored_fp, dict) or "source" not in stored_fp:
         return False
-    return stored == current
+    current = _log_fingerprint(folder)
+    if current is None:
+        return False
+    return current.get("source") != stored_fp.get("source")
 
 def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) -> dict:
     merged = copy.deepcopy(old)                                      # ← the fix
@@ -1537,30 +1765,74 @@ def build_device_data(folder: Path,
 
     cache_path = folder / (cache_name or f".dmui_{folder.name}.pkl")
 
+    # ── Ensure the GUI working copy exists before any cache check. ──
+    # Placing this here (rather than deeper in the build path) means
+    # the fingerprint below sees the GUI file, so the very first load
+    # after upgrade deterministically reseeds the new fingerprint
+    # format. If the copy fails, we log and continue — the source
+    # alone is still a valid log to build from.
+    _source_pre = find_log_file(folder)
+    if _source_pre is not None and find_gui_log_file(folder) is None:
+        try:
+            shutil.copyfile(_source_pre, gui_log_path(_source_pre))
+        except OSError as exc:
+            _add("warning", "gui_log_create_failed",
+                 f"Could not create GUI working copy of log: {exc}",
+                 path=_source_pre)
+        
     if cache_path.exists() and not force_reload:
         cached = _load_pickle(cache_path)
         cached_meta = cached.get("_meta") or {}
-        if _log_fingerprint_matches(folder, cached_meta.get("log_fingerprint")):
+        stored_fp = cached_meta.get("log_fingerprint")
+        if _log_fingerprint_matches(folder, stored_fp):
+            # Pkl is valid. If the source drifted without the GUI
+            # following, warn — but do NOT rebuild (that would wipe
+            # GUI edits, the exact thing the two-file model prevents).
+            if _source_log_changed(folder, stored_fp):
+                _add("info", "source_log_changed",
+                     "Source LOG has changed since the pkl was built. "
+                     "The GUI working copy is still authoritative. "
+                     "Use 'Compare & merge LOGs' to propagate "
+                     "source-side changes.",
+                     path=find_log_file(folder))
             return cached
         logger.info(
-            f"LOG state changed since pkl build, rebuilding: {cache_path}"
+            f"GUI log changed since pkl build, rebuilding: {cache_path}"
         )
         # fall through to rebuild
 
     fresh = {}
 
-    # ── Load LOG (if present) ───────────────────────────────────────
-    log_path = find_log_file(folder)
+    # ── Load LOG (GUI working copy preferred; source as fallback) ───
+    # Migration is applied to the GUI file only — it's app-managed and
+    # safe to canonicalise in place. The source is the user's file and
+    # is never auto-rewritten; instead, a 'source_log_lax' problem is
+    # pushed so the user can run Convert LOGs to JSON explicitly.
+    gui_log_path_  = find_gui_log_file(folder)
+    source_log_path = find_log_file(folder)
+    log_path = gui_log_path_ or source_log_path
+
     log_lookup = None
     log_data   = None
 
     if log_path is not None:
+        is_gui = (gui_log_path_ is not None
+                  and log_path == gui_log_path_)
+        migration_cb = (
+            (lambda p, d: _migrate_log_file(p, d, problems))
+            if is_gui else None
+        )
         try:
-            log_data = load_log_file(
-                log_path,
-                migration_callback=lambda p, d: _migrate_log_file(
-                    p, d, problems),
-            )
+            log_data = load_log_file(log_path, migration_callback=migration_cb)
+            if not is_gui:
+                # Best-effort: detect lazy source and warn, without
+                # rewriting the user's file.
+                try:
+                    _parse_log_text(log_path.read_text(encoding="utf-8-sig"), log_path)
+                except LogParseError:
+                    pass
+                except Exception:
+                    pass
             log_lookup = build_log_lookup(log_data)
             if not log_lookup:
                 _add("warning", "log_empty",
@@ -1655,24 +1927,14 @@ def build_device_data(folder: Path,
                  f"{_summarize(orphaned)}",
                  path=log_path)
 
-    # ── Metadata + write out ────────────────────────────────────────
-    log_path = find_log_file(folder)
-    log_fingerprint = None
-    if log_path is not None:
-        try:
-            st = log_path.stat()
-            log_fingerprint = {
-                "path": str(log_path),
-                "mtime": st.st_mtime,
-                "size": st.st_size,
-            }
-        except OSError:
-            pass
-    
+        # ── Metadata + write out ────────────────────────────────────────
+    # _log_fingerprint() looks at BOTH source and GUI, capturing the
+    # post-migration GUI stat so the next load reuses this pkl rather
+    # than re-migrating.
     fresh["_meta"] = {
         "material": detect_material_from_path(folder),
         "material_stack": {},
-        "log_fingerprint": log_fingerprint,  
+        "log_fingerprint": _log_fingerprint(folder),
     }
 
     if compare and cache_path.exists():

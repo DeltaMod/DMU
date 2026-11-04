@@ -47,7 +47,10 @@ from dataclasses import dataclass, field, asdict, fields as dataclass_fields
 from typing import Optional
 import io 
 import numpy as np
-
+import shutil
+import time 
+import platform
+import pickle
 # Must be set before QApplication is constructed to avoid pyQT5 high DPI scaling.
 os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
 
@@ -78,6 +81,10 @@ except ImportError:
     from DMU import data_import_tools as dit
     from DMU import plot_utils as dmp
 
+### Scipy imports
+from scipy.interpolate import splrep, splev
+from scipy.optimize import curve_fit
+  
 # ---------------------------------------------------------------------------
 # pypalmsens integration
 # ---------------------------------------------------------------------------
@@ -435,6 +442,13 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Advanced option: refuse to load more than one file at a time.
         self.EDIT_DISABLE_MULTILOAD: bool = False
+
+        # --- filter model ---
+        self._filter_enabled: bool = False
+        self._filter_mode: str = "AND"                     # "AND" | "OR"
+        self._filter_conditions: list[dict] = []           # [{field, operator, value, enabled}, …]
+        self._filter_field_types: dict[str, set] = {}      # field_name -> {type names seen}
+        self._filter_tab_index: Optional[int] = None
         
         # --- multi-selection model ---
         # Every highlighted measurement (file_path, meas_index), in click order.
@@ -604,21 +618,47 @@ class MainWindow(QtWidgets.QMainWindow):
 
     
     def _convert_logs_to_json(self):
+        """Convert xls/txt logs to strict JSON and seed the GUI copy."""
+
         folders = self._dm_target_folders()
         if not folders:
             QtWidgets.QMessageBox.information(
                 self, "No folders", "Tick at least one data folder first.")
             return
-        total = []
+
+        converted, seeded, failed = 0, 0, []
+        touched: list[Path] = []
         for folder in folders:
+            folder_touched = False
             try:
-                total.extend(dit.migrate_logs_to_json(folder))
+                written = dit.migrate_logs_to_json(folder)
+                converted += len(written)
+                if written:
+                    folder_touched = True
             except Exception as e:
-                logger.error(f"LOG conversion failed in {folder}: {e}")
-        QtWidgets.QMessageBox.information(
-            self, "Conversion complete",
-            f"Wrote {len(total)} .json log(s) across {len(folders)} folder(s)."
-        )
+                failed.append(f"{folder.name}: convert failed — {e}")
+
+            source = dit.find_log_file(folder)
+            if source is not None and dit.find_gui_log_file(folder) is None:
+                try:
+                    shutil.copyfile(source, dit.gui_log_path(source))
+                    seeded += 1
+                    folder_touched = True
+                except OSError as e:
+                    failed.append(f"{folder.name}: GUI seed failed — {e}")
+
+            if folder_touched:
+                touched.append(folder)
+
+        if touched:
+            self._evict_loaded_files_for(touched)
+
+        msg = (f"Converted {converted} file(s); seeded {seeded} GUI copy(ies) "
+               f"across {len(folders)} folder(s).")
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
+        QtWidgets.QMessageBox.information(self, "Conversion complete", msg)
+        
     def _on_dm_target_changed(self):
         if not hasattr(self, "_dm_target_hint"):
             return
@@ -647,10 +687,367 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_new_measurements(self):
         self._run_sync(overwrite_existing=False,
                        title="Add new measurements")
-    
-    def _full_sync_measurements(self):
-        self._run_sync(overwrite_existing=True,
-                       title="Full sync")
+        # -- LOG merge / regenerate / migration --------------------------------
+
+    def _regenerate_gui_log(self):
+        """Overwrite each target folder's GUI copy from its source."""
+        
+
+        folders = self._dm_target_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self, "Regenerate GUI LOG",
+            f"Overwrite _LOGBOOK_GUI.json for {len(folders)} folder(s) "
+            f"from their _LOGBOOK.json?\n\n"
+            f"All GUI-side edits in these folders will be LOST.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        touched, failed = [], []
+        for folder in folders:
+            source = dit.find_log_file(folder)
+            if source is None:
+                continue
+            target = dit.gui_log_path(source)
+            try:
+                shutil.copyfile(source, target)
+                touched.append(folder)
+            except OSError as e:
+                failed.append(f"{folder.name}: {e}")
+
+        if touched:
+            self._evict_loaded_files_for(touched)
+
+        msg = f"Regenerated GUI LOG for {len(touched)} folder(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
+        QtWidgets.QMessageBox.information(self, "Regenerate complete", msg)
+
+    def _export_gui_log_to_source(self):
+        """Promote GUI file to be the new source file (with backup)."""
+
+
+        folders = self._dm_target_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self, "Export GUI LOG → source",
+            f"Replace _LOGBOOK.json with _LOGBOOK_GUI.json for "
+            f"{len(folders)} folder(s)?\n\n"
+            f"The old source is backed up to _LOGBOOK_BACKUP.json "
+            f"in each folder.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        touched, failed = [], []
+        for folder in folders:
+            source = dit.find_log_file(folder)
+            gui = dit.find_gui_log_file(folder)
+            if source is None or gui is None:
+                continue
+            backup = source.with_name(
+                f"{source.stem}_BACKUP_{int(time.time())}{source.suffix}")
+            try:
+                source.rename(backup)
+                shutil.copyfile(gui, source)
+                touched.append(folder)
+            except OSError as e:
+                failed.append(f"{folder.name}: {e}")
+
+        if touched:
+            self._evict_loaded_files_for(touched)
+
+        msg = f"Promoted GUI LOG → source in {len(touched)} folder(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
+        QtWidgets.QMessageBox.information(self, "Export complete", msg)
+
+    def _compare_and_merge_logs(self):
+        """Three-tier merge: global mode → per-run review for differing runs."""
+        folders = self._dm_target_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+
+        work_items = []
+        for folder in folders:
+            source = dit.find_log_file(folder)
+            if source is None:
+                continue
+            try:
+                src_data = dit.load_log_file(source)
+            except Exception as e:
+                logger.error(f"Could not read source log in {folder}: {e}")
+                continue
+
+            gui = dit.find_gui_log_file(folder)
+            gui_data = {}
+            if gui is not None:
+                try:
+                    gui_data = dit.load_log_file(gui)
+                except Exception as e:
+                    logger.error(f"Could not read GUI log in {folder}: {e}")
+
+            diff = dit.compare_logs(src_data, gui_data)
+            if (diff["new_runs"] or diff["differing_runs"]
+                    or diff["only_in_gui"]):
+                work_items.append((folder, diff, src_data, gui_data,
+                                   source, gui))
+
+        if not work_items:
+            QtWidgets.QMessageBox.information(
+                self, "Already in sync",
+                "Source and GUI logbooks are already in sync across "
+                "every target folder.")
+            return
+
+        touched: list[Path] = []
+        results: list[tuple[str, str]] = []   # (folder_name, summary)
+        for folder, diff, src_data, gui_data, source, gui in work_items:
+            mode = self._dialog_merge_mode(folder, diff)
+            if mode is None:
+                results.append((folder.name, "cancelled"))
+                continue
+
+            per_run_choices: dict = {}
+            n_reviewed = n_skipped = 0
+            if mode == "reviewed":
+                for run_key in sorted(diff["differing_runs"].keys()):
+                    choice = self._dialog_merge_run(
+                        run_key, diff["differing_runs"][run_key])
+                    if choice is None:
+                        n_skipped += 1
+                        continue
+                    per_run_choices[run_key] = choice
+                    n_reviewed += 1
+
+            merged = dit.merge_logs(src_data, gui_data, mode, per_run_choices)
+
+            target = gui if gui is not None else dit.gui_log_path(source)
+            try:
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, indent=2, ensure_ascii=False,
+                              default=str)
+                touched.append(folder)
+                extra = ""
+                if mode == "reviewed":
+                    extra = f"; {n_reviewed} reviewed, {n_skipped} skipped"
+                results.append((
+                    folder.name,
+                    f"{mode} (+{len(diff['new_runs'])} new, "
+                    f"{len(diff['differing_runs'])} compared{extra})"
+                ))
+            except OSError as e:
+                results.append((folder.name, f"write failed — {e}"))
+
+        if touched:
+            self._evict_loaded_files_for(touched)
+
+        if not touched:
+            return
+
+        summary = "\n".join(f"  • {name}: {status}" for name, status in results)
+        reply = QtWidgets.QMessageBox.question(
+            self, "Merge complete",
+            f"Updated {len(touched)} folder(s):\n\n{summary}\n\n"
+            f"Rebuild the pkl(s) now to apply?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self._rebuild_pkl()
+
+    def _dialog_merge_mode(self, folder, diff) -> Optional[str]:
+        """Tier 1 — global mode for one folder. Returns None on cancel."""
+        n_new   = len(diff["new_runs"])
+        n_diff  = len(diff["differing_runs"])
+        n_orphan = len(diff["only_in_gui"])
+
+        summary = (
+            f"Folder: {folder.name}\n\n"
+            f"  • {n_new} new run(s) in source\n"
+            f"  • {n_diff} run(s) with field differences\n"
+            f"  • {n_orphan} run(s) only in GUI (will be preserved)\n\n"
+            f"How do you want to merge?"
+        )
+
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Merge LOGs")
+        box.setText(summary)
+        box.setIcon(QtWidgets.QMessageBox.Question)
+
+        b_overwrite = box.addButton("Overwrite all",      QtWidgets.QMessageBox.DestructiveRole)
+        b_addonly   = box.addButton("Only add new",       QtWidgets.QMessageBox.AcceptRole)
+        b_keepgui   = box.addButton("Keep GUI",           QtWidgets.QMessageBox.AcceptRole)
+        b_review    = box.addButton("Review each run…",   QtWidgets.QMessageBox.AcceptRole)
+        box.addButton("Cancel", QtWidgets.QMessageBox.RejectRole)
+
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is b_overwrite: return "overwrite_all"
+        if clicked is b_addonly:   return "add_only"
+        if clicked is b_keepgui:   return "keep_gui"
+        if clicked is b_review:    return "reviewed"
+        return None
+
+    def _dialog_merge_run(self, run_key, run_diff):
+        """Tier 2/3 — one dialog per differing run, showing all fields."""
+        fields = run_diff["fields"]
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Run {run_key} — {len(fields)} field(s) differ")
+        dlg.resize(560, 400)
+
+        outer = QtWidgets.QVBoxLayout(dlg)
+        outer.addWidget(QtWidgets.QLabel(
+            "Pick a value for each field. 'Apply' uses your choices; "
+            "'Whole run → source' / '→ GUI' shortcut the picks below."))
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QtWidgets.QWidget()
+        form = QtWidgets.QVBoxLayout(body)
+
+        choices: dict[str, QtWidgets.QButtonGroup] = {}
+        for field, (gui_val, src_val) in fields.items():
+            group_box = QtWidgets.QGroupBox(field)
+            gb_layout = QtWidgets.QVBoxLayout(group_box)
+
+            grp = QtWidgets.QButtonGroup(group_box)
+            rb_gui = QtWidgets.QRadioButton(f"Keep GUI:    {gui_val!r}")
+            rb_src = QtWidgets.QRadioButton(f"Use source:  {src_val!r}")
+            rb_gui.setChecked(True)
+            grp.addButton(rb_gui, 0)
+            grp.addButton(rb_src, 1)
+            gb_layout.addWidget(rb_gui)
+            gb_layout.addWidget(rb_src)
+
+            form.addWidget(group_box)
+            choices[field] = grp
+
+        form.addStretch(1)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        b_src_all  = QtWidgets.QPushButton("Whole run → source")
+        b_gui_all  = QtWidgets.QPushButton("Whole run → GUI")
+        b_apply    = QtWidgets.QPushButton("Apply")
+        b_cancel   = QtWidgets.QPushButton("Cancel")
+        btn_row.addWidget(b_src_all)
+        btn_row.addWidget(b_gui_all)
+        btn_row.addStretch(1)
+        btn_row.addWidget(b_apply)
+        btn_row.addWidget(b_cancel)
+        outer.addLayout(btn_row)
+
+        result = {"value": None}
+
+        def _apply():
+            result["value"] = {
+                f: ("src" if grp.checkedId() == 1 else "gui")
+                for f, grp in choices.items()
+            }
+            dlg.accept()
+
+        b_src_all.clicked.connect(
+            lambda *_: (result.__setitem__("value", "src"), dlg.accept()))
+        b_gui_all.clicked.connect(
+            lambda *_: (result.__setitem__("value", "gui"), dlg.accept()))
+        b_apply.clicked.connect(lambda *_: _apply())
+        b_cancel.clicked.connect(lambda *_: dlg.reject())
+
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+        return result["value"]
+
+    def _snapshot_pkl_to_gui(self):
+        """One-time migration: for folders lacking _LOGBOOK_GUI.json,
+        seed it from the pkl's current LOG entries (which may reflect
+        pre-migration GUI edits), falling back to the source log for
+        runs the pkl doesn't cover."""
+
+        folders = self._dm_target_folders()
+        if not folders:
+            QtWidgets.QMessageBox.information(
+                self, "No folders", "Tick at least one data folder first.")
+            return
+
+        migrated, skipped, failed = 0, 0, []
+        for folder in folders:
+            if dit.find_gui_log_file(folder) is not None:
+                skipped += 1
+                continue
+
+            pkl_path = folder / f".dmui_{folder.name}.pkl"
+            if not pkl_path.exists():
+                skipped += 1
+                continue
+
+            try:
+                with open(pkl_path, "rb") as f:
+                    data = pickle.load(f)
+            except Exception as e:
+                failed.append(f"{folder.name}: pkl read failed — {e}")
+                continue
+
+            flat: dict[str, dict] = {}
+
+            for np_key, devs in data.items():
+                if np_key == "_meta":
+                    continue
+                for dev, subs in devs.items():
+                    for sub, runs in subs.items():
+                        for run_key, run_data in runs.items():
+                            log = run_data.get("LOG")
+                            if log:
+                                flat[dit.normalise_run_key(run_key)] = dict(log)
+
+            source = dit.find_log_file(folder)
+            if source is not None:
+                try:
+                    src_flat = dit.flatten_log_runs(dit.load_log_file(source))
+                    for run, info in src_flat.items():
+                        flat.setdefault(run, dict(info))
+                except Exception:
+                    pass
+
+            if not flat:
+                skipped += 1
+                continue
+
+            target = (dit.gui_log_path(source) if source is not None
+                      else folder / "_LOGBOOK_GUI.json")
+            try:
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(dit.nest_log_runs(flat), f, indent=2,
+                              ensure_ascii=False, default=str)
+                migrated += 1
+            except OSError as e:
+                failed.append(f"{folder.name}: write failed — {e}")
+
+        msg = (f"Migrated {migrated} folder(s). "
+               f"Skipped {skipped} (already had GUI, or no pkl/log).")
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed)
+        QtWidgets.QMessageBox.information(self, "Snapshot complete", msg)
+        
+    def _rebuild_pkl(self):
+        """Single, safe rebuild path. Re-derives each folder's pkl from
+        XLS + _LOGBOOK_GUI.json. Cannot lose GUI LOG edits (they live in
+        the GUI file, not the pkl)."""
+        self._run_sync(overwrite_existing=True, title="Rebuild pkl")
     
     def _run_sync(self, overwrite_existing: bool, title: str):
         folders = self._dm_target_folders()
@@ -676,47 +1073,6 @@ class MainWindow(QtWidgets.QMainWindow):
             msg += "\n\nFailures:\n" + "\n".join(failed)
         QtWidgets.QMessageBox.information(self, title, msg)
     
-    def _force_rebuild_pkl(self):
-        folders = self._dm_target_folders()
-        if not folders:
-            return
-    
-        # Build the confirmation body. Cap the listing at 10 so a
-        # 200-folder tick doesn't produce an unreadable dialog.
-        shown = folders[:10]
-        lines = "\n".join(f"  • {f.name}" for f in shown)
-        if len(folders) > len(shown):
-            lines += f"\n  … and {len(folders) - len(shown)} more"
-    
-        reply = QtWidgets.QMessageBox.question(
-            self, "Force rebuild pkl",
-            f"Rebuild the pkl for {len(folders)} folder(s)?\n\n"
-            f"{lines}\n\n"
-            "In-GUI LOG edits stored in these pkls will be lost. "
-            "Continue?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
-    
-        rebuilt, failed = [], []
-        for folder in folders:
-            try:
-                dit.build_device_data(folder, force_reload=True, compare=False)
-                rebuilt.append(folder)
-            except Exception as e:
-                failed.append(f"{folder.name}: {e}")
-    
-        # Evict only the folders we actually rebuilt — failed folders'
-        # in-memory data is still valid and shouldn't be dropped.
-        if rebuilt:
-            self._evict_loaded_files_for(rebuilt)
-    
-        msg = f"Rebuilt pkl for {len(rebuilt)} folder(s)."
-        if failed:
-            msg += "\n\nFailures:\n" + "\n".join(failed)
-        QtWidgets.QMessageBox.information(
-            self, "Rebuild complete" if rebuilt else "Rebuild failed", msg)
     
     def _evict_loaded_files_for(self, folders):
         """Drop in-memory LoadedFile + FolderStore instances for those folders."""
@@ -923,9 +1279,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_advanced_tab()
         self._build_curves_tab()
         self._build_logbook_tab()
+        self._build_filter_tab()
         self._build_classify_tab()
         self._build_problems_tab()     
 
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
         col.addStretch(1)
         return col
 
@@ -1101,12 +1459,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dm_target_hint.setWordWrap(True)
         layout.addWidget(self._dm_target_hint)
 
+        # ---- LOG file operations ----
+        log_lbl = QtWidgets.QLabel("LOG file operations")
+        log_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(log_lbl)
+
         btn_logs = QtWidgets.QPushButton("Convert LOGs to JSON")
         btn_logs.setToolTip(
-            "Convert every *LOG*.xls to a sibling .json. No-op if there "
-            "is no LOG xls in a folder.")
+            "Convert every *LOG*.xls/.txt to a strict .json (with backup). "
+            "Also seeds _LOGBOOK_GUI.json for any folder missing one.")
         btn_logs.clicked.connect(self._convert_logs_to_json)
         layout.addWidget(btn_logs)
+
+        btn_regen = QtWidgets.QPushButton("Regenerate GUI LOG from source")
+        btn_regen.setToolTip(
+            "Overwrite _LOGBOOK_GUI.json with the current contents of "
+            "_LOGBOOK.json. All GUI-side edits are lost. Confirmation "
+            "required.")
+        btn_regen.clicked.connect(self._regenerate_gui_log)
+        layout.addWidget(btn_regen)
+
+        btn_merge = QtWidgets.QPushButton("Compare & merge LOGs…")
+        btn_merge.setToolTip(
+            "Diff the source LOG against the GUI working copy. Adds new "
+            "runs, and lets you review field-level changes one run at a "
+            "time.")
+        btn_merge.clicked.connect(self._compare_and_merge_logs)
+        layout.addWidget(btn_merge)
+
+        btn_export = QtWidgets.QPushButton("Export GUI LOG → source")
+        btn_export.setToolTip(
+            "Promote _LOGBOOK_GUI.json to be the new source file "
+            "(with a timestamped backup of the old source).")
+        btn_export.clicked.connect(self._export_gui_log_to_source)
+        layout.addWidget(btn_export)
+
+        # ---- pkl operations ----
+        pkl_lbl = QtWidgets.QLabel("pkl operations")
+        pkl_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(pkl_lbl)
 
         btn_add = QtWidgets.QPushButton("Find & add new measurements")
         btn_add.setToolTip(
@@ -1115,20 +1506,27 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_add.clicked.connect(self._add_new_measurements)
         layout.addWidget(btn_add)
 
-        btn_merge = QtWidgets.QPushButton("Full sync (replace existing)")
-        btn_merge.setToolTip(
-            "Re-parse every .xls and replace existing pkl entries with "
-            "the fresh parse. In-GUI LOG edits will be lost.")
-        btn_merge.clicked.connect(self._full_sync_measurements)
-        layout.addWidget(btn_merge)
-
-        btn_rebuild = QtWidgets.QPushButton("Force rebuild pkl")
+        btn_rebuild = QtWidgets.QPushButton("Rebuild pkl")
         btn_rebuild.setToolTip(
-            "Rebuild each target folder's pkl from scratch, ignoring any "
-            "existing pkl. Destroys in-GUI LOG edits for those folders. "
-            "Use when the pkl is corrupt or the builder changed.")
-        btn_rebuild.clicked.connect(self._force_rebuild_pkl)
+            "Fully re-derive each target folder's pkl from XLS + "
+            "_LOGBOOK_GUI.json. Safe: GUI LOG edits are preserved "
+            "because they live in the GUI file, not the pkl.")
+        btn_rebuild.clicked.connect(self._rebuild_pkl)
         layout.addWidget(btn_rebuild)
+
+        # ---- migration ----
+        mig_lbl = QtWidgets.QLabel("Migration")
+        mig_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        layout.addWidget(mig_lbl)
+
+        btn_snapshot = QtWidgets.QPushButton(
+            "Snapshot pkl LOG edits → _LOGBOOK_GUI.json")
+        btn_snapshot.setToolTip(
+            "One-time migration for folders where GUI LOG edits were "
+            "made before _LOGBOOK_GUI.json existed. Skips folders that "
+            "already have a GUI file.")
+        btn_snapshot.clicked.connect(self._snapshot_pkl_to_gui)
+        layout.addWidget(btn_snapshot)
 
         layout.addStretch(1)
         self.tab_widget.addTab(tab, "Advanced")
@@ -1359,94 +1757,887 @@ class MainWindow(QtWidgets.QMainWindow):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
     
-        # ---- Active measurement (editable, always visible) ----
+        # ---- Active measurement (editable) ----
         active_lbl = QtWidgets.QLabel("Active measurement")
         active_lbl.setStyleSheet("font-weight: bold;")
         layout.addWidget(active_lbl)
     
-        form = QtWidgets.QFormLayout()
-        self._log_fields = {}
-    
+        # Comment first, always visible (multi-line)
         self._log_comment = QtWidgets.QPlainTextEdit()
         self._log_comment.setFixedHeight(80)
         self._log_comment.textChanged.connect(self._on_log_comment_changed)
-        form.addRow("Comment:", self._log_comment)
+        layout.addWidget(self._log_comment)
     
-        for key in ("Timestamp", "Device", "Subdevice", "RunID", "SMU Order",
-                    "LightMicroscope", "SMU1", "SMU2", "SMU3", "SMU4"):
-            le = QtWidgets.QLineEdit()
-            le.editingFinished.connect(lambda k=key: self._on_log_field_changed(k))
-            self._log_fields[key] = le
-            form.addRow(f"{key}:", le)
+        # Dynamic fields, scrollable in case user adds many
+        self._log_fields = {}
+        self._log_fields_container = QtWidgets.QWidget()
+        self._log_form_layout = QtWidgets.QFormLayout(
+            self._log_fields_container)
+        self._log_form_layout.setContentsMargins(0, 0, 0, 0)
+        self._log_form_layout.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
     
-        layout.addLayout(form)
+        self._log_fields_scroll = QtWidgets.QScrollArea()
+        self._log_fields_scroll.setWidgetResizable(True)
+        self._log_fields_scroll.setWidget(self._log_fields_container)
+        layout.addWidget(self._log_fields_scroll, stretch=1)
     
-        line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.HLine)
-        layout.addWidget(line)
+        # ---- New Entry row ----
+        new_sep = QtWidgets.QFrame()
+        new_sep.setFrameShape(QtWidgets.QFrame.HLine)
+        layout.addWidget(new_sep)
+    
+        new_lbl = QtWidgets.QLabel("New Entry")
+        new_lbl.setStyleSheet("font-weight: bold;")
+        layout.addWidget(new_lbl)
+    
+        new_row = QtWidgets.QHBoxLayout()
+        self._log_new_field_name = QtWidgets.QLineEdit()
+        self._log_new_field_name.setPlaceholderText("Field name")
+    
+        self._log_new_field_type = QtWidgets.QComboBox()
+        self._log_new_field_type.addItems(["string", "bool", "int", "float"])
+    
+        btn_focused = QtWidgets.QPushButton("Add to focused")
+        btn_focused.setToolTip("Add this field to the active measurement only")
+        btn_focused.clicked.connect(self._on_add_new_field_focused)
+    
+        btn_ticked = QtWidgets.QPushButton("Add to ticked")
+        btn_ticked.setToolTip("Add this field to every ticked measurement")
+        btn_ticked.clicked.connect(self._on_add_new_field_ticked)
+    
+        new_row.addWidget(self._log_new_field_name, stretch=1)
+        new_row.addWidget(self._log_new_field_type)
+        new_row.addWidget(btn_focused)
+        new_row.addWidget(btn_ticked)
+        layout.addLayout(new_row)
     
         # ---- Collapsible list of other selected/ticked measurements ----
+        if not hasattr(self, "_log_other_expanded"):
+            self._log_other_expanded = False
+    
+        other_sep = QtWidgets.QFrame()
+        other_sep.setFrameShape(QtWidgets.QFrame.HLine)
+        layout.addWidget(other_sep)
+    
+        others_row = QtWidgets.QHBoxLayout()
         others_lbl = QtWidgets.QLabel("Other selected / ticked measurements")
         others_lbl.setStyleSheet("font-weight: bold;")
-        layout.addWidget(others_lbl)
+        others_row.addWidget(others_lbl, stretch=1)
+    
+        self._log_other_toggle = QtWidgets.QPushButton(
+            "Collapse All" if self._log_other_expanded else "Expand All")
+        self._log_other_toggle.setFixedWidth(100)
+        self._log_other_toggle.setToolTip(
+            "Set whether 'Other measurements' sections open expanded or "
+            "collapsed by default when the selection changes.")
+        self._log_other_toggle.clicked.connect(self._on_log_other_toggle)
+        others_row.addWidget(self._log_other_toggle)
+        layout.addLayout(others_row)
     
         self._log_other_scroll = QtWidgets.QScrollArea()
         self._log_other_scroll.setWidgetResizable(True)
         self._log_other_container = QtWidgets.QWidget()
-        self._log_other_layout = QtWidgets.QVBoxLayout(self._log_other_container)
+        self._log_other_layout = QtWidgets.QVBoxLayout(
+            self._log_other_container)
         self._log_other_layout.setContentsMargins(0, 0, 0, 0)
         self._log_other_layout.addStretch(1)
         self._log_other_scroll.setWidget(self._log_other_container)
         layout.addWidget(self._log_other_scroll, stretch=1)
     
-        self.tab_widget.addTab(tab, "Logbook")
+        self._logbook_tab_index = self.tab_widget.addTab(tab, "Logbook")
+        
+    def _on_log_other_toggle(self):
+        """Flip the global 'always expanded' state for other-measurement
+        sections, then rebuild the tab so every section honours it."""
+        self._log_other_expanded = not self._log_other_expanded
+        self._log_other_toggle.setText(
+            "Collapse All" if self._log_other_expanded else "Expand All")
+        self._refresh_logbook_tab()
+
+
+    # -- Filter Menu stuff ---#
+    def _build_filter_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
     
-    def _refresh_logbook_tab(self):
-        # ---------- Active section ----------
-        for w in (self._log_comment, *self._log_fields.values()):
-            w.blockSignals(True)
+        hint = QtWidgets.QLabel(
+            "Show only runs whose logbook fields match the conditions below. "
+            "Filtering is a view operation — tick state is preserved, and "
+            "hidden runs still receive 'Add to ticked' / 'Copy to ticked' "
+            "edits. Combine conditions with AND or OR.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(hint)
     
-        if self.loaded_file is None or self.current_meas_index is None:
-            self._log_comment.setPlainText("")
-            for w in self._log_fields.values():
-                w.setText("")
+        # Enable toggle
+        self.filter_enable_btn = QtWidgets.QPushButton("Filtering: OFF")
+        self.filter_enable_btn.setCheckable(True)
+        self.filter_enable_btn.setChecked(False)
+        self.filter_enable_btn.setStyleSheet(
+            "QPushButton { padding: 4px; } "
+            "QPushButton:checked { background-color: #4CAF50; color: white; }")
+        self.filter_enable_btn.toggled.connect(self._on_filter_enabled_toggled)
+        layout.addWidget(self.filter_enable_btn)
+    
+        # Status line
+        self._filter_status_label = QtWidgets.QLabel("")
+        self._filter_status_label.setStyleSheet(
+            "color: #555; font-size: 10px;")
+        self._filter_status_label.setWordWrap(True)
+        layout.addWidget(self._filter_status_label)
+    
+        # Conditions scroll area
+        self.filter_scroll = QtWidgets.QScrollArea()
+        self.filter_scroll.setWidgetResizable(True)
+        self.filter_container = QtWidgets.QWidget()
+        self.filter_layout = QtWidgets.QVBoxLayout(self.filter_container)
+        self.filter_layout.setContentsMargins(0, 0, 0, 0)
+        self.filter_layout.addStretch(1)
+        self.filter_scroll.setWidget(self.filter_container)
+        layout.addWidget(self.filter_scroll, stretch=1)
+    
+        # Add condition
+        add_btn = QtWidgets.QPushButton("+ Add condition")
+        add_btn.clicked.connect(self._on_add_filter_condition)
+        layout.addWidget(add_btn)
+    
+        # Mode row
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel("Combine:"))
+        self.filter_mode_and = QtWidgets.QRadioButton("AND")
+        self.filter_mode_or = QtWidgets.QRadioButton("OR")
+        self.filter_mode_and.setChecked(True)
+        self.filter_mode_group = QtWidgets.QButtonGroup(self)
+        self.filter_mode_group.addButton(self.filter_mode_and, 0)
+        self.filter_mode_group.addButton(self.filter_mode_or, 1)
+        self.filter_mode_group.buttonClicked.connect(self._on_filter_mode_changed)
+        mode_row.addWidget(self.filter_mode_and)
+        mode_row.addWidget(self.filter_mode_or)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+    
+        # Action row
+        btn_row = QtWidgets.QHBoxLayout()
+        refresh_btn = QtWidgets.QPushButton("Refresh fields")
+        refresh_btn.setToolTip(
+            "Re-scan ticked folders' logbooks for available field names.")
+        refresh_btn.clicked.connect(self._refresh_filter_field_options)
+        clear_btn = QtWidgets.QPushButton("Clear all")
+        clear_btn.clicked.connect(self._on_clear_filter_conditions)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+    
+        self._filter_tab_index = self.tab_widget.addTab(tab, "Filter")
+    
+    def _on_tab_changed(self, idx):
+        if idx == self._filter_tab_index and not self._filter_field_types:
+            self._refresh_filter_field_options()
+   
+    def _gather_log_fields(self) -> dict[str, set]:
+        """Return {field_name: set_of_type_names} across every ticked folder.
+    
+        Loaded measurements contribute their in-memory logs (including
+        uncommitted edits). Unloaded folders contribute their pkl data.
+        """
+        import pickle
+        fields: dict[str, set] = {}
+    
+        def _scan(log):
+            for k, v in (log or {}).items():
+                if str(k).startswith("_"):
+                    continue
+                fields.setdefault(str(k), set()).add(type(v).__name__)
+    
+        for lf in self.loaded_files.values():
+            for meas in lf.measurements:
+                _scan(meas.log)
+    
+        loaded_folders = {
+            str(Path(fp).parent.resolve()) for fp in self.loaded_files
+        }
+        for folder in self._get_ticked_folders():
+            if str(Path(folder).resolve()) in loaded_folders:
+                continue
+            pkl = folder / f".dmui_{folder.name}.pkl"
+            if not pkl.exists():
+                continue
+            try:
+                with open(pkl, "rb") as f:
+                    data = pickle.load(f)
+            except Exception:
+                continue
+            for np_key, devs in data.items():
+                if np_key == "_meta":
+                    continue
+                for dev, subs in devs.items():
+                    for sub, runs in subs.items():
+                        for run_key, run_data in runs.items():
+                            _scan(run_data.get("LOG"))
+    
+        return fields
+    # -- filter: row construction ------------------------------------------
+    
+    _FILTER_OPERATORS = {
+        "bool":  ["==", "!=", "is None", "is not None"],
+        "int":   ["==", "!=", ">", "<", ">=", "<=", "is None", "is not None"],
+        "float": ["==", "!=", ">", "<", ">=", "<=", "is None", "is not None"],
+        "str":   ["==", "!=", "contains", "is None", "is not None"],
+    }
+    
+    def _operators_for_field(self, field):
+        types = self._filter_field_types.get(field, set())
+        if types.issubset({"bool"}):
+            return self._FILTER_OPERATORS["bool"]
+        if types and types.issubset({"int", "float"}):
+            return self._FILTER_OPERATORS["float"]
+        return self._FILTER_OPERATORS["str"]
+    
+    def _value_widget_type(self, field):
+        types = self._filter_field_types.get(field, set())
+        if types.issubset({"bool"}) and types:
+            return "bool"
+        if types and types.issubset({"int", "float"}):
+            return "numeric"
+        return "string"
+    
+    def _make_filter_condition_row(self, idx, cond):
+        """Build one condition row and wire its signals to cond mutation."""
+        row = QtWidgets.QWidget()
+        hbox = QtWidgets.QHBoxLayout(row)
+        hbox.setContentsMargins(0, 2, 0, 2)
+    
+        enabled_cb = QtWidgets.QCheckBox()
+        enabled_cb.setChecked(cond.get("enabled", True))
+        enabled_cb.toggled.connect(
+            lambda v, i=idx: self._on_condition_enabled_changed(i, v))
+        hbox.addWidget(enabled_cb)
+    
+        field_combo = QtWidgets.QComboBox()
+        for f in sorted(self._filter_field_types):
+            field_combo.addItem(f, userData=f)
+        fi = field_combo.findData(cond.get("field", ""))
+        if fi >= 0:
+            field_combo.setCurrentIndex(fi)
+        hbox.addWidget(field_combo, stretch=2)
+    
+        op_combo = QtWidgets.QComboBox()
+        hbox.addWidget(op_combo, stretch=1)
+    
+        value_container = QtWidgets.QWidget()
+        vc = QtWidgets.QHBoxLayout(value_container)
+        vc.setContentsMargins(0, 0, 0, 0)
+        hbox.addWidget(value_container, stretch=2)
+    
+        rm_btn = QtWidgets.QPushButton("×")
+        rm_btn.setFixedWidth(26)
+        rm_btn.clicked.connect(
+            lambda _checked=False, i=idx: self._on_remove_filter_condition(i))
+        hbox.addWidget(rm_btn)
+    
+        cond["_field_combo"] = field_combo
+        cond["_op_combo"] = op_combo
+        cond["_value_container"] = value_container
+    
+        self._populate_operator_combo(idx)
+        self._populate_value_widget(idx)
+    
+        field_combo.currentIndexChanged.connect(
+            lambda _i, i=idx: self._on_condition_field_changed(i))
+        return row
+    
+    def _populate_operator_combo(self, idx):
+        cond = self._filter_conditions[idx]
+        field = cond.get("field") or (
+            sorted(self._filter_field_types)[0]
+            if self._filter_field_types else "")
+        cond["field"] = field
+    
+        combo = cond["_op_combo"]
+        combo.blockSignals(True)
+        combo.clear()
+        for op in self._operators_for_field(field):
+            combo.addItem(op, userData=op)
+        want = cond.get("operator") or "=="
+        ci = combo.findData(want)
+        combo.setCurrentIndex(ci if ci >= 0 else 0)
+        cond["operator"] = combo.currentData() or "=="
+        combo.blockSignals(False)
+        combo.currentIndexChanged.connect(
+            lambda _i, i=idx: self._on_condition_operator_changed(i))
+    
+    def _populate_value_widget(self, idx):
+        cond = self._filter_conditions[idx]
+        container = cond["_value_container"]
+        while container.layout().count():
+            item = container.layout().takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        layout = container.layout()
+    
+        if cond.get("operator") in ("is None", "is not None"):
+            lbl = QtWidgets.QLabel("—")
+            lbl.setStyleSheet("color: #aaa;")
+            layout.addWidget(lbl)
+            return
+    
+        field = cond.get("field", "")
+        vtype = self._value_widget_type(field)
+        current = cond.get("value")
+    
+        if vtype == "bool":
+            combo = QtWidgets.QComboBox()
+            combo.addItem("True", True)
+            combo.addItem("False", False)
+            combo.addItem("None", None)
+            ci = combo.findData(current)
+            combo.setCurrentIndex(ci if ci >= 0 else 0)
+            combo.currentIndexChanged.connect(
+                lambda _i, i=idx, c=combo:
+                self._on_condition_value_changed(i, c.currentData()))
+            layout.addWidget(combo)
+            if "value" not in cond:
+                cond["value"] = combo.currentData()
         else:
-            meas = self.loaded_file.measurements[self.current_meas_index]
-            log = getattr(meas, "log", {}) or {}
-            self._log_comment.setPlainText(str(log.get("Comment", meas.comment or "")))
-            for k, w in self._log_fields.items():
-                v = log.get(k, "")
-                w.setText("" if v is None else str(v))
+            le = QtWidgets.QLineEdit()
+            if vtype == "numeric":
+                v = QtGui.QDoubleValidator()
+                v.setNotation(QtGui.QDoubleValidator.StandardNotation)
+                le.setValidator(v)
+            if current is not None:
+                le.setText(str(current))
+            le.editingFinished.connect(
+                lambda i=idx, w=le, t=vtype:
+                self._on_condition_value_changed(
+                    i, self._parse_filter_value_str(w.text(), t)))
+            layout.addWidget(le)
+            if "value" not in cond:
+                cond["value"] = self._parse_filter_value_str(
+                    le.text(), vtype)
     
-        for w in (self._log_comment, *self._log_fields.values()):
-            w.blockSignals(False)
+    @staticmethod
+    def _parse_filter_value_str(text, vtype):
+        s = text.strip()
+        if s == "":
+            return None
+        if vtype == "numeric":
+            try:
+                return float(s)
+            except ValueError:
+                return None
+        low = s.lower()
+        if low in ("true", "yes"):    return True
+        if low in ("false", "no"):    return False
+        if low in ("none", "null"):   return None
+        return s
     
-        # ---------- Other selected / ticked sections ----------
-        while self._log_other_layout.count() > 1:  # keep trailing stretch
-            item = self._log_other_layout.takeAt(0)
+    # -- filter: condition handlers ----------------------------------------
+    
+    def _on_add_filter_condition(self):
+        if not self._filter_field_types:
+            self._filter_field_types = self._gather_log_fields()
+        if not self._filter_field_types:
+            QtWidgets.QMessageBox.information(
+                self, "No fields available",
+                "Load or tick at least one folder with a logbook first.")
+            return
+        first = sorted(self._filter_field_types)[0]
+        self._filter_conditions.append({
+            "field": first, "operator": "==", "value": None,
+            "enabled": True,
+        })
+        self._render_filter_conditions()
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_remove_filter_condition(self, idx):
+        if 0 <= idx < len(self._filter_conditions):
+            del self._filter_conditions[idx]
+        self._render_filter_conditions()
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_condition_enabled_changed(self, idx, checked):
+        if 0 <= idx < len(self._filter_conditions):
+            self._filter_conditions[idx]["enabled"] = bool(checked)
+            self._apply_filter_to_tree()
+            self._save_workspace()
+    
+    def _on_condition_field_changed(self, idx):
+        if not (0 <= idx < len(self._filter_conditions)):
+            return
+        cond = self._filter_conditions[idx]
+        cond["field"] = cond["_field_combo"].currentData()
+        # Reset operator + value to sensible defaults for the new type
+        ops = self._operators_for_field(cond["field"])
+        cond["operator"] = ops[0]
+        cond.pop("value", None)
+        self._populate_operator_combo(idx)
+        self._populate_value_widget(idx)
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_condition_operator_changed(self, idx):
+        if not (0 <= idx < len(self._filter_conditions)):
+            return
+        cond = self._filter_conditions[idx]
+        cond["operator"] = cond["_op_combo"].currentData() or "=="
+        self._populate_value_widget(idx)
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_condition_value_changed(self, idx, new_value):
+        if 0 <= idx < len(self._filter_conditions):
+            self._filter_conditions[idx]["value"] = new_value
+            self._apply_filter_to_tree()
+            self._save_workspace()
+    
+    def _on_filter_enabled_toggled(self, checked):
+        self._filter_enabled = bool(checked)
+        self.filter_enable_btn.setText(
+            "Filtering: ON" if checked else "Filtering: OFF")
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_filter_mode_changed(self, _btn):
+        self._filter_mode = "AND" if self.filter_mode_and.isChecked() else "OR"
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    
+    def _on_clear_filter_conditions(self):
+        if not self._filter_conditions:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Clear filters",
+            f"Remove all {len(self._filter_conditions)} filter condition(s)?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        self._filter_conditions = []
+        self._render_filter_conditions()
+        self._apply_filter_to_tree()
+        self._save_workspace()
+    def _refresh_filter_field_options(self):
+        self._filter_field_types = self._gather_log_fields()
+        self._render_filter_conditions()
+        self._apply_filter_to_tree()
+    
+    def _render_filter_conditions(self):
+        """Rebuild all condition rows from self._filter_conditions."""
+        while self.filter_layout.count() > 1:  # keep trailing stretch
+            item = self.filter_layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
     
-        if not hasattr(self, "_log_other_layout"):
+        if not self._filter_field_types:
+            self._filter_field_types = self._gather_log_fields()
+    
+        for idx, cond in enumerate(self._filter_conditions):
+            row = self._make_filter_condition_row(idx, cond)
+            self.filter_layout.insertWidget(
+                self.filter_layout.count() - 1, row)
+    
+    # -- filter: evaluation + tree application -----------------------------
+
+    @staticmethod
+    def _filter_values_equal(a, b):
+        if a is None and b is None:
+            return True
+        if a is None or b is None:
+            return False
+        if a == b:
+            return True
+        try:
+            return str(a) == str(b)
+        except Exception:
+            return False
+   
+    @staticmethod
+    def _filter_to_number(v):
+        if isinstance(v, bool):
+            return 1.0 if v else 0.0
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(v)
+   
+    def _evaluate_filter_condition(self, cond, log) -> bool:
+        field    = cond.get("field")
+        operator = cond.get("operator", "==")
+        target   = cond.get("value")
+        actual   = log.get(field)
+   
+        if operator == "is None":       return actual is None
+        if operator == "is not None":   return actual is not None
+        if operator == "==":            return self._filter_values_equal(actual, target)
+        if operator == "!=":            return not self._filter_values_equal(actual, target)
+        if operator == "contains":
+            if actual is None or target is None:
+                return False
+            return str(target) in str(actual)
+   
+        try:
+            a = self._filter_to_number(actual)
+            b = self._filter_to_number(target)
+        except (TypeError, ValueError):
+            return False
+        if operator == ">":  return a > b
+        if operator == "<":  return a < b
+        if operator == ">=": return a >= b
+        if operator == "<=": return a <= b
+        return False
+   
+    def _apply_filter_to_tree(self):
+        """Re-apply filter visibility across the tree. Cheap; call freely."""
+        if not hasattr(self, "file_list") or self.file_list is None:
+            return
+        for i in range(self.file_list.topLevelItemCount()):
+            self._apply_filter_to_subtree(self.file_list.topLevelItem(i))
+        self._update_filter_status()
+   
+    def _apply_filter_to_subtree(self, item) -> bool:
+        """Recursively apply filter. Returns True if item should be visible."""
+        payload = item.data(0, QtCore.Qt.UserRole)
+        kind = payload[0] if payload else None
+   
+        if kind == "meas":
+            visible = self._measurement_passes_filter(item, payload)
+            item.setHidden(not visible)
+            return visible
+   
+        any_visible = False
+        for i in range(item.childCount()):
+            if self._apply_filter_to_subtree(item.child(i)):
+                any_visible = True
+        item.setHidden(not any_visible)
+        return any_visible
+   
+    def _measurement_passes_filter(self, _item, payload) -> bool:
+        if not self._filter_enabled:
+            return True
+        active = [c for c in self._filter_conditions if c.get("enabled", True)]
+        if not active:
+            return True
+   
+        _, fp, _, mi = payload
+        lf = self.loaded_files.get(fp)
+        if lf is None or mi >= len(lf.measurements):
+            return True  # can't evaluate → don't hide
+   
+        log = lf.measurements[mi].log or {}
+        results = [self._evaluate_filter_condition(c, log) for c in active]
+        return all(results) if self._filter_mode == "AND" else any(results)
+   
+    def _update_filter_status(self):
+        if not hasattr(self, "_filter_status_label"):
+            return
+        active = [c for c in self._filter_conditions if c.get("enabled", True)]
+        if not self._filter_enabled or not active:
+            self._filter_status_label.setText(
+                "No active filter." if not active
+                else "Filtering is off.")
+            return
+   
+        total = visible = 0
+        for item in self._iter_all_items():
+            p = item.data(0, QtCore.Qt.UserRole)
+            if p and p[0] == "meas":
+                total += 1
+                if not item.isHidden():
+                    visible += 1
+        self._filter_status_label.setText(
+            f"Showing {visible} of {total} run(s) "
+            f"({total - visible} hidden by filter).")     
+   
+    # -- Filter Handlers
+    def _wrap_log_field_with_copy(self, key, widget):
+        """Wrap a field widget with a '→' button that copies this field's
+        current value to every other ticked measurement."""
+        container = QtWidgets.QWidget()
+        hbox = QtWidgets.QHBoxLayout(container)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.addWidget(widget, stretch=1)
+    
+        btn = QtWidgets.QPushButton("→")
+        btn.setFixedWidth(24)
+        btn.setToolTip(
+            f"Copy '{key}' from this measurement to all other ticked "
+            f"measurements.")
+        btn.clicked.connect(
+            lambda _checked=False, k=key: self._copy_field_to_ticked(k))
+        hbox.addWidget(btn)
+        return container
+    
+    def _copy_field_to_ticked(self, key):
+        """Batch edit: apply the active measurement's `key` value to every
+        other ticked measurement. Writes through the folder store."""
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+        src = self.loaded_file.measurements[self.current_meas_index]
+        val = src.log.get(key)
+    
+        active = (self.current_file_path, self.current_meas_index)
+        targets = sorted(
+            t for t in self._get_ticked_measurements() if t != active)
+        if not targets:
+            QtWidgets.QMessageBox.information(
+                self, "No targets",
+                "Tick at least one other measurement before copying.")
             return
     
+        preview = repr(val)
+        if len(preview) > 80:
+            preview = preview[:77] + "…"
+        reply = QtWidgets.QMessageBox.question(
+            self, f"Copy '{key}'",
+            f"Copy {key} = {preview}\n\n"
+            f"…to {len(targets)} other ticked measurement(s)?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+    
+        import copy
+        updated, failed = 0, []
+        for fp, mi in targets:
+            if fp not in self.loaded_files:
+                try:
+                    self.loaded_files[fp] = self.registry.load(Path(fp))
+                except Exception as e:
+                    failed.append(f"{Path(fp).name}: {e}")
+                    continue
+            lf = self.loaded_files[fp]
+            if mi >= len(lf.measurements):
+                continue
+            meas = lf.measurements[mi]
+            run_key = meas.metadata.get("run_key")
+            meas.log[key] = copy.deepcopy(val)
+            if lf.folder_store is not None and run_key is not None:
+                try:
+                    lf.folder_store.save_log(run_key, dict(meas.log))
+                except Exception as e:
+                    failed.append(f"{Path(fp).name}: {e}")
+                    continue
+            updated += 1
+    
+        # Persist the source's own pending edit
+        if self.loaded_file.folder_store is not None:
+            rk = src.metadata.get("run_key")
+            if rk is not None:
+                self.loaded_file.folder_store.save_log(rk, dict(src.log))
+    
+        msg = f"Copied '{key}' to {updated} measurement(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed[:8])
+            if len(failed) > 8:
+                msg += f"\n… and {len(failed) - 8} more"
+        QtWidgets.QMessageBox.information(self, "Copy complete", msg)
+    # -- Add-new-field ------------------------------------------------------
+
+    def _on_add_new_field_focused(self):
+        self._flush_pending_log_commit()
+        name, default = self._read_new_field_spec()
+        if name is None:
+            return
+        if self.current_file_path is None or self.current_meas_index is None:
+            QtWidgets.QMessageBox.information(
+                self, "No active measurement",
+                "Select a measurement first.")
+            return
+        targets = [(self.current_file_path, self.current_meas_index)]
+        self._add_field_to_measurements(name, default, targets)
+
+    def _on_add_new_field_ticked(self):
+        self._flush_pending_log_commit()
+        name, default = self._read_new_field_spec()
+        if name is None:
+            return
+        targets = sorted(self._get_ticked_measurements())
+        if not targets:
+            QtWidgets.QMessageBox.information(
+                self, "No ticked measurements",
+                "Tick at least one measurement first.")
+            return
+        self._add_field_to_measurements(name, default, targets)
+
+    def _read_new_field_spec(self):
+        """Return (name, default_value), or (None, None) on cancel/invalid."""
+        name = self._log_new_field_name.text().strip()
+        if not name:
+            QtWidgets.QMessageBox.warning(
+                self, "Field name required",
+                "Enter a name for the new field.")
+            return (None, None)
+
+        ftype = self._log_new_field_type.currentText()
+        defaults = {"string": None, "bool": False,
+                    "int": None, "float": None}
+        return (name, defaults[ftype])
+
+    def _add_field_to_measurements(self, name, default, targets):
+        """Add or reset `name` = `default` on every target measurement."""
+        ftype = self._log_new_field_type.currentText()
+
+        # Count how many targets we already know have this field so the
+        # confirmation text is honest. Un-loaded targets are loaded below.
+        loaded_with_field = 0
+        for fp, mi in targets:
+            lf = self.loaded_files.get(fp)
+            if lf is not None and mi < len(lf.measurements):
+                if name in lf.measurements[mi].log:
+                    loaded_with_field += 1
+
+        extra = ""
+        if loaded_with_field:
+            extra = (f"\n\nNote: {loaded_with_field} target(s) already "
+                     f"have this field; their values will be reset to the "
+                     f"type's default.")
+        reply = QtWidgets.QMessageBox.question(
+            self, "Add field",
+            f"Add '{name}' ({ftype}) to {len(targets)} measurement(s)?"
+            f"{extra}",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        updated = 0
+        failed: list[str] = []
+        for fp, mi in targets:
+            if getattr(self, "EDIT_DISABLE_MULTILOAD", False):
+                others = [p for p in self.loaded_files.keys() if p != fp]
+                if others:
+                    failed.append(
+                        f"{Path(fp).name} m{mi}: multi-load disabled")
+                    continue
+            if fp not in self.loaded_files:
+                try:
+                    self.loaded_files[fp] = self.registry.load(Path(fp))
+                except Exception as e:
+                    failed.append(f"{Path(fp).name}: load failed — {e}")
+                    continue
+
+            lf = self.loaded_files[fp]
+            if mi >= len(lf.measurements):
+                continue
+            meas = lf.measurements[mi]
+            run_key = meas.metadata.get("run_key")
+
+            new_log = dict(meas.log)
+            new_log[name] = default
+            try:
+                if lf.folder_store is not None and run_key is not None:
+                    ok = lf.folder_store.save_log(run_key, new_log)
+                    if not ok:
+                        failed.append(
+                            f"{Path(fp).name} m{mi}: run not found in pkl")
+                        continue
+                else:
+                    # PalmSens — no folder store, in-memory only
+                    meas.log[name] = default
+                updated += 1
+            except Exception as e:
+                failed.append(f"{Path(fp).name} m{mi}: {e}")
+
+        # Rebuild the active view
+        self._refresh_logbook_tab()
+
+        # Clear the entry, but keep the last type selected (convenience)
+        self._log_new_field_name.clear()
+
+        msg = f"Added '{name}' ({ftype}) to {updated} measurement(s)."
+        if failed:
+            msg += "\n\nFailures:\n" + "\n".join(failed[:10])
+            if len(failed) > 10:
+                msg += f"\n… and {len(failed) - 10} more"
+        QtWidgets.QMessageBox.information(self, "Field added", msg)
+        
+    def _refresh_logbook_indicator(self):
+        """Set the Logbook tab title to indicate unsaved-to-source diff."""
+        if not hasattr(self, "_logbook_tab_index"):
+            return
+
+        folder = (Path(self.current_file_path).parent
+                  if self.current_file_path else None)
+        if folder is None:
+            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
+            return
+
+        source = dit.find_log_file(folder)
+        gui    = dit.find_gui_log_file(folder)
+        if source is None or gui is None:
+            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
+            return
+
+        try:
+            diff = dit.compare_logs(
+                dit.load_log_file(source), dit.load_log_file(gui))
+            count = (len(diff["differing_runs"])
+                     + len(diff["new_runs"])
+                     + len(diff["only_in_gui"]))
+        except Exception:
+            count = 0
+
+        if count == 0:
+            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
+        else:
+            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook ●")
+            self.tab_widget.setTabToolTip(
+                self._logbook_tab_index,
+                f"{count} run(s) differ between _LOGBOOK.json and the "
+                f"GUI copy. Use Advanced → 'Export GUI LOG → source' "
+                f"to promote, or 'Compare & merge LOGs…' to reconcile.")
+
+    def _refresh_logbook_tab(self):
+        # ---------- Active section: comment ----------
+        if self.loaded_file is None or self.current_meas_index is None:
+            self._log_comment.blockSignals(True)
+            self._log_comment.setPlainText("")
+            self._log_comment.blockSignals(False)
+            self._rebuild_log_fields({})
+        else:
+            meas = self.loaded_file.measurements[self.current_meas_index]
+            log = getattr(meas, "log", {}) or {}
+
+            self._log_comment.blockSignals(True)
+            self._log_comment.setPlainText(
+                str(log.get("Comment") or meas.comment or ""))
+            self._log_comment.blockSignals(False)
+
+            self._rebuild_log_fields(log)
+
+        # ---------- Other selected / ticked sections ----------
+        while self._log_other_layout.count() > 1:
+            item = self._log_other_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
         active = (
             (self.current_file_path, self.current_meas_index)
             if self.current_file_path is not None else None
         )
-        combined = self._get_ticked_measurements() | set(self.selected_measurements)
+        combined = (self._get_ticked_measurements()
+                    | set(self.selected_measurements))
         others = sorted(t for t in combined if t != active)
-    
+
         if not others:
             hint = QtWidgets.QLabel("(nothing else ticked or highlighted)")
             hint.setStyleSheet("color: gray; font-style: italic;")
             self._log_other_layout.insertWidget(0, hint)
+            self._refresh_logbook_indicator()
             return
-    
-        readonly_keys = ("Timestamp", "Device", "Subdevice", "RunID", "SMU Order",
-                         "LightMicroscope", "SMU1", "SMU2", "SMU3", "SMU4")
-    
+
+        readonly_keys = ("Timestamp", "Device", "Subdevice", "RunID",
+                         "SMU Order", "LightMicroscope",
+                         "SMU1", "SMU2", "SMU3", "SMU4")
+
         for fp, mi in others:
             lf = self.loaded_files.get(fp)
             if lf is None or mi >= len(lf.measurements):
@@ -1454,87 +2645,200 @@ class MainWindow(QtWidgets.QMainWindow):
             meas = lf.measurements[mi]
             log = getattr(meas, "log", {}) or {}
             title = f"{Path(fp).name}  ::  {meas.title}"
-            section = CollapsibleSection(title, expanded=False)
-    
+            section = CollapsibleSection(
+                title, expanded=getattr(self, "_log_other_expanded", False))
+
             inner = QtWidgets.QFormLayout()
             inner.setContentsMargins(20, 2, 2, 2)
-    
-            cv = QtWidgets.QPlainTextEdit(str(log.get("Comment", meas.comment or "")))
+
+            cv = QtWidgets.QPlainTextEdit(
+                str(log.get("Comment") or meas.comment or ""))
             cv.setReadOnly(True)
             cv.setFixedHeight(50)
             inner.addRow("Comment:", cv)
-    
+
             for k in readonly_keys:
                 v = log.get(k, "")
                 le = QtWidgets.QLineEdit("" if v is None else str(v))
                 le.setReadOnly(True)
                 inner.addRow(f"{k}:", le)
-    
+
             section.set_layout(inner)
             self._log_other_layout.insertWidget(
-                self._log_other_layout.count() - 1, section
-            )
-    
+                self._log_other_layout.count() - 1, section)
+
+        self._refresh_logbook_indicator()
+    def _rebuild_log_fields(self, log: dict):
+        """Clear and rebuild dynamic field widgets from a log dict.
+
+        Always shows Device and Subdevice. All other keys come from the
+        log itself, so user-added fields appear here automatically.
+        """
+        self._log_fields = {}
+        while self._log_form_layout.rowCount() > 0:
+            self._log_form_layout.removeRow(0)
+
+        forced = ["Device", "Subdevice"]
+        ordered = list(forced)
+        for k in log.keys():
+            if k == "Comment":
+                continue
+            if k not in ordered:
+                ordered.append(k)
+
+        for key in ordered:
+            value = log.get(key)
+            widget = self._build_log_field_widget(key, value)
+            self._log_fields[key] = widget
+            wrapped = self._wrap_log_field_with_copy(key, widget)
+            self._log_form_layout.addRow(f"{key}:", wrapped)
+
+    def _build_log_field_widget(self, key, value):
+        """Type-dispatch a log value to the appropriate editor widget."""
+        if isinstance(value, bool):
+            return BoolToggleButton(
+                key, value, self._on_log_value_changed,
+                true_color=dmp.get_rgbhex_color("light green"),
+                false_color=dmp.get_rgbhex_color("light red"))
+        if isinstance(value, int):
+            return TypedLogField(key, value, "int",
+                                 self._on_log_value_changed)
+        if isinstance(value, float):
+            return TypedLogField(key, value, "float",
+                                 self._on_log_value_changed)
+        if isinstance(value, list):
+            if all(isinstance(v, (int, float, str)) for v in value):
+                return EditableListField(
+                    key, value, self._on_log_value_changed)
+            return ReadOnlyLogValue(key, value)
+        if isinstance(value, dict):
+            return ReadOnlyLogValue(key, value)
+        # str or None
+        return TypedLogField(key, value, "str",
+                             self._on_log_value_changed)
     def _on_log_comment_changed(self):
+        """Update in-memory comment; defer disk + plot to the debounce.
+    
+        Empty comment maps to None (not "") — consistent with field
+        handling. Unchanged state is a no-op.
+        """
         if self.loaded_file is None or self.current_meas_index is None:
             return
         meas = self.loaded_file.measurements[self.current_meas_index]
         txt = self._log_comment.toPlainText()
-        meas.comment = txt
-        meas.log["Comment"] = txt
-        self._persist_log_to_pkl()
-        self._refresh_plot()
+        new_val = txt if txt else None
     
-    def _on_log_field_changed(self, key: str):
+        current = meas.log.get("Comment")
+        if current == "":
+            current = None
+        if current == new_val:
+            return
+    
+        meas.comment = new_val
+        meas.log["Comment"] = new_val
+        self._schedule_log_commit(affect_plot=True)
+    
+    def _on_log_value_changed(self, key: str, new_value):
+        """Unified handler for every dynamic field widget.
+    
+        Widgets already do their own type conversion, so new_value is
+        typed (None / bool / int / float / str / list). Empty fields
+        are stored as None (or [] for lists).
+        """
         if self.loaded_file is None or self.current_meas_index is None:
             return
         meas = self.loaded_file.measurements[self.current_meas_index]
-        val = self._log_fields[key].text()
-        # light conversion: keep ints as ints where possible
-        try:
-            if val.strip().lstrip("-").isdigit():
-                val_conv = int(val)
-            elif val.strip().lower() in ("true", "false"):
-                val_conv = val.strip().lower() == "true"
-            else:
-                val_conv = val
-        except Exception:
-            val_conv = val
-        meas.log[key] = val_conv
-        self._persist_log_to_pkl()
+        current = meas.log.get(key)
+        if current == "":
+            current = None
+        if current == new_value:
+            return
+    
+        meas.log[key] = new_value
+        self._schedule_log_commit(affect_plot=False)
     
     def _persist_log_to_pkl(self):
-        """Walk the in-memory device_data tree and rewrite the LOG dict for the
-        active measurement, then dump to pkl."""
-        if self.loaded_file is None or self.loaded_file.device_data is None:
-            return
+        """Persist GUI edits through the folder store.
     
-        run_key = self.loaded_file.measurements[self.current_meas_index].metadata.get("run_key")
+        The store writes to _LOGBOOK_GUI.json (the app-managed working
+        copy), patches the in-memory pkl, refreshes the fingerprint, and
+        mirrors the change into every live LoadedFile. The user's source
+        _LOGBOOK.json is never touched.
+    
+        PalmSens measurements have no folder_store and no log — this is
+        a silent no-op for them, matching the previous behaviour.
+        """
+        if self.loaded_file is None or self.loaded_file.folder_store is None:
+           return
+        if self.current_meas_index is None:
+            return
+ 
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        run_key = meas.metadata.get("run_key")
         if run_key is None:
             return
-    
-        # Find and replace in device_data.
-        target = None
-        for np_k, devs in self.loaded_file.device_data.items():
-            if np_k == "_meta":
-                # _meta is not part of the numports tree; skip it.
-                continue
-            for dev, subs in devs.items():
-                for sub, runs in subs.items():
-                    if run_key in runs:
-                        target = runs[run_key]
-                        break
-                if target is not None:
-                    break
-            if target is not None:
-                break
-    
+ 
+        self.loaded_file.folder_store.save_log(run_key, dict(meas.log))
+        self._refresh_logbook_indicator()
+        
+    def _schedule_log_commit(self, affect_plot: bool = False):
+        """Start (or restart) the debounce timer for a GUI log edit.
+
+        The in-memory meas.log is already updated by the caller — this
+        only defers the disk write and optional plot refresh. Captures
+        the target (file_path, meas_index) so a mid-typing measurement
+        switch cannot commit the wrong run.
+        """
+        if not hasattr(self, "_log_commit_timer"):
+            self._log_commit_timer = QtCore.QTimer(self)
+            self._log_commit_timer.setSingleShot(True)
+            self._log_commit_timer.setInterval(400)
+            self._log_commit_timer.timeout.connect(self._commit_log_edit_now)
+
+        self._pending_log_commit_target = (
+            self.current_file_path, self.current_meas_index)
+        self._pending_log_commit_affects_plot = (
+            getattr(self, "_pending_log_commit_affects_plot", False)
+            or affect_plot)
+        self._log_commit_timer.start()
+
+    def _commit_log_edit_now(self):
+        """Flush the pending log edit to disk and refresh the indicator."""
+        target = getattr(self, "_pending_log_commit_target", None)
+        affect_plot = getattr(self, "_pending_log_commit_affects_plot", False)
+        self._pending_log_commit_target = None
+        self._pending_log_commit_affects_plot = False
+
         if target is None:
             return
-    
-        target["LOG"] = dict(self.loaded_file.measurements[self.current_meas_index].log)
-        self.loaded_file.save()
-    
+        fp, mi = target
+        lf = self.loaded_files.get(fp)
+        if lf is None or lf.folder_store is None:
+            return
+        if mi is None or mi >= len(lf.measurements):
+            return
+
+        meas = lf.measurements[mi]
+        run_key = meas.metadata.get("run_key")
+        if run_key is None:
+            return
+
+        lf.folder_store.save_log(run_key, dict(meas.log))
+        self._refresh_logbook_indicator()
+
+        if (affect_plot
+                and fp == self.current_file_path
+                and mi == self.current_meas_index
+                and self.EDIT_SHOW_COMMENT):
+            self._refresh_plot()
+
+    def _flush_pending_log_commit(self):
+        """Force-commit any pending edit immediately (before a switch
+        or a close). Safe to call when nothing is pending."""
+        if (hasattr(self, "_log_commit_timer")
+                and self._log_commit_timer.isActive()):
+            self._log_commit_timer.stop()
+            self._commit_log_edit_now()
     def _build_classify_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
@@ -2319,8 +3623,31 @@ class MainWindow(QtWidgets.QMainWindow):
             except (ValueError, TypeError):
                 active_fp = active_mi = None
     
+        # Load filter state before the tree is (re)built so the first
+        # rebuild already applies it.
+        filter_state = workspace.get("filter", {}) or {}
+        self._filter_enabled = bool(filter_state.get("enabled", False))
+        self._filter_mode = filter_state.get("mode", "AND")
+        self._filter_conditions = [
+            dict(c) for c in filter_state.get("conditions", [])
+        ]
+        # Sync the toggle button to the restored state
+        if hasattr(self, "filter_enable_btn"):
+            self.filter_enable_btn.blockSignals(True)
+            self.filter_enable_btn.setChecked(self._filter_enabled)
+            self.filter_enable_btn.setText(
+                "Filtering: ON" if self._filter_enabled else "Filtering: OFF")
+            self.filter_enable_btn.blockSignals(False)
+        if hasattr(self, "filter_mode_and"):
+            self.filter_mode_and.blockSignals(True)
+            self.filter_mode_or.blockSignals(True)
+            (self.filter_mode_and if self._filter_mode == "AND"
+             else self.filter_mode_or).setChecked(True)
+            self.filter_mode_and.blockSignals(False)
+            self.filter_mode_or.blockSignals(False)
+        
         saved_focus = workspace.get("current_folder")
-    
+        
         self._rebuild_folder_tree_ui()
     
         # Transiently tick the leaf containing the active measurement
@@ -2517,19 +3844,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebuild_measurements_tree()
 
     def _on_entry_selected(self, item, _column=0):
-        """A click on a measurement row makes it active. Selection set is
-        handled separately in _on_selection_changed (fired by Qt on any change)."""
+        """Click handler for 'click on already-current item' — the case where
+        itemSelectionChanged won't fire. Handles the plain re-click case only.
+        """
         if item is None:
             return
         payload = item.data(0, QtCore.Qt.UserRole)
         if payload is None or payload[0] != "meas":
             return
         _, file_path, file_index, meas_index = payload
+        if (file_path, meas_index) == self.active_measurement:
+            return
         self._set_active_measurement(file_path, file_index, meas_index)
     
     def _on_selection_changed(self):
-        """Qt fires this whenever the highlighted set changes, including for
-        ctrl/shift multi-selects. Update selected list, then replot."""
+        """Qt fires this whenever the highlighted set changes, including
+        ctrl/shift multi-selects and arrow-key navigation. Update the
+        selection list, promote the newest addition to 'active', then replot.
+    
+        'Active' is driven by QTreeWidget.currentItem() — the cursor that
+        moves on every arrow key, shift-extension, and click. This makes
+        arrow-down, shift+arrow-down, shift+click, and ctrl+click all
+        promote the newly-touched measurement to active, so the Logbook tab
+        and Curves tab follow the user's focus without extra clicks.
+        """
         sel = []
         for item in self.file_list.selectedItems():
             payload = item.data(0, QtCore.Qt.UserRole)
@@ -2538,11 +3876,33 @@ class MainWindow(QtWidgets.QMainWindow):
             _, file_path, _, meas_index = payload
             sel.append((file_path, meas_index))
         self.selected_measurements = sel
+    
+        # ── Candidate for active = Qt's currentItem, if it's a selected
+        #    measurement. Falls through if current is deselected (ctrl+click
+        #    removal) or a non-measurement row.
+        candidate = None
+        current = self.file_list.currentItem()
+        if current is not None and current.isSelected():
+            payload = current.data(0, QtCore.Qt.UserRole)
+            if payload is not None and payload[0] == "meas":
+                _, fp, _, mi = payload
+                candidate = (fp, mi)
+    
+        if candidate is not None and candidate != self.active_measurement:
+            self._set_active_measurement(candidate[0], 0, candidate[1])
+            if self.active_measurement == candidate:
+                return  # _set_active_measurement already refreshed
+    
+        # Fallback: no active yet (first ever selection after load)
         if self.active_measurement is None and sel:
             fp, mi = sel[-1]
             self._set_active_measurement(fp, 0, mi)
-            return
-        self._refresh_curves_tab()     # ← new: reflect selection
+            if self.active_measurement == (fp, mi):
+                return
+    
+        # Fallback: refresh using whatever state we have (also covers
+        # _set_active_measurement failure, e.g. file load error).
+        self._refresh_curves_tab()
         self._refresh_logbook_tab()
         self._refresh_plot()
     
@@ -2599,6 +3959,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_active_measurement(self, file_path: str, file_index: int, meas_index: int):
         """Set the one measurement that tabs/logbook/curves operate on and that
         fits are performed against. Loads file if not cached."""
+        # Flush any in-flight log edit before we swap targets, so the
+        # debounce timer can't commit the wrong run.
+        self._flush_pending_log_commit()
+
         if getattr(self, "EDIT_DISABLE_MULTILOAD", False):
             others = [p for p in self.loaded_files.keys() if p != file_path]
             if others:
@@ -2775,6 +4139,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
             self.file_list.expandAll()
             self.file_list.blockSignals(False)
+            self._apply_filter_to_tree()
             self._refresh_curves_tab()
             self._refresh_logbook_tab()
             self._refresh_problems_tab()
@@ -2844,6 +4209,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.file_list.expandAll()
         self.file_list.blockSignals(False)
+        self._apply_filter_to_tree()
         self._refresh_curves_tab()
         self._refresh_logbook_tab()
         self._refresh_problems_tab()
@@ -2949,6 +4315,15 @@ class MainWindow(QtWidgets.QMainWindow):
             "ticked_measurements": [list(t) for t in sorted(ticked)],
             "active_measurement": active,
             "current_folder": current_folder,
+            "filter": {
+                "enabled": self._filter_enabled,
+                "mode": self._filter_mode,
+                "conditions": [
+                    {k: v for k, v in c.items()
+                     if not str(k).startswith("_")}
+                    for c in self._filter_conditions
+                ],
+            },
         })
     
     # -- classify tab: root selector --------------------------------------
@@ -3935,9 +5310,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot()
         
     def closeEvent(self, event):
-        """Save session when closing the window"""
+        """Save session when closing the window."""
+        self._flush_pending_log_commit()
         self._save_session_parameters()
-        event.accept()    
+        event.accept()  
         
     def _apply_figsize(self, comment: bool):
         # Skip if in Real Size mode so that the preview for the saved figure can be seen
@@ -4133,7 +5509,7 @@ class MainWindow(QtWidgets.QMainWindow):
         y_fit = np.array(y_fit)[sort]
     
         try:
-            from scipy.optimize import curve_fit
+          
             def decay(x, A, tau, C, m):
                 return A * np.exp(-x / tau) + C + m * x
             C_est = np.min(y_fit)
@@ -4438,7 +5814,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         xf, yf = self._collect_fit_points(x, y, span_ranges, anchor_points)
                         if len(xf) >= 4:
                             try:
-                                from scipy.interpolate import splrep, splev
                                 si = np.argsort(xf)
                                 xf, yf = np.array(xf)[si], np.array(yf)[si]
                                 sm = self.current_state.spline_smoothing or None
@@ -5487,7 +6862,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas.draw()
 
 def get_rcparam_defaults():
-    import platform
     fontfamily = "Arial" if platform.system() == "Windows" else "Liberation Sans"
     titlefont = 15.0
     bigfont = 14.0

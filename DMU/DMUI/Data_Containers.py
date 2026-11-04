@@ -3,21 +3,22 @@ Data containers and file-loading logic for DMUI.
 """
 from dataclasses import dataclass, field
 from typing import Protocol, Optional, Any
+import json
+import shutil
 import numpy as np
 import re
 from pathlib import Path
 
-#Local Packages:
 try:
     from .Plotting_Tools import *
     from ..data_import_tools import (
         Keithley_xls_read_file, build_device_data, save_device_data,
-        find_log_file)
+        find_log_file, find_gui_log_file, gui_log_path, _log_fingerprint)
 except ImportError:
     from DMU.DMUI.Plotting_Tools import *
     from DMU.data_import_tools import (
         Keithley_xls_read_file, build_device_data, save_device_data,
-        find_log_file)
+        find_log_file, find_gui_log_file, gui_log_path, _log_fingerprint)
     
 
 """
@@ -197,21 +198,21 @@ class FolderStore:
             })
     def _check_folder_state(self) -> None:
         """Walk the loaded pkl and flag data-quality problems.
-
+    
         Runs after every successful build (including cached-pkl loads).
         Does not re-parse any XLS file — just iterates the in-memory dict.
         """
         folder    = self.folder
-        log_path  = find_log_file(folder)
+        log_path  = find_gui_log_file(folder) or find_log_file(folder)
         xls_files = [f for f in folder.glob("*.xls")
                      if "LOG" not in f.stem.upper()]
         data      = self._data or {}
-
+    
         no_log_comment: list[str] = []
         no_device:      list[str] = []
         no_subdevice:   list[str] = []
         total = 0
-
+    
         for np_key, devs in data.items():
             if np_key == "_meta":
                 continue
@@ -226,12 +227,12 @@ class FolderStore:
                             no_device.append(run_key)
                         if not log.get("Subdevice"):
                             no_subdevice.append(run_key)
-
+    
         if total == 0:
             return
-
+    
         existing = {p.get("category") for p in self.problems}
-
+    
         def _add(sev, cat, msg):
             if cat in existing:
                 return
@@ -246,18 +247,18 @@ class FolderStore:
                 "column":   None,
             })
             existing.add(cat)
-
+    
         def _fmt(runs):
             ordered = sorted(runs)
             if len(ordered) <= 6:
                 return ", ".join(ordered)
             return f"{', '.join(ordered[:6])}, … ({len(ordered)} total)"
-
+    
         if log_path is None and xls_files:
             _add("warning", "missing_log",
                  f"No LOG file in folder ({len(xls_files)} data file(s)). "
                  f"Runs will show Comment='NO LOG'.")
-
+    
         if no_log_comment:
             if len(no_log_comment) == total:
                 msg = (f"All {total} run(s) have Comment='NO LOG' — no "
@@ -268,13 +269,13 @@ class FolderStore:
                 msg = (f"{len(no_log_comment)}/{total} run(s) have no log "
                        f"entry (Comment='NO LOG'): {_fmt(no_log_comment)}")
             _add("warning", "no_log_entry", msg)
-
+    
         if no_device:
             _add("warning", "no_device",
                  f"{len(no_device)}/{total} run(s) have no Device name in "
                  f"their logbook entry (fell back to folder name): "
                  f"{_fmt(no_device)}")
-
+    
         if no_subdevice:
             _add("warning", "no_subdevice",
                  f"{len(no_subdevice)}/{total} run(s) have no Subdevice "
@@ -407,28 +408,82 @@ class FolderStore:
         return lf
 
     def save_log(self, run_key: str, log: dict) -> bool:
-        """
-        Persist `log` for `run_key` into device_data and the pkl, and
-        mirror the change into any live LoadedFile holding that run.
-        Returns True if the run was found.
+        """Persist a GUI edit.
+
+        Writes the run's log entry to _LOGBOOK_GUI.json (the app-managed
+        working copy; never the user's source file), patches the pkl
+        in place, refreshes the fingerprint, and mirrors the change into
+        any live LoadedFile holding that run.
+
+        Returns True if the run was found in the pkl.
         """
         self._ensure()
-        for _np, _dev, _sub, rk, run_data in self._iter_runs():
-            if rk != run_key:
-                continue
-            log_copy = dict(log)
-            run_data["LOG"] = log_copy
-            save_device_data(self.folder, self._data)
 
-            # Mirror into live LoadedFiles so callers holding a
-            # Measurement reference see the update without reloading.
-            for lf in self._loaded_files.values():
-                for meas in lf.measurements:
-                    if meas.metadata.get("run_key") == run_key:
-                        meas.log = dict(log_copy)
-                        meas.comment = log_copy.get("Comment", "")
-            return True
-        return False
+        # ── Locate the run in the pkl — its bucket tells us where to
+        #    write the entry in the GUI file.
+        coords = None
+        for _np, _dev, _sub, rk, _rd in self._iter_runs():
+            if rk == run_key:
+                coords = (str(_np), _dev, _sub)
+                break
+        if coords is None:
+            return False
+        np_key, dev, sub = coords
+
+        log_copy = dict(log)
+        log_copy.setdefault("Device",    dev)
+        log_copy.setdefault("Subdevice", sub)
+        log_copy.setdefault("RunID",     run_key)
+
+        # ── 1. Write to the GUI working copy. ─────────────────────────
+        gui_path = find_gui_log_file(self.folder)
+        if gui_path is None:
+            source = find_log_file(self.folder)
+            gui_path = (gui_log_path(source) if source is not None
+                        else self.folder / "_LOGBOOK_GUI.json")
+
+        try:
+            if gui_path.exists():
+                with open(gui_path, encoding="utf-8-sig") as f:
+                    gui_data = json.load(f)
+            else:
+                gui_data = {}
+
+            # Wholesale replace: remove from wherever it currently
+            # lives, then insert at the pkl's current bucket. This
+            # handles Device/Subdevice renames cleanly (old location
+            # removed, new one created).
+            _remove_run_from_log_tree(gui_data, run_key)
+            (gui_data.setdefault(np_key, {})
+                     .setdefault(dev, {})
+                     .setdefault(sub, {})[run_key]) = log_copy
+
+            with open(gui_path, "w", encoding="utf-8") as f:
+                json.dump(gui_data, f, indent=2,
+                          ensure_ascii=False, default=str)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        # ── 2. Patch the in-memory pkl. ───────────────────────────────
+        for _np, _dev, _sub, rk, run_data in self._iter_runs():
+            if rk == run_key:
+                run_data["LOG"] = dict(log_copy)
+                break
+
+        # ── 3. Refresh the fingerprint so the next load reuses this
+        #       pkl (GUI mtime now matches what we just wrote). ───────
+        self._data.setdefault("_meta", {})
+        self._data["_meta"]["log_fingerprint"] = _log_fingerprint(self.folder)
+        save_device_data(self.folder, self._data)
+
+        # ── 4. Mirror into live LoadedFiles. ──────────────────────────
+        for lf in self._loaded_files.values():
+            for meas in lf.measurements:
+                if meas.metadata.get("run_key") == run_key:
+                    meas.log = dict(log_copy)
+                    meas.comment = log_copy.get("Comment", "")
+
+        return True
 
     def reload(self, force=False, compare=False, overwrite_existing=True) -> None:
         """
@@ -449,7 +504,21 @@ class FolderStore:
     def invalidate_file(self, path: Path) -> None:
         """Drop one file's cached LoadedFile (rarely needed)."""
         self._loaded_files.pop(Path(path).resolve(), None)
-            
+
+def _remove_run_from_log_tree(obj, run_key: str) -> bool:
+    """Recursively remove any occurrence of run_key from a nested
+    log dict (numports → device → subdevice → run → info). Returns
+    True if it was found and removed."""
+    if isinstance(obj, dict):
+        if run_key in obj:
+            del obj[run_key]
+            return True
+        for v in list(obj.values()):
+            if _remove_run_from_log_tree(v, run_key):
+                return True
+    return False   
+
+         
 """
 ################################################################### 
 ###         DATA HANDLING, LOADING, AND CATEGORISATION            #

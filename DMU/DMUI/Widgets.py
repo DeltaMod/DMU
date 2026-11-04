@@ -499,3 +499,153 @@ class CollapsibleSection(QtWidgets.QWidget):
     def set_expanded(self, expanded):
         self.toggle_btn.setChecked(expanded)
                 
+class BoolToggleButton(QtWidgets.QPushButton):
+    """Checkable button that renders True/False with configurable colours.
+
+    Used for bool log fields (SMU in/out, LightMicroscope, user-added flags).
+    on_change(key, new_value) is invoked on click only — not on
+    programmatic set_value().
+    """
+
+    def __init__(self, key, value, on_change,
+                 true_color="#a1d99bff", false_color="#d6616bff",
+                 parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._on_change = on_change
+        self._true_color = true_color
+        self._false_color = false_color
+        self.setCheckable(True)
+        self.setChecked(bool(value))
+        self._update_style()
+        self.clicked.connect(lambda *_: self._handle_click())
+
+    def _handle_click(self):
+        self._update_style()
+        if self._on_change is not None:
+            self._on_change(self.key, bool(self.isChecked()))
+
+    def _update_style(self):
+        color = self._true_color if self.isChecked() else self._false_color
+        self.setText("True" if self.isChecked() else "False")
+        self.setStyleSheet(
+            f"QPushButton {{ background-color: {color}; "
+            f"border: 1px solid #888; padding: 3px 10px; "
+            f"border-radius: 3px; min-width: 60px; }}"
+        )
+
+    def set_value(self, val):
+        self.blockSignals(True)
+        self.setChecked(bool(val))
+        self._update_style()
+        self.blockSignals(False)
+
+    def get_value(self):
+        return bool(self.isChecked())
+
+
+class TypedLogField(QtWidgets.QLineEdit):
+    """QLineEdit for str/int/float log values. Empty text → None."""
+
+    def __init__(self, key, value, vtype, on_change, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.vtype = vtype
+        self._on_change = on_change
+
+        if vtype == "int":
+            self.setValidator(QtGui.QIntValidator())
+        elif vtype == "float":
+            v = QtGui.QDoubleValidator()
+            v.setNotation(QtGui.QDoubleValidator.StandardNotation)
+            self.setValidator(v)
+
+        self.set_value(value)
+        self.editingFinished.connect(self._handle_finished)
+
+    def set_value(self, val):
+        self.blockSignals(True)
+        self.setText("" if val is None else str(val))
+        self.blockSignals(False)
+
+    def get_value(self):
+        txt = self.text().strip()
+        if txt == "":
+            return None
+        if self.vtype == "int":
+            try:
+                return int(txt)
+            except ValueError:
+                return None
+        if self.vtype == "float":
+            try:
+                return float(txt)
+            except ValueError:
+                return None
+        return txt
+
+    def _handle_finished(self):
+        if self._on_change is not None:
+            self._on_change(self.key, self.get_value())
+
+
+class EditableListField(QtWidgets.QLineEdit):
+    """Comma-separated editor for list-of-scalars log values."""
+
+    def __init__(self, key, value, on_change, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._on_change = on_change
+        self._value = value if isinstance(value, list) else []
+        self.set_value(self._value)
+        self.editingFinished.connect(self._handle_finished)
+
+    def set_value(self, val):
+        self._value = val if isinstance(val, list) else []
+        self.blockSignals(True)
+        self.setText(", ".join(str(v) for v in self._value))
+        self.blockSignals(False)
+
+    def get_value(self):
+        txt = self.text().strip()
+        if txt == "":
+            return []
+        out = []
+        for part in txt.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            try:
+                out.append(int(p))
+            except ValueError:
+                try:
+                    out.append(float(p))
+                except ValueError:
+                    out.append(p)
+        return out
+
+    def _handle_finished(self):
+        if self._on_change is not None:
+            self._on_change(self.key, self.get_value())
+
+
+class ReadOnlyLogValue(QtWidgets.QLabel):
+    """Read-only JSON display for dict / nested-list log values."""
+
+    def __init__(self, key, value, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._value = value
+        import json
+        try:
+            txt = json.dumps(value, default=str)
+        except Exception:
+            txt = str(value)
+        self.setText(txt)
+        self.setStyleSheet("color: #555; font-style: italic; padding: 2px;")
+
+    def get_value(self):
+        return self._value
+
+    def set_value(self, val):
+        self._value = val

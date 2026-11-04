@@ -41,7 +41,7 @@ logger = get_custom_logger("DMU_PLOTUTILS")
 from . utils_utils import *
     
 
-    
+#%%    
 class CustomFormatter(logging.Formatter):
 
     magenta  = "\033[1;35m"
