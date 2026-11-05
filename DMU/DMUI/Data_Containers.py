@@ -197,90 +197,67 @@ class FolderStore:
                 "column":   getattr(exc, "colno",  None),
             })
     def _check_folder_state(self) -> None:
-        """Walk the loaded pkl and flag data-quality problems.
-    
-        Runs after every successful build (including cached-pkl loads).
-        Does not re-parse any XLS file — just iterates the in-memory dict.
-        """
-        folder    = self.folder
-        log_path  = find_gui_log_file(folder) or find_log_file(folder)
+        folder = self.folder
+        log_path = find_gui_log_file(folder) or find_log_file(folder)
         xls_files = [f for f in folder.glob("*.xls")
                      if "LOG" not in f.stem.upper()]
-        data      = self._data or {}
-    
+        data = self._data or {}
+
         no_log_comment: list[str] = []
-        no_device:      list[str] = []
-        no_subdevice:   list[str] = []
+        no_device: list[str] = []
+        no_subdevice: list[str] = []
         total = 0
-    
-        for np_key, devs in data.items():
-            if np_key == "_meta":
-                continue
-            for dev, subs in devs.items():
-                for sub, runs in subs.items():
-                    for run_key, run_data in runs.items():
-                        total += 1
-                        log = run_data.get("LOG") or {}
-                        if log.get("Comment") == "NO LOG":
-                            no_log_comment.append(run_key)
-                        if not log.get("Device"):
-                            no_device.append(run_key)
-                        if not log.get("Subdevice"):
-                            no_subdevice.append(run_key)
-    
+
+        for _fname, run_key, run_data in self._iter_runs():
+            total += 1
+            log = run_data.get("LOG") or {}
+            if log.get("Comment") == "NO LOG":
+                no_log_comment.append(run_key)
+            if not log.get("Device"):
+                no_device.append(run_key)
+            if not log.get("Subdevice"):
+                no_subdevice.append(run_key)
+
         if total == 0:
             return
-    
+
         existing = {p.get("category") for p in self.problems}
-    
+
         def _add(sev, cat, msg):
             if cat in existing:
                 return
             self.problems.append({
                 "severity": sev,
                 "category": cat,
-                "folder":   str(folder.resolve()),
-                "path":     str(log_path) if log_path else None,
-                "run":      None,
-                "message":  msg,
-                "line":     None,
-                "column":   None,
+                "folder": str(folder.resolve()),
+                "path": str(log_path) if log_path else None,
+                "run": None,
+                "message": msg,
+                "line": None,
+                "column": None,
             })
             existing.add(cat)
-    
+
         def _fmt(runs):
             ordered = sorted(runs)
             if len(ordered) <= 6:
                 return ", ".join(ordered)
             return f"{', '.join(ordered[:6])}, … ({len(ordered)} total)"
-    
+
         if log_path is None and xls_files:
             _add("warning", "missing_log",
-                 f"No LOG file in folder ({len(xls_files)} data file(s)). "
-                 f"Runs will show Comment='NO LOG'.")
-    
+                 f"No LOG file in folder ({len(xls_files)} data file(s)).")
+
         if no_log_comment:
-            if len(no_log_comment) == total:
-                msg = (f"All {total} run(s) have Comment='NO LOG' — no "
-                       f"logbook entries were matched. Likely the pkl "
-                       f"was built without a log, or the log doesn't "
-                       f"match. Force rebuild after fixing the log.")
-            else:
-                msg = (f"{len(no_log_comment)}/{total} run(s) have no log "
-                       f"entry (Comment='NO LOG'): {_fmt(no_log_comment)}")
-            _add("warning", "no_log_entry", msg)
-    
+            _add("warning", "no_log_entry",
+                 f"{len(no_log_comment)}/{total} run(s) have Comment='NO LOG': "
+                 f"{_fmt(no_log_comment)}")
         if no_device:
             _add("warning", "no_device",
-                 f"{len(no_device)}/{total} run(s) have no Device name in "
-                 f"their logbook entry (fell back to folder name): "
-                 f"{_fmt(no_device)}")
-    
+                 f"{len(no_device)}/{total} run(s) have no Device.")
         if no_subdevice:
             _add("warning", "no_subdevice",
-                 f"{len(no_subdevice)}/{total} run(s) have no Subdevice "
-                 f"name in their logbook entry (fell back to 'SD0'): "
-                 f"{_fmt(no_subdevice)}")
+                 f"{len(no_subdevice)}/{total} run(s) have no Subdevice.")
     @property
     def error(self) -> Optional[str]:
         return self._error
@@ -294,89 +271,72 @@ class FolderStore:
     # -- iteration ----------------------------------------------------------
 
     def _iter_runs(self):
-        """Yield (numports, device, subdevice, run_key, run_data) in
-        globally numeric run order.
+        """Yield (filename, run_key, run_data).
 
-        Sorts ascending by the numeric part of each run key, across ALL
-        (device, subdevice) buckets. Sorting per-bucket is not enough:
-        a single XLS can contain runs from multiple subdevices (e.g.
-        Run84-97 in r1c1 and Run98-103 in r1c2), and the pkl's bucket
-        iteration order depends on XLS sheet insertion order — which is
-        often descending (Run133 first, Run84 last). Global sort gives a
-        stable, human-friendly order regardless of bucket layout.
-
-        Non-numeric run keys (rare) sort to the end, alphabetically.
+        Files are sorted alphabetically; within each file, runs are
+        sorted by the numeric portion of the run key. Two files sharing
+        Run42 are distinct entries because filename is the outer key.
         """
         assert self._data is not None
 
-        def _key(row):
-            run_key = str(row[3])
-            m = re.search(r"(\d+)", run_key)
+        def _run_sort_key(run_key):
+            s = str(run_key)
+            m = re.search(r"(\d+)", s)
             if m:
-                return (0, int(m.group(1)), run_key)
-            return (1, 0, run_key)
+                return (0, int(m.group(1)), s)
+            return (1, 0, s)
 
-        rows = []
-        for np_key, devices in self._data.items():
-            if np_key == "_meta" or not isinstance(devices, dict):
+        for fname in sorted(self._data.keys()):
+            if fname == "_meta" or not isinstance(self._data[fname], dict):
                 continue
-            for dev, subs in devices.items():
-                for sub, runs in subs.items():
-                    for run_key, run_data in runs.items():
-                        rows.append((np_key, dev, sub, run_key, run_data))
-
-        rows.sort(key=_key)
-        yield from rows
+            runs = self._data[fname]
+            for run_key in sorted(runs.keys(), key=_run_sort_key):
+                run_data = runs[run_key]
+                if not isinstance(run_data, dict):
+                    continue
+                yield (fname, run_key, run_data)
 
     # -- public API ---------------------------------------------------------
-    def peek_classified(self, file_name: str):
-        """Return [(id, title, device, subdevice), …] per run.
-    
-        `device` / `subdevice` come from the run's log entry — None if the
-        pkl was built without a log (fallback logs don't set Device /
-        Subdevice). The caller decides how to substitute those.
-        """
-        try:
-            self._ensure()
-        except Exception:
-            return []
-        out: list[tuple[int, str, Optional[str], Optional[str]]] = []
-        i = 0
-        for _np, _dev, _sub, run_key, run_data in self._iter_runs():
-            if run_data.get("filename") != file_name:
-                continue
-            title = (run_data.get("Settings") or {}).get("Test Name", "")
-            log = run_data.get("LOG") or {}
-            out.append((
-                i,
-                f"{run_key}: {title}".strip(": "),
-                log.get("Device"),
-                log.get("Subdevice"),
-            ))
-            i += 1
-        return out
     def peek(self, file_name: str) -> list[tuple[int, str]]:
-        """
-        Cheap listing: (measurement_id, title) for each run in this file.
-        Does not extract curves. Returns [] on a load failure so that
-        callers populating a tree can degrade gracefully.
-        """
+        """Cheap listing: (measurement_id, title) for each run in a file."""
         try:
             self._ensure()
         except Exception:
             return []
         out: list[tuple[int, str]] = []
         i = 0
-        for _np, _dev, _sub, run_key, run_data in self._iter_runs():
-            if run_data.get("filename") != file_name:
+        for fname, run_key, run_data in self._iter_runs():
+            if fname != file_name:
                 continue
             title = (run_data.get("Settings") or {}).get("Test Name", "")
             out.append((i, f"{run_key}: {title}".strip(": ")))
             i += 1
         return out
+    
+    def peek_classified(self, file_name: str):  
+        """Return [(id, title, device, subdevice), …] per run."""
+        try:
+            self._ensure()
+        except Exception:
+            return []
+        out: list[tuple[int, str, Optional[str], Optional[str]]] = []
+        i = 0
+        for fname, run_key, run_data in self._iter_runs():
+            if fname != file_name:
+                continue
+            title = (run_data.get("Settings") or {}).get("Test Name", "")
+            log = run_data.get("LOG") or {}
+            out.append((
+                i,
+                f"{run_key}: {title}".strip(": "),
+                log.get("Device") or "Unlabelled",
+                log.get("Subdevice") or "SD0",
+            ))
+            i += 1
+        return out
+    
 
     def load_file(self, path: Path) -> LoadedFile:
-        """Return the (cached) LoadedFile for this file, backed by self._data."""
         path = Path(path).resolve()
         if path in self._loaded_files:
             return self._loaded_files[path]
@@ -386,11 +346,14 @@ class FolderStore:
         measurements: list[Measurement] = []
         first_dev = first_sub = None
         i = 0
-        for _np, dev, sub, run_key, run_data in self._iter_runs():
-            if run_data.get("filename") != file_name:
+
+        for fname, run_key, run_data in self._iter_runs():
+            if fname != file_name:
                 continue
             if first_dev is None:
-                first_dev, first_sub = dev, sub
+                log = run_data.get("LOG") or {}
+                first_dev = log.get("Device")
+                first_sub = log.get("Subdevice")
             measurements.append(self._build_measurement(i, run_key, run_data))
             i += 1
 
@@ -398,7 +361,7 @@ class FolderStore:
             path=path,
             source_type=self.source_type,
             measurements=measurements,
-            device_data=self._data,    # reference, not copy — single truth
+            device_data=self._data,
             pkl_path=self.pkl_path,
             group=first_dev,
             subdevice=first_sub,
@@ -407,35 +370,29 @@ class FolderStore:
         self._loaded_files[path] = lf
         return lf
 
-    def save_log(self, run_key: str, log: dict) -> bool:
-        """Persist a GUI edit.
+    def save_log(self, filename: str, run_key: str, log: dict) -> bool:
+        """Persist a GUI edit to _LOGBOOK_GUI.json (canonical form).
 
-        Writes the run's log entry to _LOGBOOK_GUI.json (the app-managed
-        working copy; never the user's source file), patches the pkl
-        in place, refreshes the fingerprint, and mirrors the change into
-        any live LoadedFile holding that run.
-
-        Returns True if the run was found in the pkl.
+        Writes filename -> run -> info. The in-memory pkl node is
+        updated, the fingerprint refreshed, and every live LoadedFile
+        mirror updated so callers holding a Measurement reference see
+        the change immediately.
         """
         self._ensure()
 
-        # ── Locate the run in the pkl — its bucket tells us where to
-        #    write the entry in the GUI file.
-        coords = None
-        for _np, _dev, _sub, rk, _rd in self._iter_runs():
-            if rk == run_key:
-                coords = (str(_np), _dev, _sub)
+        node = None
+        for fname, rk, run_data in self._iter_runs():
+            if fname == filename and rk == run_key:
+                node = run_data
                 break
-        if coords is None:
+        if node is None:
             return False
-        np_key, dev, sub = coords
 
         log_copy = dict(log)
-        log_copy.setdefault("Device",    dev)
-        log_copy.setdefault("Subdevice", sub)
-        log_copy.setdefault("RunID",     run_key)
+        log_copy.setdefault("Device", "Unlabelled")
+        log_copy.setdefault("Subdevice", "SD0")
+        log_copy.setdefault("RunID", run_key)
 
-        # ── 1. Write to the GUI working copy. ─────────────────────────
         gui_path = find_gui_log_file(self.folder)
         if gui_path is None:
             source = find_log_file(self.folder)
@@ -448,36 +405,24 @@ class FolderStore:
                     gui_data = json.load(f)
             else:
                 gui_data = {}
-
-            # Wholesale replace: remove from wherever it currently
-            # lives, then insert at the pkl's current bucket. This
-            # handles Device/Subdevice renames cleanly (old location
-            # removed, new one created).
-            _remove_run_from_log_tree(gui_data, run_key)
-            (gui_data.setdefault(np_key, {})
-                     .setdefault(dev, {})
-                     .setdefault(sub, {})[run_key]) = log_copy
-
+            gui_data.setdefault(filename, {})[run_key] = log_copy
+            gui_data.setdefault("_meta", {"structure_version": 2})
             with open(gui_path, "w", encoding="utf-8") as f:
                 json.dump(gui_data, f, indent=2,
                           ensure_ascii=False, default=str)
         except (OSError, json.JSONDecodeError):
             return False
 
-        # ── 2. Patch the in-memory pkl. ───────────────────────────────
-        for _np, _dev, _sub, rk, run_data in self._iter_runs():
-            if rk == run_key:
-                run_data["LOG"] = dict(log_copy)
-                break
+        node["LOG"] = dict(log_copy)
 
-        # ── 3. Refresh the fingerprint so the next load reuses this
-        #       pkl (GUI mtime now matches what we just wrote). ───────
         self._data.setdefault("_meta", {})
         self._data["_meta"]["log_fingerprint"] = _log_fingerprint(self.folder)
+        self._data["_meta"]["structure_version"] = 2
         save_device_data(self.folder, self._data)
 
-        # ── 4. Mirror into live LoadedFiles. ──────────────────────────
         for lf in self._loaded_files.values():
+            if Path(lf.path).name != filename:
+                continue
             for meas in lf.measurements:
                 if meas.metadata.get("run_key") == run_key:
                     meas.log = dict(log_copy)

@@ -449,6 +449,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._filter_conditions: list[dict] = []           # [{field, operator, value, enabled}, …]
         self._filter_field_types: dict[str, set] = {}      # field_name -> {type names seen}
         self._filter_tab_index: Optional[int] = None
+        # Per-folder log cache for pkl fallback (see _get_log_for_run).
+        # Populated lazily; cleared on tree rebuild.
+        self._filter_log_cache: dict[str, dict] = {}
         
         # --- multi-selection model ---
         # Every highlighted measurement (file_path, meas_index), in click order.
@@ -2321,15 +2324,83 @@ class MainWindow(QtWidgets.QMainWindow):
         active = [c for c in self._filter_conditions if c.get("enabled", True)]
         if not active:
             return True
-   
+    
         _, fp, _, mi = payload
-        lf = self.loaded_files.get(fp)
-        if lf is None or mi >= len(lf.measurements):
-            return True  # can't evaluate → don't hide
-   
-        log = lf.measurements[mi].log or {}
+        log = self._get_log_for_run(fp, mi)
+        if log is None:
+            return True  # neither loaded nor in pkl — cannot evaluate
+    
         results = [self._evaluate_filter_condition(c, log) for c in active]
         return all(results) if self._filter_mode == "AND" else any(results)
+    
+    def _get_log_for_run(self, fp, mi):
+        """Return a run's log dict, preferring in-memory over pkl.
+    
+        In-memory `loaded_files` reflects any edits the user has made
+        this session (including unflushed ones), so it's always the
+        freshest source. For unloaded files, fall back to the folder's
+        pkl — its `LOG` entries are updated on every flush.
+    
+        Returns None if the run cannot be resolved at all.
+        """
+        lf = self.loaded_files.get(fp)
+        if lf is not None and 0 <= mi < len(lf.measurements):
+            return lf.measurements[mi].log or {}
+    
+        folder = Path(fp).parent
+        folder_key = str(folder.resolve())
+        if folder_key not in self._filter_log_cache:
+            self._filter_log_cache[folder_key] = self._load_folder_logs(folder)
+        return self._filter_log_cache[folder_key].get(
+            (str(Path(fp).resolve()), mi))
+    
+    def _load_folder_logs(self, folder: Path) -> dict:
+        """Read one folder's pkl and return {(abs_fp_str, meas_index): log}.
+    
+        Ordering matches FolderStore._iter_runs: runs grouped per file,
+        sorted by numeric portion of the run key. `meas_index` here is
+        therefore the same integer used in the tree payloads.
+        """
+        import pickle
+        import re
+    
+        result: dict[tuple[str, int], dict] = {}
+        pkl = folder / f".dmui_{folder.name}.pkl"
+        if not pkl.exists():
+            return result
+        try:
+            with open(pkl, "rb") as f:
+                data = pickle.load(f)
+        except Exception:
+            return result
+    
+        # Group runs by filename
+        by_file: dict[str, list] = {}
+        for np_key, devs in data.items():
+            if np_key == "_meta" or not isinstance(devs, dict):
+                continue
+            for dev, subs in devs.items():
+                for sub, runs in subs.items():
+                    for run_key, run_data in runs.items():
+                        fname = run_data.get("filename")
+                        if fname:
+                            by_file.setdefault(fname, []).append(
+                                (run_key, run_data))
+    
+        def _sort_key(row):
+            run_key = str(row[0])
+            m = re.search(r"(\d+)", run_key)
+            if m:
+                return (0, int(m.group(1)), run_key)
+            return (1, 0, run_key)
+    
+        for fname, runs in by_file.items():
+            runs.sort(key=_sort_key)
+            fp_str = str((folder / fname).resolve())
+            for mi, (_run_key, run_data) in enumerate(runs):
+                result[(fp_str, mi)] = run_data.get("LOG") or {}
+    
+        return result
    
     def _update_filter_status(self):
         if not hasattr(self, "_filter_status_label"):
@@ -2758,27 +2829,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._schedule_log_commit(affect_plot=False)
     
     def _persist_log_to_pkl(self):
-        """Persist GUI edits through the folder store.
-    
-        The store writes to _LOGBOOK_GUI.json (the app-managed working
-        copy), patches the in-memory pkl, refreshes the fingerprint, and
-        mirrors the change into every live LoadedFile. The user's source
-        _LOGBOOK.json is never touched.
-    
-        PalmSens measurements have no folder_store and no log — this is
-        a silent no-op for them, matching the previous behaviour.
-        """
+        """Persist GUI edits through the folder store."""
         if self.loaded_file is None or self.loaded_file.folder_store is None:
-           return
+            return
         if self.current_meas_index is None:
             return
- 
+    
         meas = self.loaded_file.measurements[self.current_meas_index]
         run_key = meas.metadata.get("run_key")
         if run_key is None:
             return
- 
-        self.loaded_file.folder_store.save_log(run_key, dict(meas.log))
+    
+        filename = Path(self.current_file_path).name
+        self.loaded_file.folder_store.save_log(
+            filename, run_key, dict(meas.log))
         self._refresh_logbook_indicator()
         
     def _schedule_log_commit(self, affect_plot: bool = False):
@@ -2823,7 +2887,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if run_key is None:
             return
 
-        lf.folder_store.save_log(run_key, dict(meas.log))
+        filename = Path(fp).name
+        lf.folder_store.save_log(filename, run_key, dict(meas.log))
         self._refresh_logbook_indicator()
 
         if (affect_plot
@@ -4050,6 +4115,11 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _rebuild_measurements_tree(self):
         """Populate self.file_list from every ticked folder."""
+        # Pkl may have been rewritten; drop any cached pkl log lookups
+        # so the next filter application re-reads fresh data.
+        if hasattr(self, "_filter_log_cache"):
+            self._filter_log_cache.clear()
+    
         # ── Snapshot current tick state (works in flat AND classified) ──
         previously_ticked_meas = self._get_ticked_measurements()
         if not previously_ticked_meas:

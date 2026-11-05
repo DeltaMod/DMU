@@ -1041,119 +1041,127 @@ def flatten_log_runs(log_data: dict) -> dict[str, dict]:
     walk(log_data or {}, [])
     return out
 
-def compare_logs(source: dict, gui: dict) -> dict:
+
+
+
+def nest_log_runs(flat: dict, folder: Optional[Path] = None) -> dict:
+    """{(filename_or_None, run): info} -> canonical filename -> run -> info.
+
+    Entries with a None filename go under "_unresolved_" (orphan bucket).
+    """
+    out: dict = {}
+    for key, info in flat.items():
+        if isinstance(key, tuple) and len(key) == 2:
+            fname, run = key
+        else:
+            fname, run = None, key
+        bucket = fname if fname is not None else "_unresolved_"
+        out.setdefault(bucket, {})[run] = info
+    return out
+
+
+def compare_logs(source: dict, gui: dict,
+                 folder: Optional[Path] = None,
+                 xls_data: Optional[dict] = None) -> dict:
     """Diff a source log against a GUI working copy.
+
+    If `folder` is provided, both sides are resolved to (filename, run)
+    identity via _resolve_log_to_identity — this handles both canonical
+    and lazy source formats. Otherwise both are assumed canonical.
 
     Returns:
         {
-            "new_runs":       [run_key, ...],   # source only (add these)
-            "only_in_gui":    [run_key, ...],   # gui only (preserve)
+            "new_runs":       [(filename, run), ...],
+            "only_in_gui":    [(filename, run), ...],
             "differing_runs": {
-                run_key: {"fields": {field: (gui_val, src_val), ...}}
-            }
+                (filename, run): {"fields": {field: (gui_val, src_val)}}
+            },
         }
     """
-    src_runs = flatten_log_runs(source or {})
-    gui_runs = flatten_log_runs(gui or {})
+    if folder is not None:
+        xls_data = xls_data or {}
+        src_runs = _resolve_log_to_identity(source or {}, Path(folder), xls_data)[0]
+        gui_runs = _flatten_canonical(gui or {})
+    else:
+        src_runs = _flatten_canonical(source or {})
+        gui_runs = _flatten_canonical(gui or {})
 
-    new_runs    = sorted(set(src_runs) - set(gui_runs))
+    new_runs = sorted(set(src_runs) - set(gui_runs))
     only_in_gui = sorted(set(gui_runs) - set(src_runs))
 
-    differing_runs: dict[str, dict] = {}
-    for run in sorted(set(src_runs) & set(gui_runs)):
-        src_info = src_runs[run]
-        gui_info = gui_runs[run]
-        field_diffs: dict[str, tuple] = {}
+    differing_runs = {}
+    for key in sorted(set(src_runs) & set(gui_runs)):
+        src_info = src_runs[key]
+        gui_info = gui_runs[key]
+        field_diffs = {}
         for k in set(src_info) | set(gui_info):
-            if k.startswith("_"):
+            if str(k).startswith("_"):
                 continue
             sv, gv = src_info.get(k), gui_info.get(k)
             if sv != gv:
-                field_diffs[k] = (gv, sv)  # (gui, src) ordering
+                field_diffs[k] = (gv, sv)
         if field_diffs:
-            differing_runs[run] = {"fields": field_diffs}
+            differing_runs[key] = {"fields": field_diffs}
 
     return {
-        "new_runs":       new_runs,
-        "only_in_gui":    only_in_gui,
+        "new_runs": new_runs,
+        "only_in_gui": only_in_gui,
         "differing_runs": differing_runs,
     }
 
 
-def nest_log_runs(flat: dict[str, dict]) -> dict:
-    """Re-nest {run_key: info} into numports → device → subdevice → run.
-
-    numports is derived from each entry's SMU Order (falling back to 2),
-    matching the pkl's storage convention.
-    """
-    out: dict = {}
-    for run, info in flat.items():
-        smu_order = info.get("SMU Order") or []
-        np_key    = str(len(smu_order)) if smu_order else "2"
-        dev       = info.get("Device")    or "Unlabelled"
-        sub       = info.get("Subdevice") or "SD0"
-        (out.setdefault(np_key, {})
-             .setdefault(dev, {})
-             .setdefault(sub, {})[run]) = info
-    return out
-
-
 def merge_logs(source: dict, gui: dict, mode: str,
-               per_run_choices: Optional[dict] = None) -> dict:
-    """Produce the merged log dict to be written to the GUI file.
+               per_run_choices: Optional[dict] = None,
+               folder: Optional[Path] = None,
+               xls_data: Optional[dict] = None) -> dict:
+    """Produce merged log data in canonical form (filename -> run -> info)."""
+    if folder is not None:
+        xls_data = xls_data or {}
+        src_runs = _resolve_log_to_identity(source or {}, Path(folder), xls_data)[0]
+        gui_runs = _flatten_canonical(gui or {})
+    else:
+        src_runs = _flatten_canonical(source or {})
+        gui_runs = _flatten_canonical(gui or {})
 
-    mode:
-        "overwrite_all" — source wins for every shared run.
-        "add_only"      — add new source runs; leave GUI runs untouched.
-        "keep_gui"      — no-op (GUI is already correct); orphans preserved.
-        "reviewed"      — consult per_run_choices.
-
-    GUI-only runs (orphans) are always preserved, because the user
-    likely added them manually for fallback-log runs.
-    """
-    src_runs = flatten_log_runs(source or {})
-    gui_runs = flatten_log_runs(gui    or {})
     per_run_choices = per_run_choices or {}
 
     if mode == "overwrite_all":
-        merged = {run: dict(info) for run, info in src_runs.items()}
-        for run, info in gui_runs.items():
-            merged.setdefault(run, dict(info))     # keep orphans
-        return nest_log_runs(merged)
+        merged = {k: dict(v) for k, v in src_runs.items()}
+        for k, v in gui_runs.items():
+            merged.setdefault(k, dict(v))
+    elif mode == "add_only":
+        merged = {k: dict(v) for k, v in gui_runs.items()}
+        for k, v in src_runs.items():
+            merged.setdefault(k, dict(v))
+    elif mode == "keep_gui":
+        merged = {k: dict(v) for k, v in gui_runs.items()}
+    else:  # reviewed
+        merged = {k: dict(v) for k, v in gui_runs.items()}
+        for key, src_info in src_runs.items():
+            if key not in gui_runs:
+                merged[key] = dict(src_info)
+                continue
+            choice = per_run_choices.get(key)
+            if choice is None:
+                continue
+            if choice == "src":
+                merged[key] = dict(src_info)
+            elif choice == "gui":
+                continue
+            elif isinstance(choice, dict):
+                patched = dict(gui_runs[key])
+                for field, pick in choice.items():
+                    if pick == "src":
+                        if field in src_info:
+                            patched[field] = src_info[field]
+                        else:
+                            patched.pop(field, None)
+                merged[key] = patched
 
-    if mode == "add_only":
-        merged = {run: dict(info) for run, info in gui_runs.items()}
-        for run, info in src_runs.items():
-            merged.setdefault(run, dict(info))     # add missing
-        return nest_log_runs(merged)
-
-    if mode == "keep_gui":
-        return nest_log_runs({r: dict(i) for r, i in gui_runs.items()})
-
-    # reviewed
-    merged = {run: dict(info) for run, info in gui_runs.items()}
-    for run, src_info in src_runs.items():
-        if run not in gui_runs:
-            merged[run] = dict(src_info)           # new runs auto-add
-            continue
-        choice = per_run_choices.get(run)
-        if choice is None:
-            continue                               # untouched
-        if choice == "src":
-            merged[run] = dict(src_info)
-        elif choice == "gui":
-            continue
-        elif isinstance(choice, dict):
-            patched = dict(gui_runs[run])
-            for field, pick in choice.items():
-                if pick == "src":
-                    if field in src_info:
-                        patched[field] = src_info[field]
-                    else:
-                        patched.pop(field, None)
-            merged[run] = patched
-
-    return nest_log_runs(merged)
+    out: dict = {}
+    for (fname, run), info in merged.items():
+        out.setdefault(fname, {})[run] = info
+    return out
 
 # ---------------------------------------------------------------------------
 # LOG loading and lookup
@@ -1379,72 +1387,16 @@ def gui_log_path(source_path: Path) -> Path:
 def build_log_lookup(log_data: dict,
                      default_device: Optional[str] = None,
                      default_subdevice: str = "SD0") -> dict:
-    """
-    Flatten any supported LOG structure into a lookup dict.
+    """Legacy shim — returns {(filename_or_None, run): info}.
 
-    Supported structures include:
-        numports -> device -> subdevice -> run -> info
-        numports -> device -> run -> info
-        device -> run -> info
-        run -> info
-
-    The numports prefix is detected by scanning only the ANCESTORS of
-    each info leaf (`path[:-1]`) — never the leaf itself. Otherwise a
-    numeric run ID such as "84" would be mistaken for a numports=84
-    key and shadow the real numports="2port" prefix found higher up.
-    This would silently write every run into the pkl under the wrong
-    numports bucket.
+    Retained so nothing importing it crashes. New code should use
+    _resolve_log_to_identity(log_data, folder, xls_data) which can
+    resolve lazy entries to actual filenames.
     """
     lookup = {}
-
-    def add(np, dev, sub, run, info):
-        run_norm = normalise_run_key(run)
-        info2 = dict(info)
-        info2.setdefault("Device", dev)
-        info2.setdefault("Subdevice", sub)
-        info2.setdefault("RunID", run_norm)
-
-        keys = [
-            (str(np) if np is not None else None, dev, sub, run_norm),
-            (None, dev, sub, run_norm),
-            (None, dev, default_subdevice, run_norm),
-            (None, None, None, run_norm),
-        ]
-
-        for k in keys:
-            lookup.setdefault(k, info2)
-
-    def walk(obj, path):
-        if isinstance(obj, dict):
-            if _is_log_info(obj):
-                # ── FIX: scan ancestors only, never the run key. ──
-                np = None
-                for part in path[:-1]:
-                    np2 = _extract_numports_key(part)
-                    if np2 is not None:
-                        np = np2
-
-                run = path[-1] if path else None
-                non_np = [
-                    p for p in path[:-1]
-                    if _extract_numports_key(p) is None
-                ]
-
-                dev = default_device
-                sub = default_subdevice
-
-                if len(non_np) >= 1:
-                    dev = non_np[0]
-                if len(non_np) >= 2:
-                    sub = non_np[1]
-
-                add(np, dev, sub, run, obj)
-                return
-
-            for k, v in obj.items():
-                walk(v, path + [str(k)])
-
-    walk(log_data, [])
+    for path, run, info in _iter_log_runs(log_data):
+        fname = path[0] if path else None
+        lookup[(fname, run)] = info
     return lookup
 
 
@@ -1482,9 +1434,13 @@ def parse_keithley_file(file_path: Path,
                         log_lookup=None,
                         device: Optional[str] = None,
                         subdevice: str = "SD0") -> dict:
-    """
-    Parse one Keithley .xls file and attach LOG info.
-    Returns: run_key -> run_data, compatible with Data_Containers.
+    """Parse one Keithley .xls file. Returns run_key -> run_data.
+
+    LOG attachment is deferred to build_device_data — this function
+    only attaches a fallback LOG when called standalone, so external
+    consumers still see complete run_data. When called from the build
+    path with log_lookup=None, run_data["LOG"] is a fallback that the
+    caller is expected to overwrite with the resolved entry.
     """
     file_path = Path(file_path)
     reader = KeithleyDataReader()
@@ -1493,33 +1449,15 @@ def parse_keithley_file(file_path: Path,
     if "Settings" in file_data:
         settings_dict = file_data.pop("Settings")
         for run_key, run_data in file_data.items():
-            base     = settings_dict.get(run_key, {})
-            existing = run_data.get("Settings") or {}   # ← already-processed (has Time Per Point, NWID, fixed VStep)
-            run_data["Settings"] = {**base, **existing}  # existing wins where they overlap
+            base = settings_dict.get(run_key, {})
+            existing = run_data.get("Settings") or {}
+            run_data["Settings"] = {**base, **existing}
 
     result = {}
-
     for run_key, run_data in file_data.items():
         run_data["filename"] = file_path.name
-
-        info = None
-
-        if callable(log_lookup):
-            info = log_lookup(run_key)
-        elif log_lookup is not None:
-            info = find_log_info(
-                log_lookup, run_data, run_key,
-                device=device, subdevice=subdevice
-            )
-
-        if info is None:
-            info = make_fallback_log(run_data)
-        else:
-            info = normalise_log_info(info, run_data)
-
-        run_data["LOG"] = info
+        run_data["LOG"] = make_fallback_log(run_data)
         result[normalise_run_key(run_key)] = run_data
-
     return result
 
 
@@ -1670,52 +1608,132 @@ def _source_log_changed(folder: Path, stored_fp) -> bool:
         return False
     return current.get("source") != stored_fp.get("source")
 
-def _merge_device_data(old: dict, new: dict, overwrite_existing: bool = True) -> dict:
-    merged = copy.deepcopy(old)                                      # ← the fix
+def _merge_device_data(old: dict, new: dict,
+                       overwrite_existing: bool = True) -> dict:
+    merged = copy.deepcopy(old)
     merged.setdefault("_meta", {"material": "AIR", "material_stack": {}})
 
-    for np, devices in new.items():
-        if np == "_meta":
-            merged["_meta"] = {**merged.get("_meta", {}), **devices}
+    for fname, runs in new.items():
+        if fname == "_meta":
+            merged["_meta"] = {**merged.get("_meta", {}), **runs}
             continue
-
-        for dev, subs in devices.items():
-            for sub, runs in subs.items():
-                for run, data in runs.items():
-                    target = (merged.setdefault(np, {})
-                                    .setdefault(dev, {})
-                                    .setdefault(sub, {}))
-                    if not overwrite_existing and run in target:
-                        continue
-                    target[run] = data
+        if not isinstance(runs, dict):
+            continue
+        target = merged.setdefault(fname, {})
+        for run_key, run_data in runs.items():
+            if not overwrite_existing and run_key in target:
+                continue
+            target[run_key] = run_data
 
     return merged
 
 def _iter_log_runs(log_data: dict):
-    """
-    Yield (device, subdevice, run_norm, info) for each run entry.
+    """Yield (path_tuple, run_norm, info) for each run entry.
 
-    Uses the same shape rules as build_log_lookup() so the two stay
-    consistent — this is the canonical enumeration used for
-    reconciliation.
+    `path` is every key between the root and the run key, in tree order.
+    Skips keys that start with '_'.
     """
     def walk(obj, path):
         if isinstance(obj, dict):
             if _is_log_info(obj):
-                non_np = [
-                    p for p in path[:-1]
-                    if _extract_numports_key(p) is None
-                ]
-                dev = non_np[0] if len(non_np) >= 1 else None
-                sub = non_np[1] if len(non_np) >= 2 else "SD0"
-                run = normalise_run_key(path[-1]) if path else None
-                if dev and run:
-                    yield (dev, sub, run, obj)
+                if not path:
+                    return
+                yield (tuple(path[:-1]), normalise_run_key(path[-1]), obj)
                 return
             for k, v in obj.items():
+                if str(k).startswith("_"):
+                    continue
                 yield from walk(v, path + [str(k)])
 
-    yield from walk(log_data, [])
+    yield from walk(log_data or {}, [])
+    
+def _iter_data_runs(xls_data: dict):
+    """Yield (filename, run_key, run_data) across parsed XLS data."""
+    for fname, file_data in xls_data.items():
+        for run_key, run_data in file_data.items():
+            yield fname, run_key, run_data
+
+
+def _flatten_canonical(log_data: dict) -> dict:
+    """Return {(filename, run_key): info} from canonical-shape log data.
+
+    Canonical shape is filename -> run_key -> info. Anything else (lazy
+    shapes, orphan bucket) is ignored — those must go through
+    _resolve_log_to_identity() which has folder context.
+    """
+    out = {}
+    if not isinstance(log_data, dict):
+        return out
+    for fname, runs in log_data.items():
+        if str(fname).startswith("_") or not isinstance(runs, dict):
+            continue
+        for run_key, info in runs.items():
+            if not isinstance(info, dict) or not _is_log_info(info):
+                continue
+            out[(str(fname), normalise_run_key(run_key))] = info
+    return out
+
+
+def _resolve_log_to_identity(log_data: dict, folder: Path,
+                             xls_data: dict) -> tuple[dict, list]:
+    """Normalise any log structure to {(filename, run_key): info}.
+
+    Supported inputs:
+      * canonical     — filename -> run_key -> info
+      * lazy, ports   — numports -> device -> subdevice -> run_key -> info
+      * lazy, no-sub  — device -> subdevice -> run_key -> info
+      * lazy, bare    — device -> run_key -> info
+      * bare          — run_key -> info
+
+    Resolution for lazy entries:
+      1. Find all files with this run_key.
+      2. If exactly one → use it.
+      3. If multiple and a numports key was in the path → filter by port count.
+      4. Still ambiguous or no match → orphan.
+
+    Returns (identity_dict, orphan_list). Each orphan entry is
+    {"path": path_tuple, "run": run_key, "info": log_info_dict}.
+    """
+    folder = Path(folder)
+    known_filenames = set(xls_data.keys())
+
+    data_runs_by_id: dict[str, list[tuple[str, int]]] = {}
+    for fname, run_key, run_data in _iter_data_runs(xls_data):
+        n = get_num_ports(run_data)
+        data_runs_by_id.setdefault(run_key, []).append((fname, n))
+
+    identity: dict[tuple[str, str], dict] = {}
+    orphans: list[dict] = []
+
+    for path, run, info in _iter_log_runs(log_data):
+        if not path:
+            orphans.append({"path": path, "run": run, "info": info})
+            continue
+
+        if path[0] in known_filenames:
+            identity[(path[0], run)] = info
+            continue
+
+        numports_hint = None
+        for part in path[:-1]:
+            n = _extract_numports_key(part)
+            if n is not None:
+                numports_hint = n
+                break
+
+        candidates = data_runs_by_id.get(run, [])
+        if len(candidates) == 1:
+            identity[(candidates[0][0], run)] = info
+        elif len(candidates) > 1 and numports_hint is not None:
+            matched = [(f, n) for f, n in candidates if n == numports_hint]
+            if len(matched) == 1:
+                identity[(matched[0][0], run)] = info
+            else:
+                orphans.append({"path": path, "run": run, "info": info})
+        else:
+            orphans.append({"path": path, "run": run, "info": info})
+
+    return identity, orphans
     
 def build_device_data(folder: Path,
                       force_reload: bool = False,
@@ -1723,26 +1741,17 @@ def build_device_data(folder: Path,
                       cache_name: Optional[str] = None,
                       overwrite_existing: bool = True,
                       problems: Optional[list] = None) -> dict:
-    """
-    Build/load one device folder as:
-        numports -> device -> subdevice -> RunID -> run_data
+    """Build/load one folder's pkl.
 
-    If a pkl exists and force_reload is False, it is loaded directly.
-    If compare is True, old and new are merged non-destructively.
+    New pkl layout: filename -> run_key -> run_data.
 
-    Any parse failures and reconciliation mismatches are appended to
-    `problems` as dicts:
-        {severity, category, folder, path, run, message, line, column}
-    The GUI's Problems tab groups them by `folder`.
+    Log precedence:
+      1. _LOGBOOK_GUI.json if it exists
+      2. source log if it exists
+      3. auto-create a stub GUI log from fallback logs
 
-    Categories emitted here:
-      missing_log         — data files present, no LOG file found
-      log_parse_failed    — LOG file exists but couldn't be parsed
-      log_empty           — LOG parsed but yielded zero run entries
-      data_parse_failed   — one XLS file couldn't be parsed
-      duplicate_run_id    — same run id appears in >1 XLS file
-      run_missing_from_log — data run has no matching log entry
-      run_orphaned_in_log  — log entry has no matching data run
+    Reconciliation problems are added to `problems` and surfaced in the
+    Problems tab.
     """
     if problems is None:
         problems = []
@@ -1750,96 +1759,68 @@ def build_device_data(folder: Path,
     folder = Path(folder)
     folder_str = str(folder.resolve())
 
-    def _add(severity, category, message,
-             path=None, run=None, line=None, column=None):
+    def _add(severity, category, message, path=None, run=None,
+             line=None, column=None):
         problems.append({
             "severity": severity,
             "category": category,
-            "folder":   folder_str,
-            "path":     str(path) if path is not None else None,
-            "run":      run,
-            "message":  message,
-            "line":     line,
-            "column":   column,
+            "folder": folder_str,
+            "path": str(path) if path is not None else None,
+            "run": run,
+            "message": message,
+            "line": line,
+            "column": column,
         })
 
     cache_path = folder / (cache_name or f".dmui_{folder.name}.pkl")
 
-    # ── Ensure the GUI working copy exists before any cache check. ──
-    # Placing this here (rather than deeper in the build path) means
-    # the fingerprint below sees the GUI file, so the very first load
-    # after upgrade deterministically reseeds the new fingerprint
-    # format. If the copy fails, we log and continue — the source
-    # alone is still a valid log to build from.
+    # Ensure GUI copy exists before cache check so first load reseeds
+    # the fingerprint format.
     _source_pre = find_log_file(folder)
-    if _source_pre is not None and find_gui_log_file(folder) is None:
+    _gui_pre = find_gui_log_file(folder)
+    if _source_pre is not None and _gui_pre is None:
         try:
             shutil.copyfile(_source_pre, gui_log_path(_source_pre))
+            _gui_pre = gui_log_path(_source_pre)
         except OSError as exc:
             _add("warning", "gui_log_create_failed",
-                 f"Could not create GUI working copy of log: {exc}",
+                 f"Could not create GUI working copy: {exc}",
                  path=_source_pre)
-        
+
     if cache_path.exists() and not force_reload:
         cached = _load_pickle(cache_path)
         cached_meta = cached.get("_meta") or {}
         stored_fp = cached_meta.get("log_fingerprint")
-        if _log_fingerprint_matches(folder, stored_fp):
-            # Pkl is valid. If the source drifted without the GUI
-            # following, warn — but do NOT rebuild (that would wipe
-            # GUI edits, the exact thing the two-file model prevents).
+        # Old-format pkls (numports -> dev -> sub -> run) fail the
+        # version check via the structure marker; we force a rebuild.
+        structure_version = cached_meta.get("structure_version")
+        if structure_version != 2:
+            logger.info(f"Old pkl structure detected, rebuilding: {cache_path}")
+        elif _log_fingerprint_matches(folder, stored_fp):
             if _source_log_changed(folder, stored_fp):
                 _add("info", "source_log_changed",
-                     "Source LOG has changed since the pkl was built. "
-                     "The GUI working copy is still authoritative. "
-                     "Use 'Compare & merge LOGs' to propagate "
-                     "source-side changes.",
+                     "Source LOG changed since pkl build. GUI is "
+                     "authoritative; use Compare & merge to propagate.",
                      path=find_log_file(folder))
             return cached
-        logger.info(
-            f"GUI log changed since pkl build, rebuilding: {cache_path}"
-        )
-        # fall through to rebuild
+        else:
+            logger.info(f"GUI log changed, rebuilding: {cache_path}")
 
-    fresh = {}
-
-    # ── Load LOG (GUI working copy preferred; source as fallback) ───
-    # Migration is applied to the GUI file only — it's app-managed and
-    # safe to canonicalise in place. The source is the user's file and
-    # is never auto-rewritten; instead, a 'source_log_lax' problem is
-    # pushed so the user can run Convert LOGs to JSON explicitly.
-    gui_log_path_  = find_gui_log_file(folder)
-    source_log_path = find_log_file(folder)
-    log_path = gui_log_path_ or source_log_path
-
-    log_lookup = None
-    log_data   = None
+    # ── Load log data ─────────────────────────────────────────────
+    gui_path = find_gui_log_file(folder)
+    source_path = find_log_file(folder)
+    log_path = gui_path or source_path
+    log_data = None
+    log_existed = log_path is not None
 
     if log_path is not None:
-        is_gui = (gui_log_path_ is not None
-                  and log_path == gui_log_path_)
+        is_gui = (gui_path is not None and log_path == gui_path)
         migration_cb = (
             (lambda p, d: _migrate_log_file(p, d, problems))
             if is_gui else None
         )
         try:
             log_data = load_log_file(log_path, migration_callback=migration_cb)
-            if not is_gui:
-                # Best-effort: detect lazy source and warn, without
-                # rewriting the user's file.
-                try:
-                    _parse_log_text(log_path.read_text(encoding="utf-8-sig"), log_path)
-                except LogParseError:
-                    pass
-                except Exception:
-                    pass
-            log_lookup = build_log_lookup(log_data)
-            if not log_lookup:
-                _add("warning", "log_empty",
-                     "LOG file parsed but contains no run entries. "
-                     "Check the file structure matches "
-                     "numports → device → subdevice → run.",
-                     path=log_path)
         except Exception as e:
             _add("error", "log_parse_failed",
                  f"Could not parse LOG: {e}",
@@ -1847,100 +1828,100 @@ def build_device_data(folder: Path,
                  line=getattr(e, "lineno", None),
                  column=getattr(e, "colno", None))
 
-    # ── Parse every data XLS ────────────────────────────────────────
-    xls_files = [
-        f for f in folder.glob("*.xls")
-        if "LOG" not in f.stem.upper()
-    ]
+    # ── Parse every data XLS (single pass) ────────────────────────
+    xls_files = [f for f in folder.glob("*.xls")
+                 if "LOG" not in f.stem.upper()]
+    xls_data: dict[str, dict] = {}
 
-    if log_path is None and xls_files:
+    if not log_existed and xls_files:
         _add("warning", "missing_log",
-             f"No LOG file found in folder. "
-             f"{len(xls_files)} data file(s) will show Comment='NO LOG'.")
-
-    # Track which files contributed each run id (for duplicate detection)
-    run_id_sources: dict[str, list[str]] = {}
+             f"No LOG file found. Auto-creating a GUI log for "
+             f"{len(xls_files)} data file(s). Edit Device/Subdevice "
+             f"in the Logbook tab to classify.")
 
     for xls in xls_files:
         try:
-            file_data = parse_keithley_file(xls, log_lookup=log_lookup)
+            xls_data[xls.name] = parse_keithley_file(xls, log_lookup=None)
         except Exception as e:
             _add("error", "data_parse_failed",
-                 f"Could not read data file: {e}",
+                 f"Could not read {xls.name}: {e}",
                  path=xls,
                  line=getattr(e, "lineno", None),
                  column=getattr(e, "colno", None))
-            continue
 
-        for run_key, run_data in file_data.items():
-            np_key = get_num_ports(run_data)
-            log    = run_data.get("LOG", {})
-            dev    = log.get("Device")    or folder.name
-            sub    = log.get("Subdevice") or "SD0"
-
-            run_id_sources.setdefault(run_key, []).append(xls.name)
-
-            fresh.setdefault(np_key, {}) \
-                 .setdefault(dev, {}) \
-                 .setdefault(sub, {})[run_key] = run_data
-
-    # ── Duplicate run ids across files ──────────────────────────────
-    for run_key, sources in run_id_sources.items():
-        if len(sources) > 1:
-            _add("warning", "duplicate_run_id",
-                 f"Run {run_key} appears in {len(sources)} file(s) "
-                 f"({', '.join(sources)}). Only the last occurrence "
-                 f"is kept in the pkl.",
-                 run=run_key)
-
-    # ── Log ↔ Data reconciliation ───────────────────────────────────
+    # ── Resolve log to (filename, run) identity ────────────────────
+    identity: dict = {}
+    orphans: list = []
     if log_data is not None:
-        data_runs: set[tuple[str, str, str]] = set()
-        for np_key, devs in fresh.items():
-            if np_key == "_meta":
-                continue
-            for dev, subs in devs.items():
-                for sub, runs in subs.items():
-                    for run_key in runs:
-                        data_runs.add((dev, sub, run_key))
+        identity, orphans = _resolve_log_to_identity(
+            log_data, folder, xls_data)
 
-        log_runs: set[tuple[str, str, str]] = set()
-        for dev, sub, run, _info in _iter_log_runs(log_data):
-            log_runs.add((dev, sub, run))
+    # ── Attach logs to runs ───────────────────────────────────────
+    missing_log_count = 0
+    for fname, file_data in xls_data.items():
+        for run_key, run_data in file_data.items():
+            real_log = identity.get((fname, run_key))
+            if real_log is not None:
+                run_data["LOG"] = normalise_log_info(real_log, run_data)
+            # else keep fallback LOG already set by parse_keithley_file
+            if run_data["LOG"].get("Comment") == "NO LOG":
+                missing_log_count += 1
+            run_data["LOG"].setdefault("Device", "Unlabelled")
+            run_data["LOG"].setdefault("Subdevice", "SD0")
 
-        def _summarize(items: set[tuple[str, str, str]]) -> str:
-            ordered = sorted(r for _, _, r in items)
-            if len(ordered) <= 5:
-                return ", ".join(ordered)
-            return f"{', '.join(ordered[:5])}, … ({len(ordered)} total)"
+    if missing_log_count:
+        _add("warning", "run_missing_from_log",
+             f"{missing_log_count} data run(s) have no log entry "
+             f"(showing Comment='NO LOG').")
 
-        missing = data_runs - log_runs
-        if missing:
-            _add("warning", "run_missing_from_log",
-                 f"{len(missing)} data run(s) have no matching log "
-                 f"entry: {_summarize(missing)}")
+    if orphans:
+        _add("info", "run_orphaned_in_log",
+             f"{len(orphans)} log entry(ies) could not be matched to "
+             f"any data run: {', '.join(str(o['run']) for o in orphans[:5])}"
+             + (" …" if len(orphans) > 5 else ""),
+             path=log_path)
 
-        orphaned = log_runs - data_runs
-        if orphaned:
-            _add("info", "run_orphaned_in_log",
-                 f"{len(orphaned)} log entry(ies) have no matching data: "
-                 f"{_summarize(orphaned)}",
-                 path=log_path)
+    # ── Auto-create GUI log when none existed ─────────────────────
+    if not log_existed and xls_data:
+        target = folder / "_LOGBOOK_GUI.json"
+        gui_data = {}
+        for fname, file_data in xls_data.items():
+            gui_data[fname] = {}
+            for run_key, run_data in file_data.items():
+                gui_data[fname][run_key] = dict(run_data["LOG"])
+        try:
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(gui_data, f, indent=2,
+                          ensure_ascii=False, default=str)
+            _add("info", "gui_log_created",
+                 f"Auto-created {target.name} with "
+                 f"{sum(len(v) for v in gui_data.values())} stub(s).",
+                 path=target)
+        except OSError as e:
+            _add("error", "gui_log_create_failed",
+                 f"Could not write {target.name}: {e}",
+                 path=target)
 
-        # ── Metadata + write out ────────────────────────────────────────
-    # _log_fingerprint() looks at BOTH source and GUI, capturing the
-    # post-migration GUI stat so the next load reuses this pkl rather
-    # than re-migrating.
+    # ── Build fresh pkl in new structure ──────────────────────────
+    fresh: dict = {}
+    for fname, file_data in xls_data.items():
+        fresh[fname] = file_data
+
     fresh["_meta"] = {
         "material": detect_material_from_path(folder),
         "material_stack": {},
         "log_fingerprint": _log_fingerprint(folder),
+        "structure_version": 2,
     }
 
     if compare and cache_path.exists():
         old = _load_pickle(cache_path)
-        merged = _merge_device_data(old, fresh,
-                                    overwrite_existing=overwrite_existing)
+        old_meta = old.get("_meta", {})
+        if old_meta.get("structure_version") == 2:
+            merged = _merge_device_data(old, fresh,
+                                        overwrite_existing=overwrite_existing)
+        else:
+            merged = fresh  # old format → discard entirely
         _save_pickle(cache_path, merged)
         return merged
 
