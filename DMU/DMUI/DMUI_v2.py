@@ -803,7 +803,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception as e:
                     logger.error(f"Could not read GUI log in {folder}: {e}")
 
-            diff = dit.compare_logs(src_data, gui_data)
+            diff = dit.compare_logs(src_data, gui_data, folder=folder)
             if (diff["new_runs"] or diff["differing_runs"]
                     or diff["only_in_gui"]):
                 work_items.append((folder, diff, src_data, gui_data,
@@ -836,7 +836,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     per_run_choices[run_key] = choice
                     n_reviewed += 1
 
-            merged = dit.merge_logs(src_data, gui_data, mode, per_run_choices)
+            merged = dit.merge_logs(src_data, gui_data, mode,
+                                    per_run_choices, folder=folder)
 
             target = gui if gui is not None else dit.gui_log_path(source)
             try:
@@ -909,7 +910,8 @@ class MainWindow(QtWidgets.QMainWindow):
         fields = run_diff["fields"]
 
         dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(f"Run {run_key} — {len(fields)} field(s) differ")
+        fname, run = run_key
+        dlg.setWindowTitle(f"{fname} :: {run} — {len(fields)} field(s) differ")
         dlg.resize(560, 400)
 
         outer = QtWidgets.QVBoxLayout(dlg)
@@ -975,76 +977,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         return result["value"]
 
-    def _snapshot_pkl_to_gui(self):
-        """One-time migration: for folders lacking _LOGBOOK_GUI.json,
-        seed it from the pkl's current LOG entries (which may reflect
-        pre-migration GUI edits), falling back to the source log for
-        runs the pkl doesn't cover."""
-
-        folders = self._dm_target_folders()
-        if not folders:
-            QtWidgets.QMessageBox.information(
-                self, "No folders", "Tick at least one data folder first.")
-            return
-
-        migrated, skipped, failed = 0, 0, []
-        for folder in folders:
-            if dit.find_gui_log_file(folder) is not None:
-                skipped += 1
-                continue
-
-            pkl_path = folder / f".dmui_{folder.name}.pkl"
-            if not pkl_path.exists():
-                skipped += 1
-                continue
-
-            try:
-                with open(pkl_path, "rb") as f:
-                    data = pickle.load(f)
-            except Exception as e:
-                failed.append(f"{folder.name}: pkl read failed — {e}")
-                continue
-
-            flat: dict[str, dict] = {}
-
-            for np_key, devs in data.items():
-                if np_key == "_meta":
-                    continue
-                for dev, subs in devs.items():
-                    for sub, runs in subs.items():
-                        for run_key, run_data in runs.items():
-                            log = run_data.get("LOG")
-                            if log:
-                                flat[dit.normalise_run_key(run_key)] = dict(log)
-
-            source = dit.find_log_file(folder)
-            if source is not None:
-                try:
-                    src_flat = dit.flatten_log_runs(dit.load_log_file(source))
-                    for run, info in src_flat.items():
-                        flat.setdefault(run, dict(info))
-                except Exception:
-                    pass
-
-            if not flat:
-                skipped += 1
-                continue
-
-            target = (dit.gui_log_path(source) if source is not None
-                      else folder / "_LOGBOOK_GUI.json")
-            try:
-                with open(target, "w", encoding="utf-8") as f:
-                    json.dump(dit.nest_log_runs(flat), f, indent=2,
-                              ensure_ascii=False, default=str)
-                migrated += 1
-            except OSError as e:
-                failed.append(f"{folder.name}: write failed — {e}")
-
-        msg = (f"Migrated {migrated} folder(s). "
-               f"Skipped {skipped} (already had GUI, or no pkl/log).")
-        if failed:
-            msg += "\n\nFailures:\n" + "\n".join(failed)
-        QtWidgets.QMessageBox.information(self, "Snapshot complete", msg)
         
     def _rebuild_pkl(self):
         """Single, safe rebuild path. Re-derives each folder's pkl from
@@ -1522,14 +1454,6 @@ class MainWindow(QtWidgets.QMainWindow):
         mig_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
         layout.addWidget(mig_lbl)
 
-        btn_snapshot = QtWidgets.QPushButton(
-            "Snapshot pkl LOG edits → _LOGBOOK_GUI.json")
-        btn_snapshot.setToolTip(
-            "One-time migration for folders where GUI LOG edits were "
-            "made before _LOGBOOK_GUI.json existed. Skips folders that "
-            "already have a GUI file.")
-        btn_snapshot.clicked.connect(self._snapshot_pkl_to_gui)
-        layout.addWidget(btn_snapshot)
 
         layout.addStretch(1)
         self.tab_widget.addTab(tab, "Advanced")
@@ -1763,8 +1687,23 @@ class MainWindow(QtWidgets.QMainWindow):
         # ---- Active measurement (editable) ----
         active_lbl = QtWidgets.QLabel("Active measurement")
         active_lbl.setStyleSheet("font-weight: bold;")
+        # ---- Identity (read-only) ----
+        identity_row = QtWidgets.QHBoxLayout()
+        identity_row.addWidget(QtWidgets.QLabel("File:"))
+        self._log_identity_file = QtWidgets.QLineEdit()
+        self._log_identity_file.setReadOnly(True)
+        self._log_identity_file.setStyleSheet(
+            "background: #f4f4f4; color: #333;")
+        identity_row.addWidget(self._log_identity_file, stretch=2)
+       
+        identity_row.addWidget(QtWidgets.QLabel("RunID:"))
+        self._log_identity_runid = QtWidgets.QLineEdit()
+        self._log_identity_runid.setReadOnly(True)
+        self._log_identity_runid.setStyleSheet("background: #f4f4f4; color: #333;")
+        identity_row.addWidget(self._log_identity_runid, stretch=1)
+        layout.addLayout(identity_row) 
         layout.addWidget(active_lbl)
-    
+        
         # Comment first, always visible (multi-line)
         self._log_comment = QtWidgets.QPlainTextEdit()
         self._log_comment.setFixedHeight(80)
@@ -1972,13 +1911,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     data = pickle.load(f)
             except Exception:
                 continue
-            for np_key, devs in data.items():
-                if np_key == "_meta":
+            if (data.get("_meta") or {}).get("structure_version") != 2:
+                continue
+            for fname, runs in data.items():
+                if fname == "_meta" or not isinstance(runs, dict):
                     continue
-                for dev, subs in devs.items():
-                    for sub, runs in subs.items():
-                        for run_key, run_data in runs.items():
-                            _scan(run_data.get("LOG"))
+                for _run_key, run_data in runs.items():
+                    _scan(run_data.get("LOG"))
     
         return fields
     # -- filter: row construction ------------------------------------------
@@ -2355,12 +2294,7 @@ class MainWindow(QtWidgets.QMainWindow):
             (str(Path(fp).resolve()), mi))
     
     def _load_folder_logs(self, folder: Path) -> dict:
-        """Read one folder's pkl and return {(abs_fp_str, meas_index): log}.
-    
-        Ordering matches FolderStore._iter_runs: runs grouped per file,
-        sorted by numeric portion of the run key. `meas_index` here is
-        therefore the same integer used in the tree payloads.
-        """
+        """Return {(abs_fp_str, meas_index): log} from a folder's pkl."""
         import pickle
         import re
     
@@ -2373,33 +2307,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 data = pickle.load(f)
         except Exception:
             return result
+        if (data.get("_meta") or {}).get("structure_version") != 2:
+            return result  # stale pkl, skip filter cache
     
-        # Group runs by filename
-        by_file: dict[str, list] = {}
-        for np_key, devs in data.items():
-            if np_key == "_meta" or not isinstance(devs, dict):
-                continue
-            for dev, subs in devs.items():
-                for sub, runs in subs.items():
-                    for run_key, run_data in runs.items():
-                        fname = run_data.get("filename")
-                        if fname:
-                            by_file.setdefault(fname, []).append(
-                                (run_key, run_data))
-    
-        def _sort_key(row):
-            run_key = str(row[0])
-            m = re.search(r"(\d+)", run_key)
+        def _run_sort_key(run_key):
+            s = str(run_key)
+            m = re.search(r"(\d+)", s)
             if m:
-                return (0, int(m.group(1)), run_key)
-            return (1, 0, run_key)
+                return (0, int(m.group(1)), s)
+            return (1, 0, s)
     
-        for fname, runs in by_file.items():
-            runs.sort(key=_sort_key)
+        for fname in sorted(data.keys()):
+            if fname == "_meta" or not isinstance(data[fname], dict):
+                continue
+            runs = data[fname]
             fp_str = str((folder / fname).resolve())
-            for mi, (_run_key, run_data) in enumerate(runs):
-                result[(fp_str, mi)] = run_data.get("LOG") or {}
-    
+            for mi, run_key in enumerate(sorted(runs.keys(),
+                                                 key=_run_sort_key)):
+                result[(fp_str, mi)] = runs[run_key].get("LOG") or {}
         return result
    
     def _update_filter_status(self):
@@ -2488,7 +2413,8 @@ class MainWindow(QtWidgets.QMainWindow):
             meas.log[key] = copy.deepcopy(val)
             if lf.folder_store is not None and run_key is not None:
                 try:
-                    lf.folder_store.save_log(run_key, dict(meas.log))
+                    lf.folder_store.save_log(
+                        Path(fp).name, run_key, dict(meas.log))
                 except Exception as e:
                     failed.append(f"{Path(fp).name}: {e}")
                     continue
@@ -2498,7 +2424,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.loaded_file.folder_store is not None:
             rk = src.metadata.get("run_key")
             if rk is not None:
-                self.loaded_file.folder_store.save_log(rk, dict(src.log))
+                self.loaded_file.folder_store.save_log(
+                    Path(self.current_file_path).name, rk, dict(src.log))
     
         msg = f"Copied '{key}' to {updated} measurement(s)."
         if failed:
@@ -2646,8 +2573,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            diff = dit.compare_logs(
-                dit.load_log_file(source), dit.load_log_file(gui))
+            diff = dit.compare_logs(dit.load_log_file(source), dit.load_log_file(gui),folder=folder)
             count = (len(diff["differing_runs"])
                      + len(diff["new_runs"])
                      + len(diff["only_in_gui"]))
@@ -2666,8 +2592,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"to promote, or 'Compare & merge LOGs…' to reconcile.")
 
     def _refresh_logbook_tab(self):
-        # ---------- Active section: comment ----------
+        # ---------- Active section: comment + identity ----------
         if self.loaded_file is None or self.current_meas_index is None:
+            if hasattr(self, "_log_identity_file"):
+                self._log_identity_file.setText("")
+            if hasattr(self, "_log_identity_runid"):
+                self._log_identity_runid.setText("")
             self._log_comment.blockSignals(True)
             self._log_comment.setPlainText("")
             self._log_comment.blockSignals(False)
@@ -2675,6 +2605,14 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             meas = self.loaded_file.measurements[self.current_meas_index]
             log = getattr(meas, "log", {}) or {}
+
+            if hasattr(self, "_log_identity_file"):
+                self._log_identity_file.setText(
+                    Path(self.current_file_path).name
+                    if self.current_file_path else "")
+            if hasattr(self, "_log_identity_runid"):
+                self._log_identity_runid.setText(
+                    str(meas.metadata.get("run_key", "")))
 
             self._log_comment.blockSignals(True)
             self._log_comment.setPlainText(
@@ -2749,10 +2687,11 @@ class MainWindow(QtWidgets.QMainWindow):
         while self._log_form_layout.rowCount() > 0:
             self._log_form_layout.removeRow(0)
 
-        forced = ["Device", "Subdevice"]
+        forced = []
+        readonly_keys = {"Filename", "RunID"}
         ordered = list(forced)
         for k in log.keys():
-            if k == "Comment":
+            if k == "Comment" or k in readonly_keys:
                 continue
             if k not in ordered:
                 ordered.append(k)
@@ -2888,7 +2827,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         filename = Path(fp).name
-        lf.folder_store.save_log(filename, run_key, dict(meas.log))
+        lf.folder_store.save_log(Path(fp).name, run_key, dict(meas.log))
         self._refresh_logbook_indicator()
 
         if (affect_plot
@@ -4171,30 +4110,49 @@ class MainWindow(QtWidgets.QMainWindow):
                             .append((str(f), int(meas_id), title))
     
             def _run_sort(entry):
-                # entry = (file_path, meas_id, title); sort by 'Run<n>' if present
                 m = re.search(r"Run(\d+)", entry[2])
                 if m:
                     return (0, int(m.group(1)), entry[2])
                 return (1, 0, entry[2])
-    
+            
+            # Count run_id occurrences within each (dev, sub) to know
+            # which need a (1)/(2)/(3) suffix.
+            run_id_totals: dict[tuple, int] = {}
+            for dev, subs in tree.items():
+                for sub, entries in subs.items():
+                    for _fp, _mid, title in entries:
+                        m = re.search(r"(Run\d+)", title)
+                        if m:
+                            key = (dev, sub, m.group(1))
+                            run_id_totals[key] = run_id_totals.get(key, 0) + 1
+            
+            run_id_seen: dict[tuple, int] = {}
             for dev, subs in sorted(tree.items()):
                 dev_node = QtWidgets.QTreeWidgetItem([dev])
                 dev_node.setFlags(QtCore.Qt.ItemIsEnabled)
                 dev_node.setExpanded(True)
                 self.file_list.addTopLevelItem(dev_node)
-    
+            
                 for sub, entries in sorted(subs.items()):
                     sub_node = QtWidgets.QTreeWidgetItem([sub])
                     sub_node.setFlags(QtCore.Qt.ItemIsEnabled)
                     sub_node.setExpanded(True)
                     dev_node.addChild(sub_node)
-    
+            
                     for fp, meas_id, title in sorted(entries, key=_run_sort):
+                        m = re.search(r"(Run\d+)", title)
+                        display = title
+                        if m:
+                            key = (dev, sub, m.group(1))
+                            if run_id_totals.get(key, 0) > 1:
+                                run_id_seen[key] = run_id_seen.get(key, 0) + 1
+                                display = f"{title} ({run_id_seen[key]})"
+            
                         was_ticked = (
                             (fp, meas_id) in previously_ticked_meas
                             or fp in previously_ticked_files
                         )
-                        child = QtWidgets.QTreeWidgetItem([title])
+                        child = QtWidgets.QTreeWidgetItem([display])
                         child.setFlags(
                             QtCore.Qt.ItemIsEnabled
                             | QtCore.Qt.ItemIsSelectable
