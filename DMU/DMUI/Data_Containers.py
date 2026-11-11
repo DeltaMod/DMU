@@ -8,6 +8,7 @@ import shutil
 import numpy as np
 import re
 from pathlib import Path
+import copy 
 
 try:
     from .Plotting_Tools import *
@@ -53,7 +54,16 @@ class Measurement:
     comment: str = ""
     curves: list[CurveData] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+
+    # -- Logbook / Data Info ------------------------------------------
+    # log: user-editable dict. Persisted to _LOGBOOK_GUI.json.
     log: dict = field(default_factory=dict)
+    # run_info: read-only, curated fields the data source wants to
+    # surface in the Data Info tab (Keithley: Test Name, Op Mode, …).
+    run_info: dict = field(default_factory=dict)
+    # raw_info: read-only, full dict from the source. Keithley: the
+    # entire Settings dict. May be large; the GUI shows it collapsed.
+    raw_info: dict = field(default_factory=dict)
 
     # Raw columns per measurement — populated for Keithley runs so that any
     # pair of columns can be plotted (V vs t, I vs t, V1 vs V2, …). The
@@ -497,6 +507,23 @@ class DataSource(Protocol):
         plus a log-dict read; PalmSens implements it via list_measurements.
         """
         ...
+
+    def log_field_names(self) -> list[str]:
+        """Canonical field order for this source's logbook.
+
+        Should list fields that are guaranteed to be meaningful for
+        this source (Device, Subdevice, SMU1..4, SMU Order, …). Fields
+        listed here are rendered as empty editor widgets if missing
+        from the actual log dict, so the user can fill them in.
+
+        Comment is excluded — the GUI always renders it separately.
+        """
+
+    def readonly_log_fields(self) -> set[str]:
+        """Subset of log_field_names() the user cannot edit.
+
+        Identity fields: RunID for Keithley, Timestamp for PalmSens.
+        """
         
 class PalmSensSource:
     name = "palmsens"
@@ -505,7 +532,6 @@ class PalmSensSource:
         return path.suffix.lower() == ".pssession"
 
     def load(self, path: Path, **kwargs) -> LoadedFile:
-        import pypalmsens as ps
         DATA = ps.load_session_file(str(path))
         measurements = []
         for i, dat in enumerate(DATA):
@@ -518,17 +544,29 @@ class PalmSensSource:
                     x_unit=getattr(c, "x_unit", ""),
                     y_unit=getattr(c, "y_unit", ""),
                 ))
+            ts = getattr(dat, "timestamp", "")
+            notes = getattr(
+                getattr(getattr(dat, "_psmeasurement", None), "Method", None),
+                "Notes", ""
+            )
             measurements.append(Measurement(
                 measurement_id=i,
                 title=getattr(dat, "title", "") or path.stem,
-                timestamp=getattr(dat, "timestamp", ""),
-                comment=getattr(
-                    getattr(getattr(dat, "_psmeasurement", None), "Method", None),
-                    "Notes", ""
-                ),
+                timestamp=ts,
+                comment=notes,
                 curves=curves,
+                log={"Comment": notes} if notes else {},
+                run_info={},       # placeholder — fill in later
+                raw_info={},       # placeholder — fill in later
             ))
         return LoadedFile(path=path, source_type=self.name, measurements=measurements)
+
+    def log_field_names(self) -> list[str]:
+        # PalmSens has no per-run logbook fields beyond Comment.
+        return []
+
+    def readonly_log_fields(self) -> set[str]:
+        return set()
     
     def peek_classified(self, path: Path):
         """PalmSens has no per-measurement logbook; report no device/subdevice
@@ -563,7 +601,17 @@ class KeithleySource:
         store = get_folder_store(path.parent, self.name, self._build_measurement)
         return store.peek_classified(path.name)
     # -- measurement builder (unchanged logic, now called by FolderStore) --
-
+    
+    def log_field_names(self) -> list[str]:
+        return [
+            "Device", "Subdevice",
+            "SMU1", "SMU2", "SMU3", "SMU4",
+            "SMU Order", "LightMicroscope",
+        ]
+    
+    def readonly_log_fields(self) -> set[str]:
+        return {"RunID"}
+    
     def _build_measurement(self, i: int, run_key: str,
                            run_data: dict) -> Measurement:
         settings = run_data.get("Settings", {}) or {}
@@ -600,6 +648,24 @@ class KeithleySource:
         raw_segs = run_data.get("sweep_segments", []) or []
         measurement_segments = [list(s) for s in raw_segs]
 
+        # Curated view for the Data Info tab. Pick a handful of fields
+        # users actually care about at a glance. Everything else is
+        # available in raw_info (collapsed by default).
+        run_info = {}
+        for key in ("Test Name", "Operation Mode",
+                    "Execution Time", "Instrument"):
+            v = settings.get(key)
+            if v is not None:
+                run_info[key] = v
+
+        # Full Settings dict, deep-copied so the Measurement owns its
+        # own copy (the pkl dict is a sibling reference and shouldn't
+        # be edited by the GUI via this path).
+        try:
+            raw_info = copy.deepcopy(settings)
+        except Exception:
+            raw_info = dict(settings)
+
         return Measurement(
             measurement_id=i,
             title=f"{run_key}: {settings.get('Test Name', '')}".strip(": "),
@@ -608,6 +674,8 @@ class KeithleySource:
             curves=self._extract_curves(run_data),
             metadata={"run_key": run_key, "settings": settings},
             log=log,
+            run_info=run_info,
+            raw_info=raw_info,
             columns=columns,
             column_units=column_units,
             segments=measurement_segments,

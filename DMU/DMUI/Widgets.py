@@ -42,7 +42,50 @@ import numpy as np
 from PyQt5 import QtWidgets, QtGui, QtCore
 
 
+class Theme:
+    """Centralized stylesheet strings.
 
+    Rule of thumb: any stylesheet that sets background, foreground, or
+    border colour MUST live here so a theme change is one edit. Font
+    weight/style variants may stay inline if used only once.
+    """
+
+    # ---- Read-only fields ----
+    # Deliberately empty. Read-only QLineEdit inherits the palette
+    # (dark bg, light text) just like editable fields, which is what
+    # you asked for. The prior bug was a hardcoded
+    # `background: #f4f4f4` fighting the palette's white text.
+    READONLY = ""
+
+    # ---- Section headers ----
+    HEADER_INLINE  = "font-weight: bold;"
+    HEADER_SECTION = "font-weight: bold; margin-top: 5px;"
+
+    # ---- Hints / empty states ----
+    HINT  = "color: gray; font-size: 10px;"
+    EMPTY = "color: gray; font-style: italic;"
+    MUTED = "color: #aaa;"
+
+    # ---- Code / JSON blocks ----
+    CODE_BLOCK = (
+        "color: #333; background: #f4f4f4; padding: 6px; "
+        "font-size: 11px; font-family: monospace;")
+    CODE_BLOCK_SM = (
+        "color: #333; background: #f4f4f4; padding: 4px; "
+        "font-family: monospace; font-size: 10px;")
+
+    # ---- State buttons ----
+    SUCCESS = "background-color: #4CAF50; color: white;"
+    WARN    = "background-color: #FF9800; color: white;"
+    ERROR   = "background-color: #f44336; color: white;"
+
+    FILTER_TOGGLE = (
+        "QPushButton { padding: 4px; } "
+        "QPushButton:checked { background-color: #4CAF50; color: white; }")
+
+    # ---- Image preview ----
+    PREVIEW_BG = "background-color: #2b2b2b;"
+    
 HEADER_BG = QtGui.QColor("#c8c8c8")
 class OverrideParamRow(QtWidgets.QWidget):
     """A row with a label, a QLineEdit (no validator, can hold string), and a reset button.

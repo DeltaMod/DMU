@@ -1185,7 +1185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Image label (for Real Size mode) ---
         self.image_label = QtWidgets.QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("background-color: #2b2b2b;")  # dark grey
+        self.image_label.setStyleSheet(Theme.PREVIEW_BG)  # dark grey
         
         self.image_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
         self.image_label.setMinimumSize(0, 0)
@@ -1369,7 +1369,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- Data management ----
         dm_lbl = QtWidgets.QLabel("Data management")
-        dm_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        dm_lbl.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(dm_lbl)
 
         target_row = QtWidgets.QHBoxLayout()
@@ -1390,13 +1390,13 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(target_row)
 
         self._dm_target_hint = QtWidgets.QLabel("")
-        self._dm_target_hint.setStyleSheet("color: gray; font-size: 10px;")
+        self._dm_target_hint.setStyleSheet(Theme.HINT)
         self._dm_target_hint.setWordWrap(True)
         layout.addWidget(self._dm_target_hint)
 
         # ---- LOG file operations ----
         log_lbl = QtWidgets.QLabel("LOG file operations")
-        log_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        log_lbl.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(log_lbl)
 
         btn_logs = QtWidgets.QPushButton("Convert LOGs to JSON")
@@ -1431,7 +1431,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- pkl operations ----
         pkl_lbl = QtWidgets.QLabel("pkl operations")
-        pkl_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        pkl_lbl.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(pkl_lbl)
 
         btn_add = QtWidgets.QPushButton("Find & add new measurements")
@@ -1451,7 +1451,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- migration ----
         mig_lbl = QtWidgets.QLabel("Migration")
-        mig_lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        mig_lbl.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(mig_lbl)
 
 
@@ -1471,7 +1471,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Label for the FIGURE DISPLAY PARAMETERS
         fig_display_label = QtWidgets.QLabel("Figure Display Parameters")
-        fig_display_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        fig_display_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(fig_display_label)
         
         
@@ -1539,7 +1539,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # ---- Legend label builder ----
         legend_label = QtWidgets.QLabel("Legend label builder")
-        legend_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        legend_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(legend_label)
         
         legend_hint = QtWidgets.QLabel(
@@ -1547,7 +1547,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "The active measurement is used as a live example below."
         )
         legend_hint.setWordWrap(True)
-        legend_hint.setStyleSheet("color: gray; font-size: 10px;")
+        legend_hint.setStyleSheet(Theme.HINT)
         layout.addWidget(legend_hint)
         
         legend_btn_row = QtWidgets.QHBoxLayout()
@@ -1572,9 +1572,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.legend_preview_label = QtWidgets.QLabel("Preview: —")
         self.legend_preview_label.setWordWrap(True)
-        self.legend_preview_label.setStyleSheet(
-            "color: #333; background: #f4f4f4; padding: 6px; "
-            "font-size: 11px; font-family: monospace;")
+        self.legend_preview_label.setStyleSheet(Theme.CODE_BLOCK)
         layout.addWidget(self.legend_preview_label)
         
         # -- Separator --
@@ -1584,7 +1582,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Font size controls
         font_label = QtWidgets.QLabel("Font Sizes")
-        font_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        font_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(font_label)
         
         self.font_sizes_row = MultiParamRow(
@@ -1603,7 +1601,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Bounds controls
         font_label = QtWidgets.QLabel("Plot Bounds")
-        font_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        font_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(font_label)
         
         self.bounds_row = MultiParamRow(
@@ -1619,7 +1617,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Bounds controls
         font_label = QtWidgets.QLabel("Plot Limits")
-        font_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        font_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(font_label)
         # GET BOUNDS to make altering them easier
         self.get_bounds_btn = QtWidgets.QPushButton("Get Plot Bounds")
@@ -1650,7 +1648,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # rcParam override file handling
         rcparam_label = QtWidgets.QLabel("RC Param Handling")
-        rcparam_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        rcparam_label.setStyleSheet(Theme.HEADER_SECTION)
         layout.addWidget(rcparam_label)
         
         rcparam_hint = QtWidgets.QLabel(
@@ -1659,7 +1657,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "and go back to the defaults hardcoded in the script."
         )
         rcparam_hint.setWordWrap(True)
-        rcparam_hint.setStyleSheet("color: gray; font-size: 10px;")
+        rcparam_hint.setStyleSheet(Theme.HINT)
         layout.addWidget(rcparam_hint)
         
         rcparam_btn_row = QtWidgets.QHBoxLayout()
@@ -1682,112 +1680,152 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def _build_logbook_tab(self):
         tab = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(tab)
+        outer = QtWidgets.QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
     
-        # ---- Active measurement (editable) ----
+        # Whole-tab scroll area — one column, no inner scrollbars.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        inner_widget = QtWidgets.QWidget()
+        inner = QtWidgets.QVBoxLayout(inner_widget)
+        inner.setContentsMargins(4, 4, 4, 4)
+        inner.setSpacing(6)
+        scroll.setWidget(inner_widget)
+        outer.addWidget(scroll)
+    
+        # ---- Active measurement header ----
         active_lbl = QtWidgets.QLabel("Active measurement")
         active_lbl.setStyleSheet("font-weight: bold;")
+        inner.addWidget(active_lbl)
+    
         # ---- Identity (read-only) ----
         identity_row = QtWidgets.QHBoxLayout()
         identity_row.addWidget(QtWidgets.QLabel("File:"))
         self._log_identity_file = QtWidgets.QLineEdit()
         self._log_identity_file.setReadOnly(True)
-        self._log_identity_file.setStyleSheet(
-            "background: #f4f4f4; color: #333;")
         identity_row.addWidget(self._log_identity_file, stretch=2)
-       
+    
         identity_row.addWidget(QtWidgets.QLabel("RunID:"))
         self._log_identity_runid = QtWidgets.QLineEdit()
         self._log_identity_runid.setReadOnly(True)
-        self._log_identity_runid.setStyleSheet("background: #f4f4f4; color: #333;")
         identity_row.addWidget(self._log_identity_runid, stretch=1)
-        layout.addLayout(identity_row) 
-        layout.addWidget(active_lbl)
-        
-        # Comment first, always visible (multi-line)
+        inner.addLayout(identity_row)
+    
+        # ---- Path fields (Device / Subdevice / SubSubdevice…) ----
+        inner.addWidget(QtWidgets.QLabel("Classification"))
+        path_row = QtWidgets.QHBoxLayout()
+        self._path_fields_container = QtWidgets.QWidget()
+        self._path_fields_layout = QtWidgets.QHBoxLayout(
+            self._path_fields_container)
+        self._path_fields_layout.setContentsMargins(0, 0, 0, 0)
+        path_row.addWidget(self._path_fields_container, stretch=1)
+    
+        add_path_btn = QtWidgets.QPushButton("+ Add")
+        add_path_btn.setToolTip(
+            "Add another classification field (e.g. SubSubdevice).")
+        add_path_btn.setFixedWidth(70)
+        add_path_btn.clicked.connect(self._on_add_path_field)
+        path_row.addWidget(add_path_btn)
+        inner.addLayout(path_row)
+    
+        # ---- Comment ----
+        inner.addWidget(QtWidgets.QLabel("Comment"))
         self._log_comment = QtWidgets.QPlainTextEdit()
         self._log_comment.setFixedHeight(80)
         self._log_comment.textChanged.connect(self._on_log_comment_changed)
-        layout.addWidget(self._log_comment)
+        inner.addWidget(self._log_comment)
     
-        # Dynamic fields, scrollable in case user adds many
+        # ---- Logbook fields (form + inline New Entry) ----
+        inner.addWidget(QtWidgets.QLabel("Logbook fields"))
+    
         self._log_fields = {}
         self._log_fields_container = QtWidgets.QWidget()
-        self._log_form_layout = QtWidgets.QFormLayout(
-            self._log_fields_container)
+        fields_outer = QtWidgets.QVBoxLayout(self._log_fields_container)
+        fields_outer.setContentsMargins(0, 0, 0, 0)
+        fields_outer.setSpacing(2)
+    
+        self._log_form_widget = QtWidgets.QWidget()
+        self._log_form_layout = QtWidgets.QFormLayout(self._log_form_widget)
         self._log_form_layout.setContentsMargins(0, 0, 0, 0)
         self._log_form_layout.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        fields_outer.addWidget(self._log_form_widget)
     
-        self._log_fields_scroll = QtWidgets.QScrollArea()
-        self._log_fields_scroll.setWidgetResizable(True)
-        self._log_fields_scroll.setWidget(self._log_fields_container)
-        layout.addWidget(self._log_fields_scroll, stretch=1)
-    
-        # ---- New Entry row ----
+        # Thin rule then inline New Entry row
         new_sep = QtWidgets.QFrame()
         new_sep.setFrameShape(QtWidgets.QFrame.HLine)
-        layout.addWidget(new_sep)
-    
-        new_lbl = QtWidgets.QLabel("New Entry")
-        new_lbl.setStyleSheet("font-weight: bold;")
-        layout.addWidget(new_lbl)
+        new_sep.setStyleSheet("color: #888;")
+        fields_outer.addWidget(new_sep)
     
         new_row = QtWidgets.QHBoxLayout()
         self._log_new_field_name = QtWidgets.QLineEdit()
-        self._log_new_field_name.setPlaceholderText("Field name")
-    
+        self._log_new_field_name.setPlaceholderText("New field name")
         self._log_new_field_type = QtWidgets.QComboBox()
         self._log_new_field_type.addItems(["string", "bool", "int", "float"])
-    
         btn_focused = QtWidgets.QPushButton("Add to focused")
-        btn_focused.setToolTip("Add this field to the active measurement only")
+        btn_focused.setToolTip(
+            "Add this field to the active measurement only")
         btn_focused.clicked.connect(self._on_add_new_field_focused)
-    
         btn_ticked = QtWidgets.QPushButton("Add to ticked")
-        btn_ticked.setToolTip("Add this field to every ticked measurement")
+        btn_ticked.setToolTip(
+            "Add this field to every ticked measurement")
         btn_ticked.clicked.connect(self._on_add_new_field_ticked)
-    
         new_row.addWidget(self._log_new_field_name, stretch=1)
         new_row.addWidget(self._log_new_field_type)
         new_row.addWidget(btn_focused)
         new_row.addWidget(btn_ticked)
-        layout.addLayout(new_row)
+        fields_outer.addLayout(new_row)
     
-        # ---- Collapsible list of other selected/ticked measurements ----
+        inner.addWidget(self._log_fields_container)
+    
+        # ---- Read-only measurement info (source-curated) ----
+        self._run_info_section = CollapsibleSection(
+            "Measurement info (read-only)", expanded=True)
+        self._run_info_form_widget = QtWidgets.QWidget()
+        self._run_info_form = QtWidgets.QFormLayout(self._run_info_form_widget)
+        self._run_info_form.setContentsMargins(20, 2, 2, 2)
+        self._run_info_section.set_layout(self._run_info_form)
+        inner.addWidget(self._run_info_section)
+    
+        # ---- Raw source dict (read-only, structured like fields) ----
+        self._raw_info_section = CollapsibleSection(
+            "Raw measurement data (read-only)", expanded=False)
+        self._raw_info_form_widget = QtWidgets.QWidget()
+        self._raw_info_form = QtWidgets.QFormLayout(self._raw_info_form_widget)
+        self._raw_info_form.setContentsMargins(20, 2, 2, 2)
+        self._raw_info_section.set_layout(self._raw_info_form)
+        inner.addWidget(self._raw_info_section)
+    
+        # ---- Other selected / ticked measurements ----
         if not hasattr(self, "_log_other_expanded"):
             self._log_other_expanded = False
     
         other_sep = QtWidgets.QFrame()
         other_sep.setFrameShape(QtWidgets.QFrame.HLine)
-        layout.addWidget(other_sep)
+        inner.addWidget(other_sep)
     
         others_row = QtWidgets.QHBoxLayout()
         others_lbl = QtWidgets.QLabel("Other selected / ticked measurements")
         others_lbl.setStyleSheet("font-weight: bold;")
         others_row.addWidget(others_lbl, stretch=1)
-    
         self._log_other_toggle = QtWidgets.QPushButton(
             "Collapse All" if self._log_other_expanded else "Expand All")
         self._log_other_toggle.setFixedWidth(100)
-        self._log_other_toggle.setToolTip(
-            "Set whether 'Other measurements' sections open expanded or "
-            "collapsed by default when the selection changes.")
         self._log_other_toggle.clicked.connect(self._on_log_other_toggle)
         others_row.addWidget(self._log_other_toggle)
-        layout.addLayout(others_row)
+        inner.addLayout(others_row)
     
-        self._log_other_scroll = QtWidgets.QScrollArea()
-        self._log_other_scroll.setWidgetResizable(True)
         self._log_other_container = QtWidgets.QWidget()
         self._log_other_layout = QtWidgets.QVBoxLayout(
             self._log_other_container)
         self._log_other_layout.setContentsMargins(0, 0, 0, 0)
         self._log_other_layout.addStretch(1)
-        self._log_other_scroll.setWidget(self._log_other_container)
-        layout.addWidget(self._log_other_scroll, stretch=1)
+        inner.addWidget(self._log_other_container)
     
-        self._logbook_tab_index = self.tab_widget.addTab(tab, "Logbook")
+        inner.addStretch(1)
+    
+        self._logbook_tab_index = self.tab_widget.addTab(tab, "Data Info")
         
     def _on_log_other_toggle(self):
         """Flip the global 'always expanded' state for other-measurement
@@ -1797,7 +1835,25 @@ class MainWindow(QtWidgets.QMainWindow):
             "Collapse All" if self._log_other_expanded else "Expand All")
         self._refresh_logbook_tab()
 
-
+    def _on_add_path_field(self):
+        """Add a new classification-style field (e.g. SubSubdevice)."""
+        if self.loaded_file is None or self.current_meas_index is None:
+            return
+        meas = self.loaded_file.measurements[self.current_meas_index]
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Add classification field",
+            "Field name (e.g. SubSubdevice):")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in meas.log:
+            QtWidgets.QMessageBox.information(
+                self, "Field exists",
+                f"'{name}' already exists on this measurement.")
+            return
+        meas.log[name] = None
+        self._schedule_log_commit(affect_plot=False)
+        self._refresh_logbook_tab()
     # -- Filter Menu stuff ---#
     def _build_filter_tab(self):
         tab = QtWidgets.QWidget()
@@ -1809,7 +1865,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "hidden runs still receive 'Add to ticked' / 'Copy to ticked' "
             "edits. Combine conditions with AND or OR.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: 10px;")
+        hint.setStyleSheet(Theme.HINT)
         layout.addWidget(hint)
     
         # Enable toggle
@@ -2561,14 +2617,14 @@ class MainWindow(QtWidgets.QMainWindow):
         folder = (Path(self.current_file_path).parent
                   if self.current_file_path else None)
         if folder is None:
-            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabText(self._logbook_tab_index, "Data Info")
             self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
             return
 
         source = dit.find_log_file(folder)
         gui    = dit.find_gui_log_file(folder)
         if source is None or gui is None:
-            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabText(self._logbook_tab_index, "Data Info")
             self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
             return
 
@@ -2581,47 +2637,49 @@ class MainWindow(QtWidgets.QMainWindow):
             count = 0
 
         if count == 0:
-            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook")
+            self.tab_widget.setTabText(self._logbook_tab_index, "Data Info")
             self.tab_widget.setTabToolTip(self._logbook_tab_index, "")
         else:
-            self.tab_widget.setTabText(self._logbook_tab_index, "Logbook ●")
+            self.tab_widget.setTabText(self._logbook_tab_index, "Data Info ●")
             self.tab_widget.setTabToolTip(
                 self._logbook_tab_index,
-                f"{count} run(s) differ between _LOGBOOK.json and the "
+                f"run(s) differ between _LOGBOOK.json and the "
                 f"GUI copy. Use Advanced → 'Export GUI LOG → source' "
                 f"to promote, or 'Compare & merge LOGs…' to reconcile.")
 
+    _PATH_FIELD_RE = re.compile(r"^(?:[Ss]ub)*[Dd]evice$")
+
     def _refresh_logbook_tab(self):
-        # ---------- Active section: comment + identity ----------
+        # ---- Active section ----
         if self.loaded_file is None or self.current_meas_index is None:
-            if hasattr(self, "_log_identity_file"):
-                self._log_identity_file.setText("")
-            if hasattr(self, "_log_identity_runid"):
-                self._log_identity_runid.setText("")
+            self._log_identity_file.setText("")
+            self._log_identity_runid.setText("")
             self._log_comment.blockSignals(True)
             self._log_comment.setPlainText("")
             self._log_comment.blockSignals(False)
+            self._rebuild_path_fields({})
             self._rebuild_log_fields({})
+            self._rebuild_run_info({})
+            self._rebuild_raw_info({})
         else:
             meas = self.loaded_file.measurements[self.current_meas_index]
-            log = getattr(meas, "log", {}) or {}
-
-            if hasattr(self, "_log_identity_file"):
-                self._log_identity_file.setText(
-                    Path(self.current_file_path).name
-                    if self.current_file_path else "")
-            if hasattr(self, "_log_identity_runid"):
-                self._log_identity_runid.setText(
-                    str(meas.metadata.get("run_key", "")))
-
+            log = meas.log or {}
+            self._log_identity_file.setText(
+                Path(self.current_file_path).name
+                if self.current_file_path else "")
+            self._log_identity_runid.setText(
+                str(meas.metadata.get("run_key", "")))
             self._log_comment.blockSignals(True)
             self._log_comment.setPlainText(
                 str(log.get("Comment") or meas.comment or ""))
             self._log_comment.blockSignals(False)
 
+            self._rebuild_path_fields(log)
             self._rebuild_log_fields(log)
+            self._rebuild_run_info(getattr(meas, "run_info", {}) or {})
+            self._rebuild_raw_info(getattr(meas, "raw_info", {}) or {})
 
-        # ---------- Other selected / ticked sections ----------
+        # ---- Other selected / ticked ----
         while self._log_other_layout.count() > 1:
             item = self._log_other_layout.takeAt(0)
             w = item.widget()
@@ -2643,19 +2701,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_logbook_indicator()
             return
 
-        readonly_keys = ("Timestamp", "Device", "Subdevice", "RunID",
-                         "SMU Order", "LightMicroscope",
-                         "SMU1", "SMU2", "SMU3", "SMU4")
-
         for fp, mi in others:
             lf = self.loaded_files.get(fp)
             if lf is None or mi >= len(lf.measurements):
                 continue
             meas = lf.measurements[mi]
             log = getattr(meas, "log", {}) or {}
+
+            try:
+                src = self.registry.find(Path(fp))
+            except Exception:
+                src = None
+            declared = src.log_field_names() if src else []
+
             title = f"{Path(fp).name}  ::  {meas.title}"
             section = CollapsibleSection(
-                title, expanded=getattr(self, "_log_other_expanded", False))
+                title,
+                expanded=getattr(self, "_log_other_expanded", False))
 
             inner = QtWidgets.QFormLayout()
             inner.setContentsMargins(20, 2, 2, 2)
@@ -2666,8 +2728,20 @@ class MainWindow(QtWidgets.QMainWindow):
             cv.setFixedHeight(50)
             inner.addRow("Comment:", cv)
 
-            for k in readonly_keys:
-                v = log.get(k, "")
+            shown = set()
+            for k in declared:
+                if k == "Comment":
+                    continue
+                shown.add(k)
+                v = log.get(k)
+                le = QtWidgets.QLineEdit("" if v is None else str(v))
+                le.setReadOnly(True)
+                inner.addRow(f"{k}:", le)
+
+            for k in log.keys():
+                if k == "Comment" or k in shown:
+                    continue
+                v = log.get(k)
                 le = QtWidgets.QLineEdit("" if v is None else str(v))
                 le.setReadOnly(True)
                 inner.addRow(f"{k}:", le)
@@ -2677,21 +2751,75 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log_other_layout.count() - 1, section)
 
         self._refresh_logbook_indicator()
-    def _rebuild_log_fields(self, log: dict):
-        """Clear and rebuild dynamic field widgets from a log dict.
+        
+    def _rebuild_path_fields(self, log: dict):
+        """Render Device / Subdevice / SubSubdevice… in a horizontal row."""
+        while self._path_fields_layout.count():
+            item = self._path_fields_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
-        Always shows Device and Subdevice. All other keys come from the
-        log itself, so user-added fields appear here automatically.
-        """
+        src = self._find_active_source()
+        declared = src.log_field_names() if src else []
+        readonly = src.readonly_log_fields() if src else set()
+
+        ordered = []
+        for k in declared:
+            if k in readonly:
+                continue
+            if self._PATH_FIELD_RE.match(k) and k not in ordered:
+                ordered.append(k)
+        for k in log.keys():
+            if k == "Comment" or k in readonly:
+                continue
+            if self._PATH_FIELD_RE.match(k) and k not in ordered:
+                ordered.append(k)
+
+        for key in ordered:
+            self._path_fields_layout.addWidget(
+                self._make_path_field_widget(key, log.get(key)))
+
+    def _make_path_field_widget(self, key, value):
+        box = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 8, 0)
+        h.addWidget(QtWidgets.QLabel(f"{key}:"))
+        w = self._build_log_field_widget(key, value)
+        h.addWidget(w, stretch=1)
+        return box
+
+    def _find_active_source(self):
+        if not self.current_file_path:
+            return None
+        try:
+            return self.registry.find(Path(self.current_file_path))
+        except Exception:
+            return None
+
+    def _rebuild_log_fields(self, log: dict):
+        """Editable fields (source-declared minus path fields, plus
+        user-added fields not matching the path regex)."""
         self._log_fields = {}
         while self._log_form_layout.rowCount() > 0:
             self._log_form_layout.removeRow(0)
 
-        forced = []
-        readonly_keys = {"Filename", "RunID"}
-        ordered = list(forced)
+        src = self._find_active_source()
+        declared = src.log_field_names() if src else []
+        readonly = src.readonly_log_fields() if src else {"RunID"}
+
+        ordered = []
+        for k in declared:
+            if k == "Comment" or k in readonly:
+                continue
+            if self._PATH_FIELD_RE.match(k):
+                continue
+            if k not in ordered:
+                ordered.append(k)
         for k in log.keys():
-            if k == "Comment" or k in readonly_keys:
+            if k == "Comment" or k in readonly:
+                continue
+            if self._PATH_FIELD_RE.match(k):
                 continue
             if k not in ordered:
                 ordered.append(k)
@@ -2702,6 +2830,51 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log_fields[key] = widget
             wrapped = self._wrap_log_field_with_copy(key, widget)
             self._log_form_layout.addRow(f"{key}:", wrapped)
+
+    def _rebuild_run_info(self, run_info: dict):
+        while self._run_info_form.rowCount() > 0:
+            self._run_info_form.removeRow(0)
+        if not run_info:
+            lbl = QtWidgets.QLabel("(no metadata reported by source)")
+            lbl.setStyleSheet("color: gray; font-style: italic;")
+            self._run_info_form.addRow(lbl)
+            return
+        for k, v in run_info.items():
+            le = QtWidgets.QLineEdit(self._format_raw_value(v))
+            le.setReadOnly(True)
+            le.setToolTip(str(v))
+            self._run_info_form.addRow(f"{k}:", le)
+
+    def _rebuild_raw_info(self, raw_info: dict):
+        while self._raw_info_form.rowCount() > 0:
+            self._raw_info_form.removeRow(0)
+        if not raw_info:
+            lbl = QtWidgets.QLabel("(empty)")
+            lbl.setStyleSheet("color: gray; font-style: italic;")
+            self._raw_info_form.addRow(lbl)
+            return
+        for k, v in raw_info.items():
+            le = QtWidgets.QLineEdit(self._format_raw_value(v))
+            le.setReadOnly(True)
+            le.setToolTip(str(v))
+            self._raw_info_form.addRow(f"{k}:", le)
+
+    @staticmethod
+    def _format_raw_value(v) -> str:
+        """Compact string form for read-only display."""
+        if v is None:
+            return ""
+        if isinstance(v, (list, tuple)):
+            if len(v) <= 8:
+                return "[" + ", ".join(str(x) for x in v) + "]"
+            head = ", ".join(str(x) for x in v[:8])
+            return f"[{head}, … ({len(v)} items)]"
+        if isinstance(v, dict):
+            if len(v) <= 6:
+                body = ", ".join(f"{k}: {v[k]}" for k in v)
+                return "{" + body + "}"
+            return f"{{… ({len(v)} keys)}}"
+        return str(v)
 
     def _build_log_field_widget(self, key, value):
         """Type-dispatch a log value to the appropriate editor widget."""
@@ -2859,7 +3032,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "built-in defaults."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: gray; font-size: 10px;")
+        info.setStyleSheet(Theme.HINT)
         layout.addWidget(info)
     
         # ── Root selector ─────────────────────────────────────────
@@ -3283,7 +3456,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "use Advanced → Force rebuild pkl."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: 10px;")
+        hint.setStyleSheet(Theme.HINT)
         layout.addWidget(hint)
     
         self.problems_tree = QtWidgets.QTreeWidget()
