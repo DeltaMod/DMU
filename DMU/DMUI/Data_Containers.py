@@ -606,7 +606,7 @@ class KeithleySource:
         return [
             "Device", "Subdevice",
             "SMU1", "SMU2", "SMU3", "SMU4",
-            "SMU Order", "LightMicroscope",
+            "SMU Order", "Light Microscope",
         ]
     
     def readonly_log_fields(self) -> set[str]:
@@ -648,15 +648,23 @@ class KeithleySource:
         raw_segs = run_data.get("sweep_segments", []) or []
         measurement_segments = [list(s) for s in raw_segs]
 
-        # Curated view for the Data Info tab. Pick a handful of fields
-        # users actually care about at a glance. Everything else is
-        # available in raw_info (collapsed by default).
+        # Curated view for the Data Info tab. Handful of fields users will care about
+        # Everything else is available in raw_info 
         run_info = {}
         for key in ("Test Name", "Operation Mode",
                     "Execution Time", "Instrument"):
             v = settings.get(key)
             if v is not None:
                 run_info[key] = v
+
+        # "Last Executed"  fall back to the wall-clock execution time so the row is never silently absent.
+        last_executed = (
+            settings.get("Last Executed")
+            or settings.get("Date")
+            or settings.get("Execution Time")
+        )
+        if last_executed:
+            run_info["Last Executed"] = last_executed
 
         # Full Settings dict, deep-copied so the Measurement owns its
         # own copy (the pkl dict is a sibling reference and shouldn't

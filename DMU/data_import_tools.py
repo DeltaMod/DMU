@@ -33,8 +33,8 @@ except ImportError:
         sys.path.insert(0, current_dir)
 
     from DMU.custom_logger import get_custom_logger
-    from DMU.plot_utils import *     # noqa: F401,F403
-    from DMU.utils_utils import *    # noqa: F401,F403
+    from DMU.plot_utils import *     
+    from DMU.utils_utils import *    #
 
 
 logger = get_custom_logger("DMU_UTILS")
@@ -83,7 +83,7 @@ file loading order:
         If no "comment" is provided, one should be added (so we can access and edit it later in the GUI)
         If no "SMU Order" is provided, it should be presumed to be in numeric order [1,2,3,4] or [1,2] if only SMU1->SMU2
         Ideally, these can be exposed in the GUI to be edited.
-        If not present, the field "Light Microscope" can be set to "unknown" (I'd prefer this to be a bool, but you can't set unknown as a bool)
+        If not present, "Light Microscope" is left as None (displayed as Unknown by the GUI's tri-state toggle).
         Also, it should work if the log just contains RunID's. In this case, we fallback on the Filename + SD0 I described earlier, but of course add numports based on the Instrument field. 
         More importantly, if NO LOG IS PROVIDED, we should build it from the data we have, but fill the comment field with "NO LOG" and the SMU's measured on with "Probe1" and "Probe2" in order
         
@@ -365,12 +365,13 @@ def convert_log_xls_to_dict(xls_path: Path) -> dict:
             light_mic = False
         elif light_mic in (1, "1", True):
             light_mic = True
-        # else: leave as "unknown"
+        else:
+            light_mic = None   # tri-state: unknown
 
         run_info = {
             **smu_assignments,
             "SMU Order": smu_order_used,
-            "LightMicroscope": light_mic,
+            "Light Microscope": light_mic,
             "Comment": entry.get("Comment", ""),
             "Device": device,
             "Subdevice": subdevice,
@@ -967,6 +968,101 @@ def get_num_ports(run_data: dict) -> int:
 # Fallback LOG creation
 # ---------------------------------------------------------------------------
 
+# ── Log canonicalisation helpers ────────────────────────────────────
+#
+# Two independent concerns, each idempotent:
+#
+#   aliasing     – rename irregular key spellings to the canonical
+#                  names in KeithleySource.log_field_names(). Data-
+#                  source-agnostic: any dict goes in, the same dict
+#                  with canonical keys comes out.
+#
+#   SMU fill     – when the user hasn't filled SMU1..SMU4 but the
+#                  run's Settings say which SMUs were used, populate
+#                  from Settings["SMU"] + Settings["Operation Mode"]
+#                  (positional, same index in both lists).
+#
+# Both are called from normalise_log_info(). Nothing outside this
+# module needs to know either exists.
+
+_ALIAS_MAP = {
+    # lowercased, whitespace/underscore-stripped → canonical
+    "lightmicroscope": "Light Microscope",
+    "microscope":      "Light Microscope",
+    "light":           "Light Microscope",
+}
+
+
+def _canonicalise_log_aliases(log: dict) -> dict:
+    """Rename alias keys to their canonical name.
+
+    If both an alias and its canonical form are present, the
+    canonical literal wins (a correct entry is never demoted).
+    """
+    out: dict = {}
+    for k, v in log.items():
+        stripped = str(k).lower().replace(" ", "").replace("_", "")
+        canonical = _ALIAS_MAP.get(stripped, k)
+        if canonical in out and canonical != k:
+            continue  # canonical spelling already seen — don't demote
+        out[canonical] = v
+    return out
+
+
+def _fill_smu_from_settings(info: dict, settings: dict) -> dict:
+    """Populate SMU1..SMU4 from Settings['SMU'] + Settings['Operation Mode'].
+
+    Rules:
+      • user-typed non-empty string → preserved verbatim
+      • SMU present in Settings     → Operation Mode string
+                                      (or False if op mode empty)
+      • SMU absent from Settings    → False
+    """
+    out = dict(info)
+    smu_names = _as_list(settings.get("SMU") or [])
+    op_modes = _as_list(settings.get("Operation Mode") or [])
+
+    for i in range(4):
+        key = f"SMU{i + 1}"
+        current = out.get(key)
+
+        # User-typed string always wins
+        if isinstance(current, str) and current.strip():
+            continue
+
+        if i < len(smu_names):
+            op = op_modes[i] if i < len(op_modes) else None
+            if op is not None and str(op).strip():
+                out[key] = str(op)
+            else:
+                out[key] = False
+        else:
+            out[key] = False
+
+    return out
+
+
+def _normalise_light_microscope(value):
+    """Coerce any historical form to the tri-state (True / False / None)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "yes", "on", "1"):
+            return True
+        if low in ("false", "no", "off", "0"):
+            return False
+        # "unknown", "", or anything unrecognised
+        return None
+    # 0 / 1 integers or other numerics
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def make_fallback_log(run_data: dict) -> dict:
     """
     Build a LOG dict when no log file exists.
@@ -982,28 +1078,40 @@ def make_fallback_log(run_data: dict) -> dict:
 
     info["SMU Order"] = order
     info["Comment"] = "NO LOG"
-    info["LightMicroscope"] = "unknown"
+    info["Light Microscope"] = None  # tri-state: unknown
     return info
 
 
 def normalise_log_info(info: dict, run_data: Optional[dict] = None,
                        default_comment: str = "") -> dict:
-    """Ensure a LOG dict has all expected keys."""
+    """Ensure a LOG dict has all expected keys.
+
+    Order of operations:
+      1. Alias collapse (LightMicroscope / Microscope / Light → Light Microscope)
+      2. SMU1..SMU4 fill from run_data["Settings"] (if supplied)
+      3. SMU Order derivation
+      4. Comment default
+      5. Light Microscope coerced to tri-state
+    """
     if info is None:
         info = {}
 
-    out = dict(info)
+    out = _canonicalise_log_aliases(info)
 
-    for i in range(1, 5):
-        out.setdefault(f"SMU{i}", False)
+    if run_data is not None:
+        out = _fill_smu_from_settings(out, run_data.get("Settings") or {})
+    else:
+        for i in range(1, 5):
+            out.setdefault(f"SMU{i}", False)
 
-    order = out.get("SMU Order") or out.get("SMU_Order") or out.get("smu_order")
+    order = (out.get("SMU Order")
+             or out.get("SMU_Order")
+             or out.get("smu_order"))
     if not order:
         order = [
             i for i in range(1, 5)
             if out.get(f"SMU{i}") not in (False, None, "")
         ]
-
     if not order and run_data is not None:
         order = get_smu_order(run_data)
 
@@ -1011,11 +1119,11 @@ def normalise_log_info(info: dict, run_data: Optional[dict] = None,
         int(x) for x in _as_list(order)
         if str(x).strip().lstrip("-").isdigit()
     ]
+
     out["Comment"] = out.get("Comment", out.get("comment", default_comment))
-    out["LightMicroscope"] = out.get(
-        "LightMicroscope",
-        out.get("Light Microscope", "unknown")
-    )
+    out["Light Microscope"] = _normalise_light_microscope(
+        out.get("Light Microscope"))
+
     return out
 
 def flatten_log_runs(log_data: dict) -> dict[str, dict]:

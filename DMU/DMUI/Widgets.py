@@ -38,6 +38,18 @@ Design Principles
 """
 
 import numpy as np
+import sys
+import os 
+
+try:
+    from . import plot_utils as dmp      # noqa: F401,F403  (kept for external wildcard consumers)
+except ImportError:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+
+    from DMU.custom_logger import get_custom_logger
+    import DMU.plot_utils as dmp     
 
 from PyQt5 import QtWidgets, QtGui, QtCore
 
@@ -60,12 +72,15 @@ class Theme:
     # ---- Section headers ----
     HEADER_INLINE  = "font-weight: bold;"
     HEADER_SECTION = "font-weight: bold; margin-top: 5px;"
-
+    HEADER_RULE    = "color: #888;"
+    
     # ---- Hints / empty states ----
     HINT  = "color: gray; font-size: 10px;"
     EMPTY = "color: gray; font-style: italic;"
     MUTED = "color: #aaa;"
 
+    # ---- READONLY Text -----
+    TXT_READONLY = "color: #555; font-style: italic; padding: 2px;"
     # ---- Code / JSON blocks ----
     CODE_BLOCK = (
         "color: #333; background: #f4f4f4; padding: 6px; "
@@ -73,12 +88,16 @@ class Theme:
     CODE_BLOCK_SM = (
         "color: #333; background: #f4f4f4; padding: 4px; "
         "font-family: monospace; font-size: 10px;")
-
+    
+    # ---- BOOL Buttons ----
+    BOOL_TRUE=dmp.get_rgbhex_color("light green"),
+    BOOL_FALSE=dmp.get_rgbhex_color("light red")
+    
     # ---- State buttons ----
     SUCCESS = "background-color: #4CAF50; color: white;"
     WARN    = "background-color: #FF9800; color: white;"
     ERROR   = "background-color: #f44336; color: white;"
-
+    
     FILTER_TOGGLE = (
         "QPushButton { padding: 4px; } "
         "QPushButton:checked { background-color: #4CAF50; color: white; }")
@@ -551,7 +570,7 @@ class BoolToggleButton(QtWidgets.QPushButton):
     """
 
     def __init__(self, key, value, on_change,
-                 true_color="#a1d99bff", false_color="#d6616bff",
+                 true_color=Theme.BOOL_TRUE, false_color=Theme.BOOL_FALSE,
                  parent=None):
         super().__init__(parent)
         self.key = key
@@ -585,6 +604,99 @@ class BoolToggleButton(QtWidgets.QPushButton):
 
     def get_value(self):
         return bool(self.isChecked())
+
+
+class SmuField(QtWidgets.QLineEdit):
+    """Editable SMU field.
+
+    Value semantics:
+      • empty string        → ``False``   (SMU is off / not measured on)
+      • non-empty string    → that string (operation mode or user text)
+
+    The field is deliberately a text input rather than a bool toggle
+    because the on-state carries information (what the SMU was actually
+    doing). A bare ``True`` should never reach this widget; if a legacy
+    log holds one, it will be displayed as the literal string 'True' so
+    the user can clear it or replace it with the actual operation.
+    """
+
+    def __init__(self, key, value, on_change, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._on_change = on_change
+        self.setPlaceholderText("Off (empty) — or enter SMU operation")
+        self.set_value(value)
+        self.editingFinished.connect(self._handle_finished)
+
+    def set_value(self, val):
+        self.blockSignals(True)
+        if val is False or val is None or val == "":
+            self.setText("")
+        else:
+            self.setText(str(val))
+        self.blockSignals(False)
+
+    def get_value(self):
+        txt = self.text().strip()
+        return txt if txt else False
+
+    def _handle_finished(self):
+        if self._on_change is not None:
+            self._on_change(self.key, self.get_value())
+
+
+class TriStateToggleButton(QtWidgets.QPushButton):
+    """Cycles True → False → Unknown (None) on each click.
+
+    Used for fields whose true state may be unknown because it simply
+    wasn't recorded at acquisition time (e.g. the microscope light).
+    Not checkable: we manage the cycle ourselves so that 'Unknown' is a
+    first-class value, not a bug in the check state.
+    """
+
+    _ORDER  = (True, False, None)
+    _LABELS = {True: "True", False: "False", None: "Unknown"}
+
+    def __init__(self, key, value, on_change,
+                 true_color="#9be89b", false_color="#f4a3a3",
+                 unknown_color="#cccccc", parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._on_change = on_change
+        self._true_color = true_color
+        self._false_color = false_color
+        self._unknown_color = unknown_color
+        self._value = None
+        self.setCheckable(False)
+        self.set_value(value)
+        self.clicked.connect(lambda *_: self._cycle())
+
+    def _cycle(self):
+        idx = self._ORDER.index(self._value)
+        self._value = self._ORDER[(idx + 1) % len(self._ORDER)]
+        self._update_style()
+        if self._on_change is not None:
+            self._on_change(self.key, self._value)
+
+    def _update_style(self):
+        color = (self._true_color if self._value is True
+                 else self._false_color if self._value is False
+                 else self._unknown_color)
+        self.setText(self._LABELS[self._value])
+        self.setStyleSheet(
+            f"QPushButton {{ background-color: {color}; "
+            f"border: 1px solid #888; padding: 3px 10px; "
+            f"border-radius: 3px; min-width: 80px; }}"
+        )
+
+    def set_value(self, val):
+        if val not in (True, False, None):
+            val = None
+        self._value = val
+        self._update_style()
+
+    def get_value(self):
+        return self._value
 
 
 class TypedLogField(QtWidgets.QLineEdit):
@@ -685,10 +797,33 @@ class ReadOnlyLogValue(QtWidgets.QLabel):
         except Exception:
             txt = str(value)
         self.setText(txt)
-        self.setStyleSheet("color: #555; font-style: italic; padding: 2px;")
+        self.setStyleSheet(Theme.TXT_READONLY)
 
     def get_value(self):
         return self._value
 
     def set_value(self, val):
         self._value = val
+
+
+class PlotTreeWidget(QtWidgets.QTreeWidget):
+    """QTreeWidget for the Saved Plots tab.
+
+    Behaves like a normal QTreeWidget but adds two things:
+      • rejects drops whose target is a plot entry (plots have no
+        children, so nesting one inside another would be nonsense)
+      • emits `dropped` after a successful InternalMove so the caller
+        can rebuild its JSON model from the tree
+    """
+
+    dropped = QtCore.pyqtSignal()
+
+    def dropEvent(self, event):
+        target = self.itemAt(event.pos())
+        if target is not None:
+            payload = target.data(0, QtCore.Qt.UserRole)
+            if isinstance(payload, dict) and payload.get("type") == "plot":
+                event.ignore()
+                return
+        super().dropEvent(event)
+        self.dropped.emit()

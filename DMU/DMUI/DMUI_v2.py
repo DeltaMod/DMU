@@ -213,6 +213,22 @@ def _measurement_signature(meas: "Measurement") -> str:
     """
     return "|".join(sorted(meas.columns.keys()))
 
+class _ResponsiveCanvas(FigureCanvas):
+    """
+    All this does is give a reasonable size-hint to the figure canvas, so it does not drown out the resize-request of the splitters.
+    Because its policy is expanding already, when we initialise the windows, it will be initialised as a 1,1 canvas, and then expand to fit available space.
+    """
+    def __init__(self, fig, parent=None):
+       super().__init__(fig)
+       if parent is not None:
+           self.setParent(parent)
+       self.setMinimumSize(0, 0)
+    
+    def sizeHint(self):
+        return QtCore.QSize(1, 1)
+     
+    def minimumSizeHint(self):
+        return QtCore.QSize(1, 1)
 # ---------------------------------------------------------------------------
 # Small config: remembers which folders you've added, across sessions. Change this to a local directory later.
 # ---------------------------------------------------------------------------
@@ -221,6 +237,9 @@ CONFIG_PATH = Path.home() / ".config" / "DMUI"
 WORKSPACE_PATH = CONFIG_PATH/ "workspace.json"
 DISPLAY_PATH = CONFIG_PATH / "display.json"
 RCPARAMS_OVERRIDE_PATH = CONFIG_PATH / "rcparams_override.json"
+SAVED_PLOTS_PATH = CONFIG_PATH / "saved_plots.json"
+DEFAULT_DISPLAY_PATH = CONFIG_PATH / "default_display_settings.json"
+
 
 def load_workspace():
     """Return the workspace dict.
@@ -246,6 +265,50 @@ def save_workspace(workspace: dict):
     CONFIG_PATH.mkdir(parents=True, exist_ok=True)
     with open(WORKSPACE_PATH, "w") as f:
         json.dump(workspace, f, indent=2)
+
+
+def load_saved_plots() -> dict:
+    """Return the saved-plots tree. Missing or unreadable → empty tree."""
+    if SAVED_PLOTS_PATH.exists():
+        try:
+            with open(SAVED_PLOTS_PATH) as f:
+                data = json.load(f)
+            data.setdefault("children", [])
+            return data
+        except Exception as e:
+            logger.error(f"Failed to load saved plots: {e}")
+    return {"children": []}
+
+
+def save_saved_plots(data: dict) -> None:
+    CONFIG_PATH.mkdir(parents=True, exist_ok=True)
+    with open(SAVED_PLOTS_PATH, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def load_default_display_settings() -> Optional[dict]:
+    """Return the explicit 'default display settings' snapshot, or None.
+
+    Deliberately separate from DISPLAY_PATH: DISPLAY_PATH is overwritten
+    every time the session closes or a parameter changes, so it can't
+    serve as a "known-good state I can always go back to". This file is
+    only ever written by the Save-default button, so a Load always
+    restores the exact state the user explicitly snapshotted.
+    """
+    if not DEFAULT_DISPLAY_PATH.exists():
+        return None
+    try:
+        with open(DEFAULT_DISPLAY_PATH) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load default display settings: {e}")
+        return None
+
+
+def save_default_display_settings(data: dict) -> None:
+    CONFIG_PATH.mkdir(parents=True, exist_ok=True)
+    with open(DEFAULT_DISPLAY_PATH, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -472,14 +535,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._user_rcparams = load_rcparams_override()
         self._sync_edit_vars_from_rcparams(self._user_rcparams)
         self._apply_all_rcparams()
-        
+
+        # Saved Plot Configurations — the whole tree lives in one JSON
+        # file under CONFIG_PATH; the tab's QTreeWidget is a view of it.
+        self._saved_plots_data = load_saved_plots()
+
         self._build_ui()
         self._restore_folders()
         self._load_session_parameters()
         self._apply_figsize(self.EDIT_SHOW_COMMENT)  
         self._update_canvas_size_policy()
         self._refresh_plot()   
-    
+        # Splitter sizes must be applied AFTER show()
+        QtCore.QTimer.singleShot(0, self._apply_splitter_sizes)
+        
     def get_default_for_edit(self,edit_name):
         """Get the default value for an EDIT_* variable from rcParams or UI_ONLY_DEFAULTS"""
         # Check if it's a UI-only value first
@@ -1067,7 +1136,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_ui(self):
         self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
-    
+        self.main_splitter.setHandleWidth(8)
+        self.main_splitter.setOpaqueResize(True)
+        
         left_widget = QtWidgets.QWidget()
         left_widget.setLayout(self._build_left_column())
         left_widget.setMinimumWidth(200)
@@ -1086,10 +1157,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)   # extra window width → middle
         self.main_splitter.setStretchFactor(2, 0)
-    
+        
         # Defaults; _load_session_parameters() overrides with the saved value
-        self.main_splitter.setSizes([260, 780, 260])
-    
+        self.main_splitter.setSizes(list(self.EDIT_SPLITTER_SIZES))
+        
+        #Extra functions
+        self.main_splitter.splitterMoved.connect(self._on_splitter_moved)
+        self._splitter_save_timer = QtCore.QTimer(self)
+        self._splitter_save_timer.setSingleShot(True)
+        self._splitter_save_timer.setInterval(500)
+        self._splitter_save_timer.timeout.connect(self._save_session_parameters)
         self.setCentralWidget(self.main_splitter)
 
     def _build_left_column(self):
@@ -1134,6 +1211,28 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_row.addWidget(add_root_btn)
         btn_row.addWidget(del_btn)
         col.addLayout(btn_row)
+        
+        # Bulk untick row. These are cheap (no disk I/O beyond the
+        # workspace save) and always safe to press.
+        desel_row = QtWidgets.QHBoxLayout()
+        desel_folders_btn = QtWidgets.QPushButton("Deselect Folders")
+        desel_folders_btn.setToolTip(
+            "Untick every folder. The measurement list empties as a "
+            "result (nothing is shown without a ticked folder).")
+        desel_folders_btn.clicked.connect(self._deselect_folders)
+        desel_meas_btn = QtWidgets.QPushButton("Deselect Meas.")
+        desel_meas_btn.setToolTip(
+            "Untick every measurement in the list below. Ticked "
+            "folders stay ticked, so the list stays visible.")
+        desel_meas_btn.clicked.connect(self._deselect_measurements)
+        desel_all_btn = QtWidgets.QPushButton("Deselect All")
+        desel_all_btn.setToolTip(
+            "Untick every folder and every measurement.")
+        desel_all_btn.clicked.connect(self._deselect_all)
+        desel_row.addWidget(desel_folders_btn)
+        desel_row.addWidget(desel_meas_btn)
+        desel_row.addWidget(desel_all_btn)
+        col.addLayout(desel_row)
     
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
@@ -1171,7 +1270,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # --- MAIN PLOTTING CANVAS ---
         self.fig = Figure(figsize=(self.EDIT_FIGSIZE_X, self.EDIT_FIGSIZE_Y), dpi=self.EDIT_FIGURE_DPI)
-        self.canvas = FigureCanvas(self.fig)
+        self.canvas = _ResponsiveCanvas(self.fig)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         # canvas_container centers the canvas when it's given a fixed size (Scale to Fit mode). 
@@ -1216,8 +1315,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_logbook_tab()
         self._build_filter_tab()
         self._build_classify_tab()
-        self._build_problems_tab()     
-
+        self._build_problems_tab()
+        self._build_saved_plots_tab()
+    
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         col.addStretch(1)
         return col
@@ -1696,7 +1796,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
         # ---- Active measurement header ----
         active_lbl = QtWidgets.QLabel("Active measurement")
-        active_lbl.setStyleSheet("font-weight: bold;")
+        active_lbl.setStyleSheet(Theme.HEADER_INLINE)
         inner.addWidget(active_lbl)
     
         # ---- Identity (read-only) ----
@@ -1755,7 +1855,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Thin rule then inline New Entry row
         new_sep = QtWidgets.QFrame()
         new_sep.setFrameShape(QtWidgets.QFrame.HLine)
-        new_sep.setStyleSheet("color: #888;")
+        new_sep.setStyleSheet(Theme.HEADER_RULE)
         fields_outer.addWidget(new_sep)
     
         new_row = QtWidgets.QHBoxLayout()
@@ -1807,7 +1907,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
         others_row = QtWidgets.QHBoxLayout()
         others_lbl = QtWidgets.QLabel("Other selected / ticked measurements")
-        others_lbl.setStyleSheet("font-weight: bold;")
+        others_lbl.setStyleSheet(Theme.HEADER_INLINE)
         others_row.addWidget(others_lbl, stretch=1)
         self._log_other_toggle = QtWidgets.QPushButton(
             "Collapse All" if self._log_other_expanded else "Expand All")
@@ -1872,16 +1972,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.filter_enable_btn = QtWidgets.QPushButton("Filtering: OFF")
         self.filter_enable_btn.setCheckable(True)
         self.filter_enable_btn.setChecked(False)
-        self.filter_enable_btn.setStyleSheet(
-            "QPushButton { padding: 4px; } "
-            "QPushButton:checked { background-color: #4CAF50; color: white; }")
+        self.filter_enable_btn.setStyleSheet(Theme.FILTER_TOGGLE)
         self.filter_enable_btn.toggled.connect(self._on_filter_enabled_toggled)
         layout.addWidget(self.filter_enable_btn)
     
         # Status line
         self._filter_status_label = QtWidgets.QLabel("")
-        self._filter_status_label.setStyleSheet(
-            "color: #555; font-size: 10px;")
+        self._filter_status_label.setStyleSheet(Theme.HINT)
         self._filter_status_label.setWordWrap(True)
         layout.addWidget(self._filter_status_label)
     
@@ -2078,7 +2175,7 @@ class MainWindow(QtWidgets.QMainWindow):
     
         if cond.get("operator") in ("is None", "is not None"):
             lbl = QtWidgets.QLabel("—")
-            lbl.setStyleSheet("color: #aaa;")
+            lbl.setStyleSheet(Theme.MUTED)
             layout.addWidget(lbl)
             return
     
@@ -2696,7 +2793,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if not others:
             hint = QtWidgets.QLabel("(nothing else ticked or highlighted)")
-            hint.setStyleSheet("color: gray; font-style: italic;")
+            hint.setStyleSheet(Theme.EMPTY)
             self._log_other_layout.insertWidget(0, hint)
             self._refresh_logbook_indicator()
             return
@@ -2836,7 +2933,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._run_info_form.removeRow(0)
         if not run_info:
             lbl = QtWidgets.QLabel("(no metadata reported by source)")
-            lbl.setStyleSheet("color: gray; font-style: italic;")
+            lbl.setStyleSheet(Theme.EMPTY)
             self._run_info_form.addRow(lbl)
             return
         for k, v in run_info.items():
@@ -2850,7 +2947,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._raw_info_form.removeRow(0)
         if not raw_info:
             lbl = QtWidgets.QLabel("(empty)")
-            lbl.setStyleSheet("color: gray; font-style: italic;")
+            lbl.setStyleSheet(Theme.EMPTY)
             self._raw_info_form.addRow(lbl)
             return
         for k, v in raw_info.items():
@@ -2878,6 +2975,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_log_field_widget(self, key, value):
         """Type-dispatch a log value to the appropriate editor widget."""
+        # -- Key-based overrides (before the type dispatch) ------------
+        # SMU fields hold False (off) or an operation string — not a
+        # bool toggle. Empty state means 'off'.
+        if re.fullmatch(r"SMU\d+", key):
+            return SmuField(key, value, self._on_log_value_changed)
+        # The microscope light is tri-state: on / off / not recorded.
+        if key == "Light Microscope":
+            return TriStateToggleButton(key, value, self._on_log_value_changed)
+
         if isinstance(value, bool):
             return BoolToggleButton(
                 key, value, self._on_log_value_changed,
@@ -3016,6 +3122,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 and self._log_commit_timer.isActive()):
             self._log_commit_timer.stop()
             self._commit_log_edit_now()
+            
     def _build_classify_tab(self):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
@@ -3105,9 +3212,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ef.addRow("Mode:", mode_row)
     
         self.classify_effective_label = QtWidgets.QLabel("")
-        self.classify_effective_label.setStyleSheet(
-            "color: #333; background: #f4f4f4; padding: 4px; "
-            "font-family: monospace; font-size: 10px;")
+        self.classify_effective_label.setStyleSheet(Theme.CODE_BLOCK_SM)
         self.classify_effective_label.setWordWrap(True)
         ef.addRow(self.classify_effective_label)
     
@@ -3135,9 +3240,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # ── Preview ──────────────────────────────────────────────
         self.classify_preview = QtWidgets.QLabel("")
         self.classify_preview.setWordWrap(True)
-        self.classify_preview.setStyleSheet(
-            "color: #333; background: #f4f4f4; padding: 6px; "
-            "font-size: 10px;")
+        self.classify_preview.setStyleSheet(Theme.CODE_BLOCK_SM)
         layout.addWidget(self.classify_preview)
     
         # ── Actions ──────────────────────────────────────────────
@@ -3219,8 +3322,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(mode_row)
 
         self.curves_mode_hint = QtWidgets.QLabel("")
-        self.curves_mode_hint.setStyleSheet(
-            "color: gray; font-size: 10px;")
+        self.curves_mode_hint.setStyleSheet(Theme.HINT)
         self.curves_mode_hint.setWordWrap(True)
         layout.addWidget(self.curves_mode_hint)
 
@@ -3271,8 +3373,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tpl.addLayout(spec_btn_row)
 
         self.curves_template_sig_label = QtWidgets.QLabel("Signature: —")
-        self.curves_template_sig_label.setStyleSheet(
-            "color: gray; font-size: 10px;")
+        self.curves_template_sig_label.setStyleSheet(Theme.HINT)
         tpl.addWidget(self.curves_template_sig_label)
 
         lib_row = QtWidgets.QHBoxLayout()
@@ -3555,6 +3656,703 @@ class MainWindow(QtWidgets.QMainWindow):
                 child = folder_item.child(j)
                 lines.append(f"  - {child.text(0)}")
         QtWidgets.QApplication.clipboard().setText("\n".join(lines))
+    
+    # -- Saved Plot Configurations -------------------------------------------
+    #
+    # The tab is a hierarchical list of folders and plot entries. Folders
+    # carry their own comment (describing what's in them); plots carry a
+    # full snapshot (ticked folders / measurements, per-measurement sidecar
+    # states, display config, user rcParams) plus a comment.
+    #
+    # Storage model
+    # -------------
+    # The whole tree lives in CONFIG_PATH/saved_plots.json. Each tree item
+    # stores its own JSON dict in UserRole, and _persist_plot_tree() walks
+    # the tree to rebuild the file. That means: the tree IS the model while
+    # the tab is alive; the file is derived.
+    #
+    # Why not keep the dict as source of truth and refresh the tree? Because
+    # QTreeWidget's InternalMove drag/drop already rearranges the tree for
+    # free — reconstructing the dict from the tree afterwards is a few lines,
+    # whereas intercepting every move to update the dict is many more.
+    
+    def _build_saved_plots_tab(self):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+    
+        hint = QtWidgets.QLabel(
+            "Save the current plot configuration (ticked folders / "
+            "measurements, sidecar states, display settings) so you can "
+            "reproduce it later without saving images.\n\n"
+            "Double-click a name to rename. Drag and drop to reorganise. "
+            "Folders hold their own comment describing what's inside; "
+            "plots hold their own comment describing what they show."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(Theme.HINT)
+        layout.addWidget(hint)
+    
+        self.plot_tree = PlotTreeWidget()
+        self.plot_tree.setHeaderHidden(True)
+        self.plot_tree.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.plot_tree.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.plot_tree.setDefaultDropAction(QtCore.Qt.MoveAction)
+        self.plot_tree.setDragEnabled(True)
+        self.plot_tree.setAcceptDrops(True)
+        self.plot_tree.setDropIndicatorShown(True)
+        self.plot_tree.setEditTriggers(
+            QtWidgets.QAbstractItemView.DoubleClicked)
+        self.plot_tree.itemSelectionChanged.connect(
+            self._on_plot_tree_selection_changed)
+        self.plot_tree.itemChanged.connect(self._on_plot_tree_item_changed)
+        self.plot_tree.dropped.connect(self._on_plot_tree_dropped)
+        layout.addWidget(self.plot_tree, stretch=1)
+    
+        # Comment editor for the currently-selected item.
+        self._plot_comment_label = QtWidgets.QLabel("(nothing selected)")
+        self._plot_comment_label.setStyleSheet(Theme.HINT)
+        layout.addWidget(self._plot_comment_label)
+    
+        self._plot_comment_editor = QtWidgets.QPlainTextEdit()
+        self._plot_comment_editor.setFixedHeight(60)
+        self._plot_comment_editor.setEnabled(False)
+        self._plot_comment_editor.setPlaceholderText(
+            "Comment for the selected folder or plot …")
+        self._plot_comment_editor.textChanged.connect(
+            self._on_plot_comment_changed)
+        layout.addWidget(self._plot_comment_editor)
+    
+        # Debounce timer for comment edits (avoids a save per keystroke).
+        self._plot_comment_save_timer = QtCore.QTimer(self)
+        self._plot_comment_save_timer.setSingleShot(True)
+        self._plot_comment_save_timer.setInterval(400)
+        self._plot_comment_save_timer.timeout.connect(
+            self._persist_plot_tree)
+    
+        # ── Add row ──────────────────────────────────────────────────
+        add_row = QtWidgets.QHBoxLayout()
+        add_folder_btn = QtWidgets.QPushButton("Add Plot Folder")
+        add_folder_btn.setToolTip(
+            "Insert an empty folder entry at the currently-selected "
+            "location (or the top level if nothing is selected). "
+            "Folders can hold other folders and plots.")
+        add_folder_btn.clicked.connect(self._on_add_plot_folder)
+        add_plot_btn = QtWidgets.QPushButton("Add new plot")
+        add_plot_btn.setToolTip(
+            "Capture the current configuration as a new plot entry in "
+            "the currently-active folder.")
+        add_plot_btn.clicked.connect(self._on_add_saved_plot)
+        add_row.addWidget(add_folder_btn)
+        add_row.addWidget(add_plot_btn)
+        layout.addLayout(add_row)
+    
+        # ── Edit row ─────────────────────────────────────────────────
+        edit_row = QtWidgets.QHBoxLayout()
+        update_btn = QtWidgets.QPushButton("Update Active plot")
+        update_btn.setToolTip(
+            "Replace the selected plot's saved configuration with the "
+            "current one (name and comment are preserved).")
+        update_btn.clicked.connect(self._on_update_saved_plot)
+        delete_btn = QtWidgets.QPushButton("Delete Active")
+        delete_btn.setToolTip(
+            "Delete the selected plot or folder. Deleting a folder "
+            "removes everything inside it.")
+        delete_btn.clicked.connect(self._on_delete_saved_plot)
+        edit_row.addWidget(update_btn)
+        edit_row.addWidget(delete_btn)
+        layout.addLayout(edit_row)
+        
+        # ── Display-default row ─────────────────────────────────────
+        # Independent of plot entries: this only saves/restores the
+        # Display tab state (EDIT_* fields + user rcParams). Useful
+        # when you've tuned fonts/dpi/figure size and want a one-click
+        # way back to that state without loading a whole plot.
+        default_row = QtWidgets.QHBoxLayout()
+        save_default_btn = QtWidgets.QPushButton("Save default display")
+        save_default_btn.setToolTip(
+            "Snapshot the current Display tab settings (figure size, "
+            "DPI, font sizes, legend toggles, plot limits, override "
+            "labels, user rcParams) as the default that 'Load default "
+            "display' restores. Independent of plot entries — does not "
+            "touch the plot tree.")
+        save_default_btn.clicked.connect(
+            self._on_save_default_display_settings)
+        load_default_btn = QtWidgets.QPushButton("Load default display")
+        load_default_btn.setToolTip(
+            "Restore the Display tab settings that were last saved "
+            "with 'Save default display'. Does NOT touch the "
+            "workspace, ticked measurements, or sidecar states.")
+        load_default_btn.clicked.connect(
+            self._on_load_default_display_settings)
+        default_row.addWidget(save_default_btn)
+        default_row.addWidget(load_default_btn)
+        default_row.addStretch(1)
+        layout.addLayout(default_row)
+        
+        # ── Load row ─────────────────────────────────────────────────
+        load_row = QtWidgets.QHBoxLayout()
+        load_btn = QtWidgets.QPushButton("Load Saved Plot")
+        load_btn.setToolTip(
+            "Restore this plot configuration. This OVERWRITES the "
+            "current workspace and the sidecar states of every "
+            "measurement in the snapshot.")
+        load_btn.setStyleSheet(Theme.SUCCESS)
+        load_btn.clicked.connect(self._on_load_saved_plot)
+        load_row.addWidget(load_btn)
+        load_row.addStretch(1)
+        layout.addLayout(load_row)
+    
+        self.tab_widget.addTab(tab, "Saved Plots")
+        self._refresh_plot_tree()
+    
+    # -- Saved plots: tree <-> dict -------------------------------------
+    
+    def _refresh_plot_tree(self):
+        """Populate the tree from self._saved_plots_data."""
+        self.plot_tree.blockSignals(True)
+        self.plot_tree.clear()
+        for child in self._saved_plots_data.get("children", []):
+            self.plot_tree.addTopLevelItem(self._plot_dict_to_item(child))
+        self.plot_tree.expandAll()
+        self.plot_tree.blockSignals(False)
+        self._on_plot_tree_selection_changed()
+    
+    def _plot_dict_to_item(self, entry: dict) -> QtWidgets.QTreeWidgetItem:
+        """One dict → one QTreeWidgetItem (recursively for folders)."""
+        item = QtWidgets.QTreeWidgetItem([entry.get("name", "")])
+        kind = entry.get("type", "folder")
+        if kind == "folder":
+            item.setIcon(0, self.style().standardIcon(
+                QtWidgets.QStyle.SP_DirIcon))
+            item.setFlags(
+                QtCore.Qt.ItemIsEnabled
+                | QtCore.Qt.ItemIsSelectable
+                | QtCore.Qt.ItemIsEditable
+                | QtCore.Qt.ItemIsDragEnabled
+                | QtCore.Qt.ItemIsDropEnabled)
+        else:
+            item.setIcon(0, self.style().standardIcon(
+                QtWidgets.QStyle.SP_FileIcon))
+            item.setFlags(
+                QtCore.Qt.ItemIsEnabled
+                | QtCore.Qt.ItemIsSelectable
+                | QtCore.Qt.ItemIsEditable
+                | QtCore.Qt.ItemIsDragEnabled)
+            item.setToolTip(
+                0, f"Saved at {entry.get('saved_at', 'unknown')}")
+    
+        payload = {k: v for k, v in entry.items() if k != "children"}
+        item.setData(0, QtCore.Qt.UserRole, payload)
+        for child in entry.get("children", []):
+            item.addChild(self._plot_dict_to_item(child))
+        return item
+    
+    def _plot_item_to_dict(self, item) -> dict:
+        """One QTreeWidgetItem → one dict (recursively for folders)."""
+        payload = dict(item.data(0, QtCore.Qt.UserRole) or {})
+        payload["name"] = item.text(0)   # displayed name is authoritative
+        if payload.get("type") == "folder":
+            payload["children"] = [
+                self._plot_item_to_dict(item.child(i))
+                for i in range(item.childCount())]
+        return payload
+    
+    def _persist_plot_tree(self):
+        """Serialize the tree to disk and refresh self._saved_plots_data."""
+        root = {"children": []}
+        for i in range(self.plot_tree.topLevelItemCount()):
+            root["children"].append(
+                self._plot_item_to_dict(self.plot_tree.topLevelItem(i)))
+        self._saved_plots_data = root
+        save_saved_plots(root)
+    
+    # -- Saved plots: tree event handlers -------------------------------
+    
+    def _on_plot_tree_selection_changed(self):
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            self._plot_comment_editor.blockSignals(True)
+            self._plot_comment_editor.clear()
+            self._plot_comment_editor.blockSignals(False)
+            self._plot_comment_editor.setEnabled(False)
+            self._plot_comment_label.setText("(nothing selected)")
+            return
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        kind = payload.get("type", "folder")
+        self._plot_comment_label.setText(
+            f"Comment for {kind} '{payload.get('name', '')}':")
+        self._plot_comment_editor.blockSignals(True)
+        self._plot_comment_editor.setPlainText(payload.get("comment", ""))
+        self._plot_comment_editor.blockSignals(False)
+        self._plot_comment_editor.setEnabled(True)
+    
+    def _on_plot_tree_item_changed(self, item, column):
+        if column != 0:
+            return
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        payload["name"] = item.text(0)
+        self.plot_tree.blockSignals(True)
+        item.setData(0, QtCore.Qt.UserRole, payload)
+        self.plot_tree.blockSignals(False)
+        self._persist_plot_tree()
+    
+    def _on_plot_comment_changed(self):
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            return
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        payload["comment"] = self._plot_comment_editor.toPlainText()
+        self.plot_tree.blockSignals(True)
+        item.setData(0, QtCore.Qt.UserRole, payload)
+        self.plot_tree.blockSignals(False)
+        self._plot_comment_save_timer.start()
+    
+    def _on_plot_tree_dropped(self):
+        self._persist_plot_tree()
+        self._on_plot_tree_selection_changed()
+    
+    def _get_plot_parent_item(self):
+        """Return the folder item new entries should go into, or None
+        (for the top level). A selected plot goes into its parent."""
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            return None
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        if payload.get("type") == "folder":
+            return item
+        return item.parent()
+    
+    def _insert_plot_item(self, item):
+        parent = self._get_plot_parent_item()
+        if parent is None:
+            self.plot_tree.addTopLevelItem(item)
+        else:
+            parent.addChild(item)
+            parent.setExpanded(True)
+        self.plot_tree.setCurrentItem(item)
+    
+    # -- Saved plots: button handlers ------------------------------------
+    
+    def _on_add_plot_folder(self):
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New plot folder", "Folder name:", text="New Folder")
+        if not ok or not name.strip():
+            return
+        payload = {
+            "type": "folder",
+            "name": name.strip(),
+            "comment": "",
+            "children": [],
+        }
+        item = self._plot_dict_to_item(payload)
+        self._insert_plot_item(item)
+        self._persist_plot_tree()
+    
+    def _on_add_saved_plot(self):
+        if self.current_file_path is None:
+            QtWidgets.QMessageBox.information(
+                self, "Nothing to save",
+                "Load a measurement before saving a plot configuration.")
+            return
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Save new plot", "Plot name:", text="New Plot")
+        if not ok or not name.strip():
+            return
+        try:
+            config = self._capture_plot_config()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Capture failed",
+                f"Could not capture configuration:\n{e}")
+            return
+        payload = {
+            "type": "plot",
+            "name": name.strip(),
+            "comment": "",
+            "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "config": config,
+        }
+        item = self._plot_dict_to_item(payload)
+        self._insert_plot_item(item)
+        self._persist_plot_tree()
+        QtWidgets.QMessageBox.information(
+            self, "Saved",
+            f"Captured '{name.strip()}' "
+            f"({len(config['ticked_measurements'])} measurement(s), "
+            f"{len(config['sidecar_states'])} sidecar state(s)).")
+    
+    def _on_update_saved_plot(self):
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Select a plot to update.")
+            return
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        if payload.get("type") != "plot":
+            QtWidgets.QMessageBox.information(
+                self, "Not a plot",
+                "Select a plot entry (not a folder) to update.")
+            return
+        try:
+            config = self._capture_plot_config()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Capture failed",
+                f"Could not capture configuration:\n{e}")
+            return
+        payload["config"] = config
+        payload["saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.plot_tree.blockSignals(True)
+        item.setData(0, QtCore.Qt.UserRole, payload)
+        self.plot_tree.blockSignals(False)
+        item.setToolTip(0, f"Saved at {payload['saved_at']}")
+        self._persist_plot_tree()
+        QtWidgets.QMessageBox.information(
+            self, "Updated",
+            f"'{payload.get('name', '')}' now holds the current config.")
+    
+    def _on_delete_saved_plot(self):
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            return
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        kind = payload.get("type", "folder")
+        name = payload.get("name", "")
+        n_children = item.childCount()
+        if kind == "folder" and n_children:
+            msg = (f"Delete folder '{name}' and its {n_children} "
+                   f"child item(s)?")
+        else:
+            msg = f"Delete {kind} '{name}'?"
+        reply = QtWidgets.QMessageBox.question(
+            self, "Confirm delete", msg,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        parent = item.parent()
+        if parent is None:
+            self.plot_tree.takeTopLevelItem(
+                self.plot_tree.indexOfTopLevelItem(item))
+        else:
+            parent.removeChild(item)
+        self._persist_plot_tree()
+    
+    def _on_load_saved_plot(self):
+        sel = self.plot_tree.selectedItems()
+        if not sel:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Select a plot to load.")
+            return
+        item = sel[0]
+        payload = item.data(0, QtCore.Qt.UserRole) or {}
+        if payload.get("type") != "plot":
+            QtWidgets.QMessageBox.information(
+                self, "Not a plot",
+                "Select a plot entry (not a folder) to load.")
+            return
+        config = payload.get("config")
+        if not config:
+            QtWidgets.QMessageBox.warning(
+                self, "Empty plot",
+                "This entry has no saved configuration.")
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Load saved plot",
+            f"Restore '{payload.get('name', '')}'?\n\n"
+            f"This OVERWRITES:\n"
+            f"  • your current workspace (ticked folders and measurements)\n"
+            f"  • sidecar states of every measurement in the snapshot\n"
+            f"  • display settings (figure title, fonts, legends, etc.)\n\n"
+            f"Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            self._restore_plot_config(config)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Load failed",
+                f"Could not restore configuration:\n{e}")
+    
+    # -- Saved plots: default display settings ---------------------------
+    
+    def _snapshot_display_settings(self) -> dict:
+        """Return a dict of every EDIT_* value plus user rcParams.
+    
+        Mirrors the display half of _capture_plot_config() and of
+        _save_session_parameters() so all three stay consistent.
+        """
+        display_config: dict = {}
+        for edit_name in self.UI_RCPCONFIG_MAP.keys():
+            if hasattr(self, edit_name):
+                display_config[edit_name] = getattr(self, edit_name)
+        for edit_name in self.UI_ONLY_DEFAULTS.keys():
+            if hasattr(self, edit_name):
+                display_config[edit_name] = getattr(self, edit_name)
+        display_config["show_comment"] = self.EDIT_SHOW_COMMENT
+        return {
+            "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "display_config": display_config,
+            "user_rcparams": dict(getattr(self, "_user_rcparams", {}) or {}),
+        }
+    
+    def _apply_display_snapshot(self, snapshot: dict) -> None:
+        """Apply a display-only snapshot. Workspace / ticked state untouched."""
+        display_cfg = snapshot.get("display_config", {}) or {}
+        for edit_name, value in display_cfg.items():
+            if hasattr(self, edit_name):
+                setattr(self, edit_name, value)
+        self._user_rcparams = dict(snapshot.get("user_rcparams", {}) or {})
+        self._apply_all_rcparams()
+        self._sync_edit_vars_from_rcparams(self._user_rcparams)
+        self._update_ui_from_config()
+        self._sync_override_rows()
+        self._update_toggle_buttons()
+        if self.EDIT_TOGGLE_STRETCH != 2:
+            self._apply_figsize(self.EDIT_SHOW_COMMENT)
+        # Splitter sizes are part of the display config; defer to let
+        # Qt settle in case the splitter hasn't been laid out yet.
+        QtCore.QTimer.singleShot(0, self._apply_splitter_sizes)
+        self._refresh_plot()
+        self._save_session_parameters()
+    
+    def _on_save_default_display_settings(self):
+        try:
+            snapshot = self._snapshot_display_settings()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Save failed",
+                f"Could not snapshot display settings:\n{e}")
+            return
+        save_default_display_settings(snapshot)
+        QtWidgets.QMessageBox.information(
+            self, "Saved",
+            f"Current display settings saved as default "
+            f"({snapshot['saved_at']}).")
+    
+    def _on_load_default_display_settings(self):
+        snapshot = load_default_display_settings()
+        if snapshot is None:
+            QtWidgets.QMessageBox.information(
+                self, "No default saved",
+                "No default display settings file found. Press "
+                "'Save default display' first to create one.")
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self, "Load default display settings",
+            f"Restore display settings saved on "
+            f"{snapshot.get('saved_at', 'unknown')}?\n\n"
+            f"This replaces every Display-tab value (figure size, "
+            f"DPI, fonts, legend toggles, plot limits, override "
+            f"labels, user rcParams).\n\n"
+            f"Workspace, ticked measurements, and per-measurement "
+            f"sidecar states are untouched.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            self._apply_display_snapshot(snapshot)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Load failed",
+                f"Could not restore display settings:\n{e}")
+    
+    # -- Saved plots: capture / restore ----------------------------------
+    def _capture_plot_config(self) -> dict:
+        """Snapshot the current state as a serializable dict."""
+        ticked = self._get_ticked_measurements()
+        active = ((self.current_file_path, self.current_meas_index)
+                  if self.current_file_path is not None else None)
+    
+        # Snapshot sidecars for every measurement that's either ticked
+        # or currently active. We include the active one even if not
+        # ticked so that a highlighted-but-not-ticked plot still
+        # reproduces correctly on load.
+        all_meas = set(ticked)
+        if active is not None:
+            all_meas.add(active)
+    
+        sidecar_states: dict = {}
+        for fp, mi in all_meas:
+            try:
+                resolved = str(Path(fp).resolve())
+                store, key_prefix = self._state_store_for(resolved)
+                sidecar_key = state_key(key_prefix, mi)
+                sidecar_path = store._path_for(sidecar_key)
+                if sidecar_path.exists():
+                    with open(sidecar_path) as f:
+                        state_dict = json.load(f)
+                else:
+                    state_dict = CurveState().to_dict()
+                sidecar_states[f"{resolved}::{mi}"] = {
+                    "state_root": str(store.state_dir.parent),
+                    "key_prefix": key_prefix,
+                    "state": state_dict,
+                }
+            except Exception as e:
+                logger.warning(
+                    f"Sidecar capture failed for {fp} m{mi}: {e}")
+    
+        # Display config mirrors _save_session_parameters: every EDIT_*
+        # in either map plus the extra 'show_comment' snapshot.
+        display_config: dict = {}
+        for edit_name in self.UI_RCPCONFIG_MAP.keys():
+            if hasattr(self, edit_name):
+                display_config[edit_name] = getattr(self, edit_name)
+        for edit_name in self.UI_ONLY_DEFAULTS.keys():
+            if hasattr(self, edit_name):
+                display_config[edit_name] = getattr(self, edit_name)
+        display_config["show_comment"] = self.EDIT_SHOW_COMMENT
+    
+        current_folder = None
+        if self.folder_tree.currentItem() is not None:
+            p = self.folder_tree.currentItem().data(
+                0, QtCore.Qt.UserRole)
+            if p and p[0] == "folder_leaf":
+                current_folder = p[1]
+    
+        return {
+            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "added_entries": [dict(e) for e in self._added_entries],
+            "leaf_check": dict(self._leaf_check),
+            "ticked_measurements": [list(t) for t in sorted(ticked)],
+            "active_measurement": list(active) if active else None,
+            "current_folder": current_folder,
+            "filter": {
+                "enabled": self._filter_enabled,
+                "mode": self._filter_mode,
+                "conditions": [
+                    {k: v for k, v in c.items()
+                     if not str(k).startswith("_")}
+                    for c in self._filter_conditions],
+            },
+            "display_config": display_config,
+            "user_rcparams": dict(getattr(self, "_user_rcparams", {}) or {}),
+            "sidecar_states": sidecar_states,
+        }
+    
+    def _restore_plot_config(self, config: dict) -> None:
+        """Apply a captured configuration to the running app."""
+        # 1. Folder tree (also populates self._state_roots, needed for
+        #    the sidecar writes below).
+        self._added_entries = [
+            dict(e) for e in config.get("added_entries", [])]
+        self._leaf_check = {
+            str(k): bool(v)
+            for k, v in config.get("leaf_check", {}).items()}
+        self._temp_ticked_folders.clear()
+        self._rebuild_folder_tree_ui()
+    
+        # 2. Ticked-measurement list. Also force the active measurement
+        #    into the ticked set so it renders after restore even if the
+        #    user only highlighted (not ticked) it when capturing.
+        self._ticked_measurements_from_workspace = set()
+        self._ticked_files_from_workspace = set()
+        for row in config.get("ticked_measurements", []):
+            try:
+                fp_str, mi = row
+                self._ticked_measurements_from_workspace.add(
+                    (str(fp_str), int(mi)))
+            except (TypeError, ValueError):
+                continue
+        active_raw = config.get("active_measurement")
+        if isinstance(active_raw, list) and len(active_raw) == 2:
+            try:
+                self._ticked_measurements_from_workspace.add(
+                    (str(active_raw[0]), int(active_raw[1])))
+            except (TypeError, ValueError):
+                pass
+    
+        # 3. Filter state.
+        filter_cfg = config.get("filter", {}) or {}
+        self._filter_enabled = bool(filter_cfg.get("enabled", False))
+        self._filter_mode = filter_cfg.get("mode", "AND")
+        self._filter_conditions = [
+            dict(c) for c in filter_cfg.get("conditions", [])]
+        self._filter_log_cache.clear()
+        if hasattr(self, "filter_enable_btn"):
+            self.filter_enable_btn.blockSignals(True)
+            self.filter_enable_btn.setChecked(self._filter_enabled)
+            self.filter_enable_btn.setText(
+                "Filtering: ON" if self._filter_enabled
+                else "Filtering: OFF")
+            self.filter_enable_btn.blockSignals(False)
+        if hasattr(self, "filter_mode_and"):
+            self.filter_mode_and.blockSignals(True)
+            self.filter_mode_or.blockSignals(True)
+            (self.filter_mode_and if self._filter_mode == "AND"
+             else self.filter_mode_or).setChecked(True)
+            self.filter_mode_and.blockSignals(False)
+            self.filter_mode_or.blockSignals(False)
+    
+        # 4. Sidecar states (write to disk via the current state-root
+        #    mapping, so re-added folders still resolve correctly).
+        sidecar_errors: list[str] = []
+        for key, payload in config.get("sidecar_states", {}).items():
+            try:
+                fp_str, mi_str = key.rsplit("::", 1)
+                mi = int(mi_str)
+                if not Path(fp_str).exists():
+                    sidecar_errors.append(
+                        f"{Path(fp_str).name} m{mi}: file no longer exists")
+                    continue
+                store, key_prefix = self._state_store_for(fp_str)
+                sidecar_key = state_key(key_prefix, mi)
+                target = store._path_for(sidecar_key)
+                with open(target, "w") as f:
+                    json.dump(payload.get("state", {}), f, indent=2)
+            except Exception as e:
+                sidecar_errors.append(f"{key}: {e}")
+    
+        # 5. Display config. Set EDIT_* attributes, then reconcile
+        #    rcParams so the figure reflects the saved values.
+        display_cfg = config.get("display_config", {}) or {}
+        for edit_name, value in display_cfg.items():
+            if hasattr(self, edit_name):
+                setattr(self, edit_name, value)
+        self._user_rcparams = dict(config.get("user_rcparams", {}) or {})
+        self._apply_all_rcparams()
+        self._sync_edit_vars_from_rcparams(self._user_rcparams)
+        self._update_ui_from_config()
+        self._update_toggle_buttons()
+        if self.EDIT_TOGGLE_STRETCH != 2:
+            self._apply_figsize(self.EDIT_SHOW_COMMENT)
+    
+        # 6. Rebuild the measurement tree from the seeded tick state.
+        self._rebuild_measurements_tree()
+    
+        # 7. Set active measurement (triggers plot refresh).
+        if isinstance(active_raw, list) and len(active_raw) == 2:
+            try:
+                self._set_active_measurement(
+                    str(active_raw[0]), 0, int(active_raw[1]))
+            except Exception as e:
+                logger.warning(
+                    f"Could not restore active measurement: {e}")
+                self._refresh_plot()
+        else:
+            self._refresh_plot()
+    
+        # 8. Persist the new workspace + display state.
+        self._save_workspace()
+        self._save_session_parameters()
+    
+        # 9. Surface any sidecar write failures.
+        if sidecar_errors:
+            msg = ("Some sidecar states could not be restored:\n\n"
+                   + "\n".join(sidecar_errors[:8]))
+            if len(sidecar_errors) > 8:
+                msg += f"\n… and {len(sidecar_errors) - 8} more."
+            QtWidgets.QMessageBox.warning(
+                self, "Partial restore", msg)
+    
+    # -- Folder management ----------------------------------------------------
     # -- Folder management ----------------------------------------------------
     
     def _schedule_tree_rebuild(self, focus_after: Optional[str] = None):
@@ -3949,6 +4747,52 @@ class MainWindow(QtWidgets.QMainWindow):
         self._schedule_tree_rebuild()
         self._rebuild_measurements_tree()
 
+    def _deselect_folders(self):
+        """Untick every folder. Empties the measurement list as a side-effect.
+
+        Save AFTER the rebuilds so the on-disk workspace captures the
+        fresh (empty) tree, not the pre-clear ticks.
+        """
+        if not any(self._leaf_check.values()):
+            return
+        for k in list(self._leaf_check.keys()):
+            self._leaf_check[k] = False
+        self._temp_ticked_folders.clear()
+        self._rebuild_folder_tree_ui()
+        self._rebuild_measurements_tree()
+        self._save_workspace()
+
+    def _deselect_measurements(self):
+        """Untick every measurement and file-header row. Folders stay ticked."""
+        if (not self._get_ticked_measurements()
+                and not self._get_ticked_file_paths()):
+            return
+        self.file_list.blockSignals(True)
+        try:
+            for item in self._iter_all_items():
+                payload = item.data(0, QtCore.Qt.UserRole)
+                if payload is None:
+                    continue
+                if payload[0] in ("meas", "file"):
+                    if item.checkState(0) != QtCore.Qt.Unchecked:
+                        item.setCheckState(0, QtCore.Qt.Unchecked)
+        finally:
+            self.file_list.blockSignals(False)
+        self._after_tick_changed()
+
+    def _deselect_all(self):
+        """Untick every folder and every measurement in one shot."""
+        if (not any(self._leaf_check.values())
+                and not self._get_ticked_measurements()
+                and not self._get_ticked_file_paths()):
+            return
+        for k in list(self._leaf_check.keys()):
+            self._leaf_check[k] = False
+        self._temp_ticked_folders.clear()
+        self._rebuild_folder_tree_ui()
+        self._rebuild_measurements_tree()
+        self._save_workspace()
+
     def _reset_loaded_data(self):
         self.current_file_path = None
         self.loaded_file = None
@@ -4232,7 +5076,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_filter_log_cache"):
             self._filter_log_cache.clear()
     
-        # ── Snapshot current tick state (works in flat AND classified) ──
+        # -- Snapshot current tick state (works in flat AND classified) --
         previously_ticked_meas = self._get_ticked_measurements()
         if not previously_ticked_meas:
             previously_ticked_meas = set(
@@ -4241,13 +5085,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if not previously_ticked_files:
             previously_ticked_files = set(
                 getattr(self, "_ticked_files_from_workspace", set()))
-    
+
+        # Files that have at least one per-measurement entry in
+        # previously_ticked_meas. For those files, `ticked_files` must
+        # NOT cascade to un-ticked children — the per-measurement list
+        # is authoritative. `ticked_files` is only a legacy fallback for
+        # workspaces saved before per-measurement ticks existed.
+        files_with_specific_ticks = {fp for fp, _ in previously_ticked_meas}
+
         self.file_list.blockSignals(True)
         self.file_list.clear()
     
         ticked_folders = self._get_ticked_folders()
     
-        # ── Classified view ─────────────────────────────────────────
+        # -- Classified view ------------------------
         if self.EDIT_TREE_VIEW == "classified":
             # tree[dev][sub] = [(file_path, meas_id, title), …]
             tree: dict[str, dict[str, list[tuple[str, int, str]]]] = {}
@@ -4321,10 +5172,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                 run_id_seen[key] = run_id_seen.get(key, 0) + 1
                                 display = f"{title} ({run_id_seen[key]})"
             
-                        was_ticked = (
-                            (fp, meas_id) in previously_ticked_meas
-                            or fp in previously_ticked_files
-                        )
+                        use_file_cascade = (fp in previously_ticked_files and fp not in files_with_specific_ticks)
+                        was_ticked = ( use_file_cascade or (fp, meas_id) in previously_ticked_meas)
                         child = QtWidgets.QTreeWidgetItem([display])
                         child.setFlags(
                             QtCore.Qt.ItemIsEnabled
@@ -4366,46 +5215,73 @@ class MainWindow(QtWidgets.QMainWindow):
                 src = self.registry.find(f)
                 if src is None:
                     continue
-        
+
+                # Fetch measurements first so we can derive the file
+                # header's aggregate check state from its children.
+                load_error = None
+                try:
+                    measurements = src.list_measurements(f)
+                except Exception as exc:
+                    measurements = []
+                    load_error = exc
+
+                # File-level cascade only applies to legacy workspaces
+                # that stored files WITHOUT per-measurement ticks. If
+                # the file has any per-measurement entries, they win —
+                # otherwise a partially-ticked file would be entirely
+                # re-ticked on load, which is the bug this guards.
+                use_file_cascade = (
+                    str(f) in previously_ticked_files
+                    and str(f) not in files_with_specific_ticks)
+                child_tick_states = [
+                    use_file_cascade
+                    or (str(f), mi) in previously_ticked_meas
+                    for mi, _ in measurements
+                ]
+
+                # Header displays the aggregate: Checked / PartiallyChecked
+                # / Unchecked. A partially-ticked file shows as
+                # PartiallyChecked, matching what the user did.
+                if load_error is not None or not child_tick_states:
+                    header_state = QtCore.Qt.Unchecked
+                elif all(child_tick_states):
+                    header_state = QtCore.Qt.Checked
+                elif any(child_tick_states):
+                    header_state = QtCore.Qt.PartiallyChecked
+                else:
+                    header_state = QtCore.Qt.Unchecked
+
                 header = QtWidgets.QTreeWidgetItem([f.name])
                 header.setFlags(
                     QtCore.Qt.ItemIsEnabled
                     | QtCore.Qt.ItemIsUserCheckable)
-                was_ticked = str(f) in previously_ticked_files
-                header.setCheckState(
-                    0, QtCore.Qt.Checked if was_ticked
-                       else QtCore.Qt.Unchecked)
+                header.setCheckState(0, header_state)
                 header.setData(0, QtCore.Qt.UserRole, ("file", str(f), 0))
                 folder_node.addChild(header)
-        
-                try:
-                    measurements = src.list_measurements(f)
-                except Exception as exc:
+
+                if load_error is not None:
                     err = QtWidgets.QTreeWidgetItem(
-                        [f"    (failed to load: {exc})"])
+                        [f"    (failed to load: {load_error})"])
                     err.setFlags(QtCore.Qt.NoItemFlags)
                     header.addChild(err)
                     header.setExpanded(True)
                     continue
-        
-                for meas_index, meas_title in measurements:
+
+                for i, (meas_index, meas_title) in enumerate(measurements):
                     child = QtWidgets.QTreeWidgetItem(
                         [f"    {meas_index}: {meas_title}"])
                     child.setFlags(
                         QtCore.Qt.ItemIsEnabled
                         | QtCore.Qt.ItemIsSelectable
                         | QtCore.Qt.ItemIsUserCheckable)
-                    was_ticked = (
-                        (str(f), meas_index) in previously_ticked_meas
-                        or str(f) in previously_ticked_files)
                     child.setCheckState(
-                        0, QtCore.Qt.Checked if was_ticked
+                        0, QtCore.Qt.Checked if child_tick_states[i]
                            else QtCore.Qt.Unchecked)
                     child.setData(
                         0, QtCore.Qt.UserRole,
                         ("meas", str(f), 0, meas_index))
                     header.addChild(child)
-        
+
                 header.setExpanded(True)
         
         self.file_list.expandAll()
@@ -4512,7 +5388,11 @@ class MainWindow(QtWidgets.QMainWindow):
         save_workspace({
             "added_entries": [dict(e) for e in self._added_entries],
             "leaf_check": dict(self._leaf_check),
-            "ticked_files": list({fp for fp, _ in ticked}),
+            # Only files whose header checkbox is fully Checked. Partially-
+            # checked files are already fully captured by their per-measurement
+            # entries below; listing them here would cause the tree rebuild to
+            # cascade-tick every child.
+            "ticked_files": list(self._get_ticked_file_paths()),
             "ticked_measurements": [list(t) for t in sorted(ticked)],
             "active_measurement": active,
             "current_folder": current_folder,
@@ -5511,10 +6391,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot()
         
     def closeEvent(self, event):
-        """Save session when closing the window."""
-        self._flush_pending_log_commit()
-        self._save_session_parameters()
-        event.accept()  
+        """Save session when closing the window. 
+        We try to stop log flush or the settings save from preventing window close, and altert if that happens"""
+        try:
+            self._flush_pending_log_commit()
+        except Exception as e:
+            print(f"[closeEvent] log flush failed: {e!r}", flush=True)
+
+        try:
+            self._save_session_parameters()
+        except Exception as e:
+            print(f"[closeEvent] session save failed: {e!r}", flush=True)
+
+        event.accept()
         
     def _apply_figsize(self, comment: bool):
         # Skip if in Real Size mode so that the preview for the saved figure can be seen
@@ -6869,14 +7758,39 @@ class MainWindow(QtWidgets.QMainWindow):
                 btn.blockSignals(False)
                 
     def _apply_splitter_sizes(self):
+        """Apply EDIT_SPLITTER_SIZES to the splitter, with a core feature being to preserve the ratio rather than the absolute pixel value.
+        For instance, if you move the splitter (saves new splitter value) and then move the window (saves new window size), the splitter ratio is re-interpreted over that size.
+        """
         if not hasattr(self, 'main_splitter'):
             return
         sizes = getattr(self, 'EDIT_SPLITTER_SIZES', None)
-        if (isinstance(sizes, (list, tuple)) and len(sizes) == 3
+        if not (isinstance(sizes, (list, tuple)) and len(sizes) == 3
                 and all(isinstance(x, (int, float)) and x > 0
                         for x in sizes)):
-            self.main_splitter.setSizes([int(x) for x in sizes])        
-            
+            return
+
+        total = sum(sizes)
+        if total <= 0:
+            return
+
+        handle_w = self.main_splitter.handleWidth()
+        splitter_w = self.main_splitter.width()
+        available = splitter_w - 2 * handle_w
+        if available <= 0:
+            # Splitter not laid out yet; retry next tick.
+            QtCore.QTimer.singleShot(50, self._apply_splitter_sizes)
+            return
+
+        scaled = [int(s * available / total) for s in sizes]
+        # Give rounding remainder to the last pane so the sum is exact
+        # and no space goes to the stretch-factor distribution path.
+        scaled[2] = available - scaled[0] - scaled[1]
+
+        self.main_splitter.setSizes(scaled)      
+          
+    def _on_splitter_moved(self, _pos, _index):
+        self._splitter_save_timer.start()        
+    
     def _load_session_parameters(self):
         """Load saved parameter values from the display config"""
         if DISPLAY_PATH.exists():
@@ -6914,46 +7828,44 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._apply_all_rcparams()
                 self._sync_edit_vars_from_rcparams(self._user_rcparams)
                 self._update_ui_from_config()
-                self._apply_splitter_sizes() 
                 
             except Exception as e:
                 print(f"Error loading session: {e}")
                 
     def _save_session_parameters(self):
-        """Save all settings to a single session file"""
+        """Save all settings to a single session file."""
         
-        # Save window state
-        self._save_window_state()
+        # Only snapshot live window/splitter state when the window isVisible() == True, during user interaction, or during closeEvent.
+
+        if self.isVisible():
+            self._save_window_state()
+            if hasattr(self, 'main_splitter'):
+                self.EDIT_SPLITTER_SIZES = list(self.main_splitter.sizes())
         
         # Build UI config from both maps
         ui_config = {}
-        # Snapshot actual splitter sizes so a manual drag is persisted
-        # even though splitterMoved() isn't connected.
-        if hasattr(self, 'main_splitter'):
-            self.EDIT_SPLITTER_SIZES = list(self.main_splitter.sizes())
-            
+        
         # Save rcParam-linked variables
         for edit_name in self.UI_RCPCONFIG_MAP.keys():
             if hasattr(self, edit_name):
                 ui_config[edit_name] = getattr(self, edit_name)
         
-        # Save UI-only variables
+        # Save UI-only variables (EDIT_WINDOW_*, EDIT_SPLITTER_SIZES, are also saved)
         for edit_name in self.UI_ONLY_DEFAULTS.keys():
             if hasattr(self, edit_name):
                 ui_config[edit_name] = getattr(self, edit_name)
         
-        # Save show_comment state
         ui_config['show_comment'] = self.EDIT_SHOW_COMMENT
         
         # Build rcParams config (only user-modified rcParams that differ from defaults)
         rc_defaults = self.RCPARAM_DEFAULTS
-        current_rc = {k: v for k, v in mpl.rcParams.items() 
+        current_rc = {k: v for k, v in mpl.rcParams.items()
                       if k in rc_defaults and v != rc_defaults.get(k)}
         
         session_data = {
-                        'ui_config': ui_config,
-                        'current_rcparams': current_rc,
-                        }
+            'ui_config': ui_config,
+            'current_rcparams': current_rc,
+        }
         
         DISPLAY_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(DISPLAY_PATH, "w") as f:

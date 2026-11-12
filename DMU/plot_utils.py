@@ -666,14 +666,13 @@ def get_rgbhex_color(color_name,ctype = "hex"):
         
     
     elif ctype == "hex":
-        # Include alpha channel (opacity) if needed
-        hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
-
-        # If alpha exists, we handle it separately (adding a transparency value if RGBA)
-        if len(rgb) > 3:
-            # Normalize alpha (it should be between 0 and 1)
-            alpha = int(rgb[3] * 255)
-            hex_color += '{:02x}'.format(alpha)  # Add alpha value to the hex code
-
+        hex_color = '#{:02x}{:02x}{:02x}'.format(
+            int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+    
+        # Only append alpha when meaningful. Emitting "ff" for opaque
+        # colours breaks Qt stylesheets, which parse 8-digit hex as
+        # #AARRGGBB (alpha-first), not CSS #RRGGBBAA.
+        if len(rgb) > 3 and rgb[3] < 1.0:
+            hex_color += '{:02x}'.format(int(rgb[3] * 255))
+    
         return hex_color
-
